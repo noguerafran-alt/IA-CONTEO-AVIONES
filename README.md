@@ -8,6 +8,17 @@ Usa [supervision](https://github.com/roboflow/supervision) + Ultralytics YOLO pa
 
 ## Instalación desde cero en otra PC
 
+### Forma rápida (Windows)
+
+Doble clic en **`INSTALAR-Y-EJECUTAR.bat`**. Verifica Python, crea el entorno,
+instala las dependencias, deja la configuración lista, arranca el servidor y
+abre el navegador. La primera vez tarda varios minutos porque baja ~1,5 GB;
+después arranca en segundos, porque detecta lo ya instalado y no lo repite.
+
+Si no tenés Python, el propio script ofrece instalarlo.
+
+### Forma manual
+
 ```bash
 git clone https://github.com/noguerafran-alt/IA-CONTEO-AVIONES.git
 cd IA-CONTEO-AVIONES
