@@ -55,4 +55,8 @@ class MotionGate:
         return np.count_nonzero(delta > self.pixel_delta) / delta.size
 
     def has_motion(self, frame: np.ndarray) -> bool:
-        return self.changed_fraction(frame) >= self.threshold
+        # bool() explicito: la division de numpy devuelve np.float64, asi que
+        # la comparacion daria np.bool_ y no el bool de Python que promete la
+        # firma. Da igual dentro de un `if`, pero rompe cualquier comparacion
+        # estricta (`is True`) que alguien escriba mas adelante.
+        return bool(self.changed_fraction(frame) >= self.threshold)

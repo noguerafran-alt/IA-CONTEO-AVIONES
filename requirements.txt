@@ -1,7 +1,10 @@
 supervision>=0.24.0,<0.31.0
 ultralytics>=8.3.0
 opencv-python>=4.10.0
-numpy<2
+# numpy sin tope superior a proposito: fijarlo en <2 obliga a compilar numpy
+# 1.x desde el codigo fuente en Python 3.13+, donde ya no hay wheel, y falla
+# si la maquina no tiene compilador de C. Ninguna dependencia lo requiere.
+numpy>=1.23
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 jinja2>=3.1.0

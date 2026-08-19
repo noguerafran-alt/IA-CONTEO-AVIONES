@@ -13,7 +13,15 @@ echo.
 REM ---------- 1. Buscar Python ----------
 echo [1/5] Buscando Python...
 set "PY="
-where py >nul 2>&1 && set "PY=py -3"
+REM Se prueban primero las versiones con wheels precompilados para todo.
+REM En Python muy nuevo (3.14) varios paquetes todavia no publican wheel y
+REM pip intenta compilarlos, lo que falla sin Visual Studio instalado.
+for %%v in (3.12 3.11 3.13 3.10) do (
+    if not defined PY (
+        py -%%v -c "import sys" >nul 2>&1 && set "PY=py -%%v"
+    )
+)
+if not defined PY ( where py >nul 2>&1 && set "PY=py -3" )
 if not defined PY ( where python >nul 2>&1 && set "PY=python" )
 
 if not defined PY (
@@ -45,6 +53,17 @@ if errorlevel 1 (
     exit /b 1
 )
 for /f "delims=" %%v in ('%PY% --version 2^>^&1') do echo       OK - %%v
+%PY% -c "import sys; sys.exit(0 if sys.version_info<(3,13) else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo       AVISO: esta es una version muy reciente de Python.
+    echo       Algunos paquetes aun no publican versiones precompiladas para
+    echo       ella y pip intentara compilarlos, lo que falla si la PC no
+    echo       tiene Visual Studio. Si la instalacion falla, instala
+    echo       Python 3.12 desde https://www.python.org/downloads/
+    echo       y volve a ejecutar este archivo.
+    echo.
+)
 
 REM ---------- 3. Entorno virtual ----------
 echo [2/5] Preparando el entorno virtual...
@@ -72,7 +91,17 @@ if errorlevel 1 (
     "%VPY%" -m pip install -r requirements.txt
     if errorlevel 1 (
         echo.
-        echo   ERROR instalando dependencias. Revisa tu conexion a internet.
+        echo   ERROR instalando dependencias.
+        echo.
+        echo   Mira las lineas de arriba para ver la causa real. Las mas comunes:
+        echo.
+        echo    - "Unknown compiler" / "Microsoft Visual C++ ... required"
+        echo      Tu version de Python es demasiado nueva y algun paquete no
+        echo      tiene version precompilada. Instala Python 3.12 desde
+        echo      https://www.python.org/downloads/ y volve a ejecutar esto.
+        echo.
+        echo    - "Could not find a version" / errores de red
+        echo      Revisa la conexion a internet o el proxy.
         pause
         exit /b 1
     )
