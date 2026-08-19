@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Runway Video Analytics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 24px; }
+  .cards { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 16px 24px; min-width: 140px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .landing .n { color: #4ade80; }
+  .takeoff .n { color: #60a5fa; }
+
+  .player { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 32px; }
+  /* Cap the height too: a 1080p render is tall enough to push the events
+     table off-screen if only the width is constrained. */
+  .player video { width: 100%; max-width: 900px; max-height: 55vh; height: auto;
+                  object-fit: contain; border-radius: 8px; display: block; background: #000; }
+  .player-controls { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  select { background: #262a33; color: #e6e6e6; border: 1px solid #363b46; border-radius: 6px; padding: 7px 10px; font-size: 0.9rem; }
+  .hint { color: #9aa0a6; font-size: 0.85rem; margin-top: 12px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.9rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+  tr:last-child td { border-bottom: none; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #21262f; }
+  tr.active { background: #2a3140; }
+  .badge { padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+  .badge.landing { background: #14321f; color: #4ade80; }
+  .badge.takeoff { background: #14243d; color: #60a5fa; }
+  img.thumb { height: 48px; border-radius: 6px; display: block; }
+  .ident { color: #fbbf24; font-weight: 600; }
+  .ident.type { color: #a78bfa; }
+  .ident.unconfirmed { color: #9aa0a6; font-weight: 500; }
+  .ident.unconfirmed::after { content: " ?"; color: #f87171; font-weight: 700; }
+  .legend { color: #9aa0a6; font-size: 0.85rem; margin: 0 0 12px; }
+  .muted { color: #4b5563; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>Runway Video Analytics</h1>
+  <div class="subtitle">
+    Detección de aviones, tracking y conteo de aterrizajes / despegues por cruce de línea ·
+    <a href="/label" style="color:#60a5fa">revisar etiquetas</a>
+  </div>
+
+  <div class="cards">
+    <div class="card landing"><div class="n">{{ counts.landing }}</div><div class="label">Landings</div></div>
+    <div class="card takeoff"><div class="n">{{ counts.takeoff }}</div><div class="label">Takeoffs</div></div>
+    <div class="card"><div class="n">{{ total }}</div><div class="label">Total</div></div>
+  </div>
+
+  <div class="player">
+    <h2>Video con etiquetado</h2>
+    {% if videos %}
+    <div class="player-controls">
+      <label for="videoSelect">Video:</label>
+      <select id="videoSelect">
+        {% for v in videos %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+      </select>
+    </div>
+    <video id="player" controls preload="metadata" src="/videos/{{ videos[0] }}"></video>
+    <div class="hint">Hacé clic en cualquier fila de la tabla para saltar al momento exacto de ese evento.</div>
+    {% else %}
+    <div class="empty">
+      No hay videos listos para el navegador.<br>
+      Generá uno con <code>python transcode_web.py</code> (convierte los anotados a H.264).
+    </div>
+    {% endif %}
+  </div>
+
+  <h2>Eventos detectados</h2>
+  <div class="legend">
+    Matrícula en <span class="ident">amarillo</span>: dos modelos de visión leyeron lo mismo.
+    En <span class="ident unconfirmed">gris con</span>: la leyó uno solo — puede estar equivocada.
+    El <span class="ident type">tipo de avión</span> sale de la forma del fuselaje (nariz, góndolas, cola),
+    o del modelo pintado en el avión cuando está visible.
+  </div>
+  {% if events %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Thumbnail</th><th>Evento</th><th>Hora video</th><th>Track ID</th><th>Fuente</th><th>Matrícula</th><th>Tipo de avión</th><th>Aerolínea</th><th>Registrado</th></tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr {% if e.video %}class="clickable" data-video="{{ e.video }}" data-time="{{ e.video_time_s }}"{% endif %}>
+        <td>{% if e.thumbnail_url %}<img class="thumb" src="{{ e.thumbnail_url }}">{% endif %}</td>
+        <td><span class="badge {{ e.event_type }}">{{ e.event_type }}</span></td>
+        <td>{{ "%.2f"|format(e.video_time_s) }}s</td>
+        <td>#{{ e.tracker_id }}</td>
+        <td>{{ e.source }}</td>
+        <td>
+          {% if e.registration %}<span class="ident">{{ e.registration }}</span>
+          {% elif e.registration_unconfirmed %}<span class="ident unconfirmed" title="Un solo modelo la leyo; el otro no coincidio. Puede estar mal.">{{ e.registration_unconfirmed }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>
+          {% if e.aircraft_type %}<span class="ident type">{{ e.aircraft_type }}</span>
+          {% elif e.aircraft_type_unconfirmed %}<span class="ident unconfirmed">{{ e.aircraft_type_unconfirmed }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>{% if e.airline %}<span class="ident">{{ e.airline }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ e.created_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="empty">Todavía no hay eventos registrados. Corré detect_track_count.py sobre un video para generarlos.</div>
+  {% endif %}
+
+<script>
+  const player = document.getElementById('player');
+  const select = document.getElementById('videoSelect');
+
+  if (select) {
+    select.addEventListener('change', () => {
+      player.src = '/videos/' + select.value;
+      player.play();
+    });
+  }
+
+  document.querySelectorAll('tr.clickable').forEach(row => {
+    row.addEventListener('click', () => {
+      if (!player) return;
+      const video = row.dataset.video;
+      // Rewind a couple of seconds so the crossing is visible, not already past.
+      const time = Math.max(0, parseFloat(row.dataset.time) - 2);
+
+      document.querySelectorAll('tr.active').forEach(r => r.classList.remove('active'));
+      row.classList.add('active');
+
+      const seek = () => { player.currentTime = time; player.play(); };
+      if (select && select.value !== video) {
+        select.value = video;
+        player.src = '/videos/' + video;
+        player.addEventListener('loadedmetadata', seek, { once: true });
+      } else {
+        seek();
+      }
+      player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+</script>
+</body>
+</html>

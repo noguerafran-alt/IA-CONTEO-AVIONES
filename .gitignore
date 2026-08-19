@@ -1,0 +1,36 @@
+# --- Secretos: NUNCA subir ---
+.env
+*.key
+
+# --- Entorno virtual (se recrea con requirements.txt) ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Videos y material de terceros ---
+# Los videos son contenido de YouTube (con derechos de sus autores) y pesan GB.
+data/
+*.mp4
+*.mkv
+*.avi
+# PDFs de especificaciones descargados de un sitio de terceros: no se
+# redistribuyen. Los datos numericos que se extraen de ellos si estan, en
+# aircraft_specs.json.
+DATOS AVIONES/
+
+# --- Artefactos generados (se regeneran corriendo el pipeline) ---
+output/
+dataset/
+runs/
+runway_events.db
+kernel.errors.txt
+
+# --- Pesos de modelos ---
+# yolov8n.pt lo descarga Ultralytics solo en el primer uso.
+# El modelo OpenVINO se genera con export_openvino.py.
+*.pt
+*.onnx
+yolov8n_openvino_model/
+
+# --- Binarios locales ---
+tools/

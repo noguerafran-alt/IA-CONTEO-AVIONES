@@ -1,0 +1,485 @@
+[
+ {
+  "family": "Airbus A300",
+  "length_min": 53.61,
+  "length_max": 53.61,
+  "wingspan_min": 44.84,
+  "wingspan_max": 44.84,
+  "variants": [
+   {
+    "length": 53.61,
+    "wingspan": 44.84,
+    "height": 16.72
+   }
+  ]
+ },
+ {
+  "family": "Airbus A320",
+  "length_min": 31.44,
+  "length_max": 31.44,
+  "wingspan_min": 34.1,
+  "wingspan_max": 34.1,
+  "variants": [
+   {
+    "length": 31.44,
+    "wingspan": 34.1
+   }
+  ]
+ },
+ {
+  "family": "Airbus A330",
+  "length_min": 58.82,
+  "length_max": 58.82,
+  "wingspan_min": 60.3,
+  "wingspan_max": 60.3,
+  "variants": [
+   {
+    "length": 58.82,
+    "wingspan": 60.3,
+    "height": 17.39
+   }
+  ]
+ },
+ {
+  "family": "Airbus A380",
+  "length_min": 73.0,
+  "length_max": 73.0,
+  "wingspan_min": 79.8,
+  "wingspan_max": 79.8,
+  "variants": [
+   {
+    "length": 73.0,
+    "wingspan": 79.8,
+    "height": 24.1
+   }
+  ]
+ },
+ {
+  "family": "Airbus-A220",
+  "length_min": 35.0,
+  "length_max": 35.0,
+  "wingspan_min": 35.1,
+  "wingspan_max": 35.1,
+  "variants": [
+   {
+    "length": 35.0,
+    "wingspan": 35.1,
+    "height": 11.5
+   }
+  ]
+ },
+ {
+  "family": "ATR",
+  "length_min": 22.67,
+  "length_max": 22.67,
+  "wingspan_min": 24.57,
+  "wingspan_max": 24.57,
+  "variants": [
+   {
+    "length": 22.67,
+    "wingspan": 24.57,
+    "height": 7.59
+   }
+  ]
+ },
+ {
+  "family": "BAe 146 _ Avro RJ Whisperjet",
+  "length_min": 26.19,
+  "length_max": 26.19,
+  "wingspan_min": 26.34,
+  "wingspan_max": 26.34,
+  "variants": [
+   {
+    "length": 26.19,
+    "wingspan": 26.34,
+    "height": 8.61
+   }
+  ]
+ },
+ {
+  "family": "Boeing 707",
+  "length_min": 44.22,
+  "length_max": 44.22,
+  "wingspan_min": 39.88,
+  "wingspan_max": 44.42,
+  "variants": []
+ },
+ {
+  "family": "Boeing 717",
+  "length_min": 37.8,
+  "length_max": 37.8,
+  "wingspan_min": 28.47,
+  "wingspan_max": 28.47,
+  "variants": [
+   {
+    "length": 37.8,
+    "wingspan": 28.47,
+    "height": 8.92
+   }
+  ]
+ },
+ {
+  "family": "Boeing 727",
+  "length_min": 40.59,
+  "length_max": 40.59,
+  "wingspan_min": 32.92,
+  "wingspan_max": 32.92,
+  "variants": [
+   {
+    "length": 40.59,
+    "wingspan": 32.92
+   }
+  ]
+ },
+ {
+  "family": "Boeing 737",
+  "length_min": 28.63,
+  "length_max": 35.56,
+  "wingspan_min": 28.35,
+  "wingspan_max": 35.92,
+  "variants": [
+   {
+    "length": 28.63,
+    "wingspan": 28.35,
+    "height": 11.28
+   },
+   {
+    "length": 33.4,
+    "wingspan": 28.88,
+    "height": 11.13
+   },
+   {
+    "length": 31.2,
+    "wingspan": 34.32,
+    "height": 12.57
+   },
+   {
+    "length": 35.56,
+    "wingspan": 35.92,
+    "height": 12.3
+   }
+  ]
+ },
+ {
+  "family": "Boeing 747",
+  "length_min": 70.6,
+  "length_max": 70.6,
+  "wingspan_min": 59.6,
+  "wingspan_max": 59.6,
+  "variants": [
+   {
+    "length": 70.6,
+    "wingspan": 59.6
+   }
+  ]
+ },
+ {
+  "family": "Boeing 757",
+  "length_min": 47.32,
+  "length_max": 47.32,
+  "wingspan_min": 38.05,
+  "wingspan_max": 38.05,
+  "variants": [
+   {
+    "length": 47.32,
+    "wingspan": 38.05,
+    "height": 13.56
+   }
+  ]
+ },
+ {
+  "family": "Boeing 767",
+  "length_min": 48.5,
+  "length_max": 61.4,
+  "wingspan_min": 47.6,
+  "wingspan_max": 51.9,
+  "variants": [
+   {
+    "length": 48.5,
+    "wingspan": 47.6,
+    "height": 15.8
+   },
+   {
+    "length": 54.9,
+    "wingspan": 47.6,
+    "height": 15.8
+   },
+   {
+    "length": 54.9,
+    "wingspan": 47.6,
+    "height": 15.8
+   },
+   {
+    "length": 61.4,
+    "wingspan": 51.9,
+    "height": 16.8
+   }
+  ]
+ },
+ {
+  "family": "Boeing 777 – The Triple Seven",
+  "length_min": 63.7,
+  "length_max": 63.7,
+  "wingspan_min": 60.9,
+  "wingspan_max": 60.9,
+  "variants": [
+   {
+    "length": 63.7,
+    "wingspan": 60.9,
+    "height": 18.5
+   }
+  ]
+ },
+ {
+  "family": "Boeing 777x – The New Triple Seven Family",
+  "length_min": 69.8,
+  "length_max": 76.7,
+  "wingspan_min": 64.8,
+  "wingspan_max": 71.8,
+  "variants": [
+   {
+    "length": 69.8,
+    "wingspan": 71.8
+   },
+   {
+    "length": 76.7,
+    "wingspan": 64.8
+   }
+  ]
+ },
+ {
+  "family": "Boeing 787 Dreamliner",
+  "length_min": 56.7,
+  "length_max": 56.7,
+  "wingspan_min": 60.1,
+  "wingspan_max": 60.1,
+  "variants": [
+   {
+    "length": 56.7,
+    "wingspan": 60.1,
+    "height": 16.9
+   }
+  ]
+ },
+ {
+  "family": "Bombardier CRJ",
+  "length_min": 32.3,
+  "length_max": 32.3,
+  "wingspan_min": 23.2,
+  "wingspan_max": 23.2,
+  "variants": [
+   {
+    "length": 32.3,
+    "wingspan": 23.2,
+    "height": 7.57
+   }
+  ]
+ },
+ {
+  "family": "Bombardier DHC Dash 8",
+  "length_min": 22.25,
+  "length_max": 22.25,
+  "wingspan_min": 25.89,
+  "wingspan_max": 25.89,
+  "variants": [
+   {
+    "length": 22.25,
+    "wingspan": 25.89,
+    "height": 7.49
+   }
+  ]
+ },
+ {
+  "family": "COMAC C919",
+  "length_min": 38.9,
+  "length_max": 38.9,
+  "wingspan_min": 35.8,
+  "wingspan_max": 35.8,
+  "variants": [
+   {
+    "length": 38.9,
+    "wingspan": 35.8,
+    "height": 11.95
+   },
+   {
+    "length": 38.9,
+    "wingspan": 35.8,
+    "height": 11.95
+   }
+  ]
+ },
+ {
+  "family": "Concorde",
+  "length_min": 61.66,
+  "length_max": 61.66,
+  "wingspan_min": 25.6,
+  "wingspan_max": 25.6,
+  "variants": [
+   {
+    "length": 61.66,
+    "wingspan": 25.6
+   }
+  ]
+ },
+ {
+  "family": "de Havilland Comet",
+  "length_min": 28.3,
+  "length_max": 33.99,
+  "wingspan_min": 35.0,
+  "wingspan_max": 35.0,
+  "variants": []
+ },
+ {
+  "family": "Douglas DC8",
+  "length_min": 45.9,
+  "length_max": 45.9,
+  "wingspan_min": 43.4,
+  "wingspan_max": 43.4,
+  "variants": [
+   {
+    "length": 45.9,
+    "wingspan": 43.4
+   }
+  ]
+ },
+ {
+  "family": "Douglas DC9",
+  "length_min": 31.82,
+  "length_max": 31.82,
+  "wingspan_min": 27.25,
+  "wingspan_max": 27.25,
+  "variants": [
+   {
+    "length": 31.82,
+    "wingspan": 27.25,
+    "height": 8.4
+   }
+  ]
+ },
+ {
+  "family": "Embraer E-Jets",
+  "length_min": 29.9,
+  "length_max": 29.9,
+  "wingspan_min": 26.0,
+  "wingspan_max": 26.0,
+  "variants": [
+   {
+    "length": 29.9,
+    "wingspan": 26.0,
+    "height": 9.67
+   }
+  ]
+ },
+ {
+  "family": "Fokker 100",
+  "length_min": 35.53,
+  "length_max": 35.53,
+  "wingspan_min": 28.08,
+  "wingspan_max": 28.08,
+  "variants": [
+   {
+    "length": 35.53,
+    "wingspan": 28.08,
+    "height": 8.5
+   }
+  ]
+ },
+ {
+  "family": "Fokker F27 Friendship",
+  "length_min": 25.06,
+  "length_max": 25.06,
+  "wingspan_min": 29.0,
+  "wingspan_max": 29.0,
+  "variants": [
+   {
+    "length": 25.06,
+    "wingspan": 29.0,
+    "height": 8.5
+   }
+  ]
+ },
+ {
+  "family": "Fokker F28 Fellowship",
+  "length_min": 27.4,
+  "length_max": 27.4,
+  "wingspan_min": 23.6,
+  "wingspan_max": 23.6,
+  "variants": [
+   {
+    "length": 27.4,
+    "wingspan": 23.6,
+    "height": 8.47
+   }
+  ]
+ },
+ {
+  "family": "Fokker F70",
+  "length_min": 30.91,
+  "length_max": 30.91,
+  "wingspan_min": 28.08,
+  "wingspan_max": 28.08,
+  "variants": [
+   {
+    "length": 30.91,
+    "wingspan": 28.08,
+    "height": 8.5
+   }
+  ]
+ },
+ {
+  "family": "Hawker Siddeley Trident DH121",
+  "length_min": 34.98,
+  "length_max": 34.98,
+  "wingspan_min": 27.38,
+  "wingspan_max": 27.38,
+  "variants": [
+   {
+    "length": 34.98,
+    "wingspan": 27.38,
+    "height": 8.23
+   }
+  ]
+ },
+ {
+  "family": "Irkut MC-21(now Yakovlev MC-21)",
+  "length_min": 36.8,
+  "length_max": 36.8,
+  "wingspan_min": 35.9,
+  "wingspan_max": 35.9,
+  "variants": [
+   {
+    "length": 36.8,
+    "wingspan": 35.9,
+    "height": 11.5
+   }
+  ]
+ },
+ {
+  "family": "Lockheed L1011 Tristar",
+  "length_min": 54.17,
+  "length_max": 54.17,
+  "wingspan_min": 47.35,
+  "wingspan_max": 47.35,
+  "variants": [
+   {
+    "length": 54.17,
+    "wingspan": 47.35,
+    "height": 16.87
+   }
+  ]
+ },
+ {
+  "family": "McDonnell Douglas DC10",
+  "length_min": 55.55,
+  "length_max": 55.55,
+  "wingspan_min": 47.35,
+  "wingspan_max": 47.35,
+  "variants": [
+   {
+    "length": 55.55,
+    "wingspan": 47.35,
+    "height": 17.53
+   }
+  ]
+ }
+]
