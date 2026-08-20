@@ -89,7 +89,9 @@ RTL-SDR de ~USD 20 con `dump1090` la recibe, y ahí la identificación deja de
 depender de leer la pintura.
 
 ```bash
-python detect_track_count.py --source rtsp://camara/stream   --adsb --camera-lat -34.5589 --camera-lon -58.4164   --line-start 960,0 --line-end 960,1080
+python detect_track_count.py --source rtsp://camara/stream \
+  --adsb --camera-lat -34.5589 --camera-lon -58.4164 \
+  --line-start 960,0 --line-end 960,1080
 ```
 
 **División de tareas:** la cámara establece **que** hubo una operación y
