@@ -19,6 +19,7 @@ import csv
 import math
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -27,6 +28,7 @@ import supervision as sv
 from ultralytics import YOLO
 
 import db
+import match_adsb
 import ocr
 from motion import MotionGate
 
@@ -60,6 +62,14 @@ def main():
                              "dominates runtime on long clips, so this is the main speed/disk lever.")
     parser.add_argument("--thumbnails-dir", default="output/thumbnails", help="Directory to save per-event airplane crops")
     parser.add_argument("--no-db", action="store_true", help="Skip writing events to the SQLite database")
+    parser.add_argument("--adsb", nargs="?", const="http://127.0.0.1:8080/data/aircraft.json",
+                        default=None, metavar="URL",
+                        help="Identificar los aviones por ADS-B ademas de por imagen. Apunta al "
+                             "aircraft.json de dump1090. Es la unica fuente que funciona cuando la "
+                             "matricula no esta a la vista (avion de frente, de noche, tapado).")
+    parser.add_argument("--camera-lat", type=float, default=None,
+                        help="Latitud de la camara; permite descartar aviones lejanos")
+    parser.add_argument("--camera-lon", type=float, default=None, help="Longitud de la camara")
     parser.add_argument("--ocr", action="store_true", help="Run OCR on each event crop to read registration/airline (slow, needs --no-db off)")
     parser.add_argument("--motion-threshold", type=float, default=0.0,
                         help="Skip detection when less than this fraction of pixels changed (e.g. 0.002). "
@@ -97,6 +107,14 @@ def main():
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
     conn = None if args.no_db else db.get_connection()
+
+    # El receptor corre en su propio hilo y arranca antes que el video: cuando
+    # llega el primer cruce ya tiene historial contra el cual emparejar.
+    adsb_recorder = None
+    if args.adsb:
+        import adsb as adsb_module
+        adsb_recorder = adsb_module.AdsbRecorder(url=args.adsb).start()
+        print(f"ADS-B: escuchando {args.adsb}")
 
     video_info = sv.VideoInfo.from_video_path(str(source_path))
     width, height = video_info.width, video_info.height
@@ -307,6 +325,26 @@ def main():
                         thumbnail_path=str(thumb_path) if thumb_path else None,
                         annotated_video=output_path.name,
                     )
+                    # La hora de reloj es la que permite cruzar con ADS-B: el
+                    # tiempo dentro del video no significa nada para el receptor.
+                    wall = time.time()
+                    conn.execute("UPDATE events SET wall_clock = ? WHERE id = ?",
+                                 (datetime.fromtimestamp(wall).isoformat(timespec="seconds"), event_id))
+                    conn.commit()
+
+                    if adsb_recorder is not None:
+                        cerca = adsb_recorder.around(wall, window_s=60)
+                        m = match_adsb.match_event(cerca, wall, event_type,
+                                                   args.camera_lat, args.camera_lon)
+                        db.update_event_adsb(
+                            conn, event_id,
+                            registration=m.registration, callsign=m.callsign,
+                            icao24=m.observation.icao24 if m.observation else None,
+                            note=m.reason,
+                        )
+                        if m.registration:
+                            print(f"  ADS-B: {event_type} -> {m.registration} ({m.reason})")
+
                     if args.ocr:
                         # Start collecting the largest view of this aircraft;
                         # the actual reading happens once the video is done.
@@ -412,6 +450,9 @@ def main():
                 cv2.imwrite(str(sil_path), silhouette)
                 for event_id in entry["events"]:
                     db.update_event_silhouette(conn, event_id, str(sil_path))
+
+    if adsb_recorder is not None:
+        adsb_recorder.stop()
 
     if conn is not None:
         conn.close()

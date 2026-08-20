@@ -39,6 +39,10 @@
   img.thumb { height: 48px; border-radius: 6px; display: block; }
   .ident { color: #fbbf24; font-weight: 600; }
   .ident.type { color: #a78bfa; }
+  .ident.adsb { color: #34d399; }
+  /* Las dos fuentes son independientes: si discrepan, hay que verlo. */
+  .ident.adsb.conflicto { color: #fbbf24; }
+  .ident.adsb.conflicto::after { content: " (≠ imagen)"; font-size: 0.75rem; color: #f87171; }
   .ident.unconfirmed { color: #9aa0a6; font-weight: 500; }
   .ident.unconfirmed::after { content: " ?"; color: #f87171; font-weight: 700; }
   .legend { color: #9aa0a6; font-size: 0.85rem; margin: 0 0 12px; }
@@ -83,13 +87,16 @@
     Matrícula en <span class="ident">amarillo</span>: dos modelos de visión leyeron lo mismo.
     En <span class="ident unconfirmed">gris con</span>: la leyó uno solo — puede estar equivocada.
     El <span class="ident type">tipo de avión</span> sale de la forma del fuselaje (nariz, góndolas, cola),
-    o del modelo pintado en el avión cuando está visible.
+    o del modelo pintado en el avión cuando está visible.<br>
+    La matrícula por <span class="ident adsb">ADS-B</span> la transmite el propio avión por radio: funciona
+    de noche, con lluvia y aunque el avión no muestre el costado. Si difiere de la leída por imagen,
+    se marca — esa discrepancia es información, no un error a esconder.
   </div>
   {% if events %}
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Thumbnail</th><th>Evento</th><th>Hora video</th><th>Track ID</th><th>Fuente</th><th>Matrícula</th><th>Tipo de avión</th><th>Aerolínea</th><th>Registrado</th></tr>
+      <tr><th>Thumbnail</th><th>Evento</th><th>Hora video</th><th>Track ID</th><th>Fuente</th><th>Matrícula<br><span style="font-weight:400;text-transform:none">imagen</span></th><th>Matrícula<br><span style="font-weight:400;text-transform:none">ADS-B</span></th><th>Vuelo</th><th>Tipo de avión</th><th>Aerolínea</th><th>Registrado</th></tr>
     </thead>
     <tbody>
       {% for e in events %}
@@ -104,6 +111,13 @@
           {% elif e.registration_unconfirmed %}<span class="ident unconfirmed" title="Un solo modelo la leyo; el otro no coincidio. Puede estar mal.">{{ e.registration_unconfirmed }}</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
+        <td>
+          {% if e.adsb_registration %}
+            <span class="ident adsb {% if e.registration and e.registration != e.adsb_registration %}conflicto{% endif %}"
+                  title="{{ e.adsb_note or '' }}">{{ e.adsb_registration }}</span>
+          {% else %}<span class="muted" title="{{ e.adsb_note or 'sin ADS-B' }}">—</span>{% endif %}
+        </td>
+        <td>{% if e.adsb_callsign %}<span class="ident">{{ e.adsb_callsign }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>
           {% if e.aircraft_type %}<span class="ident type">{{ e.aircraft_type }}</span>
           {% elif e.aircraft_type_unconfirmed %}<span class="ident unconfirmed">{{ e.aircraft_type_unconfirmed }}</span>

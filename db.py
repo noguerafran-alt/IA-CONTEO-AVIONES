@@ -19,7 +19,12 @@ CREATE TABLE IF NOT EXISTS events (
     registration_unconfirmed TEXT,
     aircraft_type TEXT,
     aircraft_type_unconfirmed TEXT,
-    silhouette_path TEXT
+    silhouette_path TEXT,
+    adsb_registration TEXT,
+    adsb_callsign TEXT,
+    adsb_icao24 TEXT,
+    adsb_note TEXT,
+    wall_clock TEXT
 );
 """
 
@@ -31,7 +36,9 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     # Keep databases created before annotated_video existed usable.
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)")}
     for column in ("annotated_video", "registration_unconfirmed",
-                   "aircraft_type", "aircraft_type_unconfirmed", "silhouette_path"):
+                   "aircraft_type", "aircraft_type_unconfirmed", "silhouette_path",
+                   "adsb_registration", "adsb_callsign", "adsb_icao24", "adsb_note",
+                   "wall_clock"):
         if column not in columns:
             conn.execute(f"ALTER TABLE events ADD COLUMN {column} TEXT")
     conn.commit()
@@ -70,6 +77,21 @@ def update_event_identification(conn: sqlite3.Connection, event_id: int, *,
 def update_event_silhouette(conn: sqlite3.Connection, event_id: int, path: str) -> None:
     """Crop showing the whole airframe, used to recognise the model."""
     conn.execute("UPDATE events SET silhouette_path = ? WHERE id = ?", (path, event_id))
+    conn.commit()
+
+
+def update_event_adsb(conn: sqlite3.Connection, event_id: int, *,
+                      registration: str | None, callsign: str | None,
+                      icao24: str | None, note: str | None) -> None:
+    """Identity reported by the aircraft itself, kept apart from what the
+    camera read. They are independent sources: storing them in separate
+    columns is what lets them be compared instead of silently overwriting
+    each other."""
+    conn.execute(
+        "UPDATE events SET adsb_registration = ?, adsb_callsign = ?, "
+        "adsb_icao24 = ?, adsb_note = ? WHERE id = ?",
+        (registration, callsign, icao24, note, event_id),
+    )
     conn.commit()
 
 

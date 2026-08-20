@@ -77,6 +77,63 @@ Por tamaño o por derechos de terceros, y cómo obtenerlo:
 
 ---
 
+## Identificación por ADS-B (la matrícula que la cámara no puede leer)
+
+Una cámara no siempre puede leer la matrícula: está pintada al costado del
+fuselaje, así que un avión que muestra la nariz o la cola simplemente no la
+tiene en la imagen. Lo mismo de noche, con lluvia, o con otro avión delante.
+Son límites físicos, no de software.
+
+Los aviones transmiten su identidad continuamente en 1090 MHz. Un receptor
+RTL-SDR de ~USD 20 con `dump1090` la recibe, y ahí la identificación deja de
+depender de leer la pintura.
+
+```bash
+python detect_track_count.py --source rtsp://camara/stream   --adsb --camera-lat -34.5589 --camera-lon -58.4164   --line-start 960,0 --line-end 960,1080
+```
+
+**División de tareas:** la cámara establece **que** hubo una operación y
+**cuándo**; el ADS-B dice **qué avión** era. Ninguna de las dos sustituye a la
+otra, y por eso se guardan en columnas separadas: cuando discrepan, el
+dashboard lo marca. Esa discrepancia es información.
+
+### Por qué el emparejado no es "el más cercano en el tiempo"
+
+En un momento de tráfico hay varios aviones a segundos de distancia, y elegir
+por tiempo pegaría la matrícula equivocada. [match_adsb.py](match_adsb.py)
+puntúa cada candidato por:
+
+- **comportamiento** — en un aterrizaje el avión debe estar descendiendo o en
+  pista; en un despegue, ascendiendo o acelerando. Es la señal más fuerte,
+  porque es el mismo evento visto por otro sensor.
+- **tiempo** — cuán cerca está su reporte del cruce.
+- **distancia** — cuán cerca está de la cámara.
+
+Y sigue la misma regla que el OCR: **una matrícula equivocada es peor que
+ninguna**. Si dos aviones son igual de plausibles, el evento queda sin
+identificar y lo dice, en vez de adivinar.
+
+Probado con escenarios construidos ([test_adsb.py](test_adsb.py)): dos aviones
+a segundos de distancia, la telemetría desempatando, un avión lejano, el
+receptor caído, y uno que reporta muchas veces sin poder ganar por repetición.
+
+```bash
+python test_adsb.py     # no necesita receptor
+python adsb.py --watch  # ver lo que se está recibiendo
+```
+
+### Qué hace falta
+
+Un dongle **RTL-SDR** (RTL2832U + R820T2) y una antena para 1090 MHz. Después:
+
+```bash
+dump1090-fa --net       # o dump1090 --net
+```
+
+**No es literalmente el 100%:** los aviones que no transmiten ADS-B no
+aparecen. Para tráfico comercial la cobertura debería ser casi completa, pero
+eso hay que medirlo con el receptor puesto.
+
 ## 1. Calibrar la línea virtual
 
 Sacá un frame de referencia con grilla de píxeles para elegir los puntos de la línea:
