@@ -5,12 +5,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import db
+from adsb_service import service as adsb_service
 
 ROOT = Path(__file__).resolve().parent.parent
 THUMBNAILS_DIR = ROOT / "output" / "thumbnails"
@@ -174,6 +175,70 @@ async def api_save_label(split: str, stem: str, request: Request):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + ("\n" if lines else ""))
     return JSONResponse({"saved": len(lines)})
+
+
+# --- ADS-B ---------------------------------------------------------------
+# Recording runs in a background thread inside this same process (see
+# adsb_service.py) so the page can show live counts and a downloadable CSV
+# instead of a terminal window scrolling text.
+
+@app.get("/adsb")
+def adsb_page(request: Request):
+    return templates.TemplateResponse(request, "adsb.html", {})
+
+
+@app.get("/api/adsb/status")
+def api_adsb_status():
+    return JSONResponse(adsb_service.status())
+
+
+@app.post("/api/adsb/start")
+async def api_adsb_start(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    result = adsb_service.start(mode=body.get("source", "auto"))
+    return JSONResponse(result)
+
+
+@app.post("/api/adsb/stop")
+def api_adsb_stop():
+    return JSONResponse(adsb_service.stop())
+
+
+@app.get("/adsb/download")
+def adsb_download():
+    from adsb_record import CSV_DIR
+    files = sorted(CSV_DIR.glob("adsb_*.csv")) if CSV_DIR.exists() else []
+    if not files:
+        return JSONResponse({"error": "todavia no hay ningun CSV grabado"}, status_code=404)
+    latest = files[-1]
+    return FileResponse(latest, media_type="text/csv", filename=latest.name)
+
+
+@app.get("/api/adsb/downloads")
+def api_adsb_downloads():
+    from adsb_record import CSV_DIR
+    files = sorted(CSV_DIR.glob("adsb_*.csv")) if CSV_DIR.exists() else []
+    return JSONResponse({
+        "files": [{"name": f.name, "size": f.stat().st_size} for f in files]
+    })
+
+
+@app.get("/adsb/download/{filename}")
+def adsb_download_one(filename: str):
+    from adsb_record import CSV_DIR
+    # Reject anything that isn't a plain filename inside CSV_DIR: filename
+    # comes straight from the URL, and letting a path-traversal value like
+    # "../../something" through would serve files outside the CSV directory.
+    if "/" in filename or "\\" in filename or not filename.startswith("adsb_"):
+        return JSONResponse({"error": "nombre invalido"}, status_code=400)
+    path = CSV_DIR / filename
+    if not path.exists():
+        return JSONResponse({"error": "no encontrado"}, status_code=404)
+    return FileResponse(path, media_type="text/csv", filename=path.name)
 
 
 if __name__ == "__main__":

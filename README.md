@@ -116,6 +116,13 @@ python adsb_record.py --source json    # dump1090 aircraft.json
 Sin indicar `--source`, se detecta solo: si existe
 `tools/rtlsdr/rtl_adsb.exe` usa el dongle directo, si no busca un feed SBS-1.
 
+### Desde el navegador, en vez de la terminal
+
+`http://localhost:8000/adsb` (con `dashboard.bat` corriendo) hace lo mismo
+que `adsb_record.py` pero con página en vez de texto en la terminal:
+contadores en vivo, tabla de aeronaves en rango, botón para iniciar/detener,
+y **botón para descargar el CSV** sin ir a buscarlo a mano en `output/adsb/`.
+
 ### Grabando
 
 Genera dos salidas en paralelo:

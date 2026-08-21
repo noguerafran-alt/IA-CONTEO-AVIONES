@@ -96,7 +96,14 @@ class Recorder:
         self.csv_dir = csv_dir
         self.csv_dir.mkdir(parents=True, exist_ok=True)
 
-        self.conn = sqlite3.connect(db_path)
+        # check_same_thread=False: the web dashboard creates this connection
+        # on a FastAPI request thread (adsb_service.start()), writes happen
+        # from the background recording thread, and it's closed from another
+        # request thread (stop()). SQLite refuses cross-thread use by default
+        # ("SQLite objects created in a thread can only be used in that same
+        # thread"). Safe here because those three never touch it at once --
+        # stop() joins the recording thread before close() runs.
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.executescript(SCHEMA)
         self.conn.commit()
 
@@ -179,6 +186,68 @@ class Recorder:
             self._csv_file.close()
 
 
+def build_source(mode: str = "auto", *, exe: str | None = None, device: int = 0,
+                 json_url: str | None = None, host: str = "127.0.0.1",
+                 port: int | None = None, log=print):
+    """Start and return an ADS-B source, resolving 'auto' the same way the
+    CLI and the web dashboard both do -- one place, so they cannot drift
+    apart into picking different sources for the same situation.
+
+    Returns (source, description). Raises RuntimeError with a message meant
+    to be shown as-is (in a terminal or in the dashboard) if nothing usable
+    could be started.
+    """
+    if json_url and mode == "auto":
+        mode = "json"
+
+    if mode == "auto":
+        from adsb_rtlsdr import DEFAULT_EXE
+        exe_candidato = Path(exe) if exe else DEFAULT_EXE
+        mode = "rtlsdr" if exe_candidato.exists() else "sbs"
+        log(f"Fuente automatica: {mode}"
+            + ("" if mode == "rtlsdr" else " (no se encontro tools/rtlsdr/rtl_adsb.exe;"
+                                           " correr INSTALAR-ADSB.bat para usar el dongle directo)"))
+
+    if mode == "json":
+        from adsb import AdsbRecorder
+        url = json_url or "http://127.0.0.1:8080/data/aircraft.json"
+        source = AdsbRecorder(url=url).start()
+        return source, f"dump1090 JSON en {url}"
+
+    if mode == "rtlsdr":
+        from adsb_rtlsdr import DEFAULT_EXE, RtlAdsbRecorder
+        exe_path = exe or DEFAULT_EXE
+        source = RtlAdsbRecorder(exe_path=exe_path, device_index=device).start()
+        if source.last_error and not source._thread:
+            raise RuntimeError(
+                f"{source.last_error}\n"
+                "  Corre INSTALAR-ADSB.bat para bajar rtl_adsb.exe, o indica la ruta correcta."
+            )
+        return source, f"dongle RTL-SDR directo via {exe_path}"
+
+    # sbs
+    from adsb_sbs import CANDIDATE_PORTS, SbsRecorder, find_feed
+
+    puerto = port
+    if puerto is None:
+        log(f"Buscando el feed en {host} (puertos {CANDIDATE_PORTS})...")
+        puerto = find_feed(host)
+        if puerto is None:
+            raise RuntimeError(
+                "No se encontro ningun feed SBS-1 con datos.\n"
+                "  1. Verifica que el software de ADS-B este corriendo.\n"
+                "  2. Revisa en su configuracion que puerto publica BaseStation/SBS,\n"
+                "     y pasalo con --port NUMERO.\n"
+                "  3. Si el dongle es un RTL-SDR Blog V4, asegurate de que el\n"
+                "     software tenga drivers actualizados: con los viejos el V4\n"
+                "     no recibe nada. RTL1090v2 ya los trae."
+            )
+        log(f"  encontrado en el puerto {puerto}")
+
+    source = SbsRecorder(host=host, port=puerto).start()
+    return source, f"feed SBS-1 en {host}:{puerto}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -201,55 +270,15 @@ def main() -> None:
                         help="Segundos minimos entre registros del mismo avion")
     args = parser.parse_args()
 
-    modo = args.source
-    if args.json and modo == "auto":
-        modo = "json"
-
-    if modo == "auto":
-        from pathlib import Path as _Path
-        from adsb_rtlsdr import DEFAULT_EXE
-        exe_candidato = _Path(args.exe) if args.exe else DEFAULT_EXE
-        modo = "rtlsdr" if exe_candidato.exists() else "sbs"
-        print(f"Fuente automatica: {modo}"
-              + ("" if modo == "rtlsdr" else " (no se encontro tools/rtlsdr/rtl_adsb.exe;"
-                                             " correr INSTALAR-ADSB.bat para usar el dongle directo)"))
-
-    if modo == "json":
-        from adsb import AdsbRecorder
-        url = args.json or "http://127.0.0.1:8080/data/aircraft.json"
-        source = AdsbRecorder(url=url).start()
-        print(f"Fuente: dump1090 JSON en {url}")
-
-    elif modo == "rtlsdr":
-        from adsb_rtlsdr import DEFAULT_EXE, RtlAdsbRecorder
-        exe = args.exe or DEFAULT_EXE
-        source = RtlAdsbRecorder(exe_path=exe, device_index=args.device).start()
-        print(f"Fuente: dongle RTL-SDR directo via {exe}")
-        if source.last_error and not source._thread:
-            print(f"\n{source.last_error}")
-            print("  Corre INSTALAR-ADSB.bat para bajar rtl_adsb.exe, o pasa --exe con la ruta.")
-            raise SystemExit(1)
-
-    else:  # sbs
-        from adsb_sbs import CANDIDATE_PORTS, SbsRecorder, find_feed
-
-        puerto = args.port
-        if puerto is None:
-            print(f"Buscando el feed en {args.host} (puertos {CANDIDATE_PORTS})...")
-            puerto = find_feed(args.host)
-            if puerto is None:
-                print("\nNo se encontro ningun feed SBS-1 con datos.")
-                print("  1. Verifica que el software de ADS-B este corriendo.")
-                print("  2. Revisa en su configuracion que puerto publica BaseStation/SBS,")
-                print("     y pasalo con --port NUMERO.")
-                print("  3. Si el dongle es un RTL-SDR Blog V4, asegurate de que el")
-                print("     software tenga drivers actualizados: con los viejos el V4")
-                print("     no recibe nada. RTL1090v2 ya los trae.")
-                raise SystemExit(1)
-            print(f"  encontrado en el puerto {puerto}")
-
-        source = SbsRecorder(host=args.host, port=puerto).start()
-        print(f"Fuente: feed SBS-1 en {args.host}:{puerto}")
+    try:
+        source, descripcion = build_source(
+            args.source, exe=args.exe, device=args.device, json_url=args.json,
+            host=args.host, port=args.port,
+        )
+    except RuntimeError as exc:
+        print(f"\n{exc}")
+        raise SystemExit(1)
+    print(f"Fuente: {descripcion}")
 
     recorder = Recorder(min_interval_s=args.min_interval)
     print(f"Guardando en {CSV_DIR} y en {DB_PATH.name}")

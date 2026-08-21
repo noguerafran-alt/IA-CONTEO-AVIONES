@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>ADS-B — Runway Video Analytics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 24px; }
+  a { color: #60a5fa; }
+
+  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 16px 24px; min-width: 140px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card.matricula .n { color: #34d399; }
+  .card.registros .n { color: #60a5fa; }
+
+  .panel { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+  select, button { background: #262a33; color: #e6e6e6; border: 1px solid #363b46; border-radius: 6px;
+                    padding: 8px 14px; font-size: 0.9rem; }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { background: #323845; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: #1d4ed8; border-color: #1d4ed8; }
+  button.primary:hover:not(:disabled) { background: #2563eb; }
+  button.danger { background: #7f1d1d; border-color: #7f1d1d; }
+  button.danger:hover:not(:disabled) { background: #991b1b; }
+
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .status-dot.on { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+  .status-dot.off { background: #4b5563; }
+  .status-dot.waiting { background: #fbbf24; }
+  .status-line { color: #9aa0a6; font-size: 0.9rem; margin-top: 10px; }
+  .status-line.warn { color: #fbbf24; }
+  .status-line.error { color: #f87171; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.9rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .ident { color: #fbbf24; font-weight: 600; }
+  .muted { color: #4b5563; }
+  .ground { color: #9aa0a6; font-size: 0.78rem; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+  .downloads { margin-top: 12px; font-size: 0.85rem; color: #9aa0a6; }
+  .downloads a { margin-right: 12px; }
+</style>
+</head>
+<body>
+  <h1>ADS-B en vivo</h1>
+  <div class="subtitle">
+    Aeronaves recibidas por el receptor RTL-SDR ·
+    <a href="/">volver al dashboard</a>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="n" id="c-total">0</div><div class="label">Aeronaves</div></div>
+    <div class="card matricula"><div class="n" id="c-matricula">0</div><div class="label">Con matrícula</div></div>
+    <div class="card registros"><div class="n" id="c-registros">0</div><div class="label">Registros guardados</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Receptor</h2>
+    <div class="bar">
+      <span><span class="status-dot off" id="dot"></span><span id="status-text">detenido</span></span>
+      <select id="source">
+        <option value="auto">Automatico</option>
+        <option value="rtlsdr">Dongle RTL-SDR directo</option>
+        <option value="sbs">Feed SBS-1 (RTL1090, dump1090...)</option>
+        <option value="json">dump1090 aircraft.json</option>
+      </select>
+      <button class="primary" id="btn-start">Iniciar</button>
+      <button class="danger" id="btn-stop" disabled>Detener</button>
+      <a href="/adsb/download"><button id="btn-download">Descargar CSV de hoy</button></a>
+    </div>
+    <div class="status-line" id="status-line"></div>
+    <div class="downloads" id="downloads"></div>
+  </div>
+
+  <h2>En rango ahora</h2>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>ICAO24</th><th>Matrícula</th><th>Vuelo</th><th>Altitud</th><th>Velocidad</th><th>V/S</th><th>Visto hace</th></tr>
+    </thead>
+    <tbody id="live-body">
+      <tr><td colspan="7" class="empty">Sin datos todavia. Iniciá el receptor arriba.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+<script>
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('status-text');
+const statusLine = document.getElementById('status-line');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+const sourceSel = document.getElementById('source');
+const liveBody = document.getElementById('live-body');
+const downloadsEl = document.getElementById('downloads');
+
+function fmt(value, digits, suffix) {
+  if (value === null || value === undefined) return '<span class="muted">—</span>';
+  return value.toFixed(digits) + suffix;
+}
+
+function renderLive(rows) {
+  if (!rows.length) {
+    liveBody.innerHTML = '<tr><td colspan="7" class="empty">Ninguna aeronave en rango en este momento.</td></tr>';
+    return;
+  }
+  liveBody.innerHTML = rows.map(o => `
+    <tr>
+      <td class="mono">${o.icao24}</td>
+      <td>${o.registration ? `<span class="ident">${o.registration}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${o.callsign || '<span class="muted">—</span>'}</td>
+      <td class="mono">${o.on_ground ? '<span class="ground">en tierra</span>' : fmt(o.altitude_ft, 0, ' ft')}</td>
+      <td class="mono">${fmt(o.ground_speed_kt, 0, ' kt')}</td>
+      <td class="mono">${o.vertical_rate_fpm ? (o.vertical_rate_fpm > 0 ? '+' : '') + o.vertical_rate_fpm.toFixed(0) : '<span class="muted">—</span>'}</td>
+      <td class="mono">${o.seconds_ago.toFixed(0)}s</td>
+    </tr>
+  `).join('');
+}
+
+async function refresh() {
+  let data;
+  try {
+    data = await (await fetch('/api/adsb/status')).json();
+  } catch (e) {
+    statusLine.textContent = 'No se pudo consultar el estado del servidor.';
+    statusLine.className = 'status-line error';
+    return;
+  }
+
+  document.getElementById('c-total').textContent = data.aircraft_total;
+  document.getElementById('c-matricula').textContent = data.with_registration;
+  document.getElementById('c-registros').textContent = data.written;
+  renderLive(data.live);
+
+  btnStart.disabled = data.running;
+  btnStop.disabled = !data.running;
+  sourceSel.disabled = data.running;
+
+  if (data.running) {
+    dot.className = 'status-dot on';
+    statusText.textContent = `grabando — ${data.description}`;
+    statusLine.textContent = '';
+    statusLine.className = 'status-line';
+  } else if (data.waiting_for_device) {
+    dot.className = 'status-dot waiting';
+    statusText.textContent = 'esperando el dongle';
+    statusLine.textContent = 'Sin dispositivo conectado todavia — es normal si aun no lo enchufaste. Conectalo y presiona Iniciar de nuevo.';
+    statusLine.className = 'status-line warn';
+  } else if (data.error) {
+    dot.className = 'status-dot off';
+    statusText.textContent = 'detenido';
+    statusLine.textContent = data.error;
+    statusLine.className = 'status-line error';
+  } else {
+    dot.className = 'status-dot off';
+    statusText.textContent = 'detenido';
+    statusLine.textContent = '';
+    statusLine.className = 'status-line';
+  }
+}
+
+async function refreshDownloads() {
+  try {
+    const data = await (await fetch('/api/adsb/downloads')).json();
+    if (!data.files.length) { downloadsEl.textContent = ''; return; }
+    downloadsEl.innerHTML = 'Archivos: ' + data.files.map(f =>
+      `<a href="/adsb/download/${f.name}">${f.name}</a>`
+    ).join('');
+  } catch (e) { /* silencioso: no es critico */ }
+}
+
+btnStart.addEventListener('click', async () => {
+  btnStart.disabled = true;
+  await fetch('/api/adsb/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: sourceSel.value}),
+  });
+  refresh();
+});
+
+btnStop.addEventListener('click', async () => {
+  btnStop.disabled = true;
+  await fetch('/api/adsb/stop', { method: 'POST' });
+  refresh();
+});
+
+refresh();
+refreshDownloads();
+setInterval(refresh, 2000);
+setInterval(refreshDownloads, 15000);
+</script>
+</body>
+</html>
