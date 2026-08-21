@@ -50,6 +50,8 @@ KNOWN_AIRLINES = {
     "aerolineas": "Aerolíneas Argentinas",
     "austral": "Austral Líneas Aéreas",
     "flybondi": "Flybondi",
+    "fb lineas aereas": "Flybondi",   # razon social legal, aparece asi en registros oficiales
+    "andes lineas aereas": "Andes Líneas Aéreas",
     "libertad de volar": "Flybondi",
     "jetsmart": "JetSMART",
     "latam": "LATAM",

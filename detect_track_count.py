@@ -27,6 +27,7 @@ import numpy as np
 import supervision as sv
 from ultralytics import YOLO
 
+import aircraft_db
 import db
 import match_adsb
 import ocr
@@ -336,14 +337,29 @@ def main():
                         cerca = adsb_recorder.around(wall, window_s=60)
                         m = match_adsb.match_event(cerca, wall, event_type,
                                                    args.camera_lat, args.camera_lon)
+                        icao24 = m.observation.icao24 if m.observation else None
+
+                        # Raw ADS-B carries no field for aircraft model or
+                        # airline name -- only the icao24 address. Both come
+                        # from a local registry lookup keyed on it, not from
+                        # the radio transmission itself (see aircraft_db.py).
+                        adsb_type = adsb_airline = None
+                        if icao24:
+                            entry = aircraft_db.lookup(icao24)
+                            if entry:
+                                adsb_type = aircraft_db.describe_type(entry)
+                                adsb_airline = (ocr.canonical_airline(entry["operator"])
+                                                if entry.get("operator") else None)
+
                         db.update_event_adsb(
                             conn, event_id,
                             registration=m.registration, callsign=m.callsign,
-                            icao24=m.observation.icao24 if m.observation else None,
-                            note=m.reason,
+                            icao24=icao24, note=m.reason,
+                            aircraft_type=adsb_type, airline=adsb_airline,
                         )
-                        if m.registration:
-                            print(f"  ADS-B: {event_type} -> {m.registration} ({m.reason})")
+                        if m.registration or adsb_type or adsb_airline:
+                            print(f"  ADS-B: {event_type} -> matricula={m.registration} "
+                                  f"tipo={adsb_type} aerolinea={adsb_airline} ({m.reason})")
 
                     if args.ocr:
                         # Start collecting the largest view of this aircraft;

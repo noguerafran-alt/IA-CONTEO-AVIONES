@@ -148,14 +148,53 @@ algo relevante: 100 pies de altitud o 10 nudos de velocidad. Esos cambios son
 justamente los momentos que interesan —despegue, aproximación, aterrizaje— y
 nunca se descartan.
 
-### Sobre la matrícula: `registration` puede salir vacía
+### Sobre la matrícula: `registration` puede salir vacía en el CSV crudo
 
 La transmisión ADS-B cruda lleva el **código ICAO24** de la aeronave, no la
-matrícula ya traducida. `icao24` identifica al avión de forma única igual, así
-que no se pierde información, pero para ver la matrícula directamente hace
-falta cruzarlo contra una base de datos de aeronaves (pendiente). Si en cambio
-usás `--source json` contra un decodificador que publique `aircraft.json`,
-ese formato suele traer la matrícula ya resuelta.
+matrícula ya traducida — por eso esta columna del CSV suele salir vacía.
+`icao24` identifica al avión de forma única igual, así que no se pierde
+información: [aircraft_db.py](aircraft_db.py) (ver más abajo) traduce ese
+ICAO24 a matrícula, tipo y aerolínea, y es lo que usa `detect_track_count.py`
+para completar las columnas del dashboard. Si en cambio usás `--source json`
+contra un decodificador que publique `aircraft.json`, ese formato suele traer
+la matrícula ya resuelta directamente.
+
+## Tipo de avión y aerolínea también por ADS-B, para comparar
+
+El dashboard ya mostraba matrícula por imagen vs. por ADS-B, una al lado de la
+otra. Ahora hace lo mismo con **tipo de avión** y **aerolínea**.
+
+La diferencia importante: el protocolo ADS-B **no transmite ni el modelo ni
+el nombre de la aerolínea** — solo el ICAO24, un identificador fijo por avión.
+Para conseguir ambos, [aircraft_db.py](aircraft_db.py) descarga una vez el
+registro público de [OpenSky Network](https://opensky-network.org/) (~520.000
+aeronaves) y arma una base local: dado un ICAO24, busca ahí la matrícula, el
+modelo y el operador. Es una consulta local, sin conexión ni límite de uso.
+
+```bash
+python aircraft_db.py --build              # una vez, ~90 MB
+python aircraft_db.py --lookup e80456       # probar una consulta
+```
+
+`INSTALAR-Y-EJECUTAR.bat` ya la descarga sola si no está.
+
+### Cobertura real, medida contra la flota argentina
+
+No es pareja entre los dos campos. Sobre las 1415 aeronaves de la base con
+matrícula `LV-` (Argentina):
+
+| Campo | Cobertura |
+|---|---|
+| Tipo de avión | **100%** (1415/1415) |
+| Aerolínea (`operator`) | **5%** (64/1415) |
+
+El **tipo** es confiable: encontrado y verificado cruzado contra una
+identificación visual ya hecha en este proyecto (`LV-GUB`, identificado a ojo
+como Boeing 737-800 → la base dice `737NG 800/W`, típecódigo `B738` —
+coincide). La **aerolínea** por esta vía va a salir vacía la mayoría de las
+veces: para eso sigue siendo mejor el OCR/modelo de visión sobre la imagen,
+que ya tenía mucha mejor tasa de acierto. El cruce por ADS-B queda como
+verificación extra cuando aparece, no como fuente principal.
 
 ## Identificación por ADS-B (la matrícula que la cámara no puede leer)
 

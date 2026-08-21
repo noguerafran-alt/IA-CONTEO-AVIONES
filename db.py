@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS events (
     adsb_callsign TEXT,
     adsb_icao24 TEXT,
     adsb_note TEXT,
-    wall_clock TEXT
+    wall_clock TEXT,
+    adsb_aircraft_type TEXT,
+    adsb_airline TEXT
 );
 """
 
@@ -38,7 +40,7 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     for column in ("annotated_video", "registration_unconfirmed",
                    "aircraft_type", "aircraft_type_unconfirmed", "silhouette_path",
                    "adsb_registration", "adsb_callsign", "adsb_icao24", "adsb_note",
-                   "wall_clock"):
+                   "wall_clock", "adsb_aircraft_type", "adsb_airline"):
         if column not in columns:
             conn.execute(f"ALTER TABLE events ADD COLUMN {column} TEXT")
     conn.commit()
@@ -82,15 +84,20 @@ def update_event_silhouette(conn: sqlite3.Connection, event_id: int, path: str) 
 
 def update_event_adsb(conn: sqlite3.Connection, event_id: int, *,
                       registration: str | None, callsign: str | None,
-                      icao24: str | None, note: str | None) -> None:
+                      icao24: str | None, note: str | None,
+                      aircraft_type: str | None = None, airline: str | None = None) -> None:
     """Identity reported by the aircraft itself, kept apart from what the
     camera read. They are independent sources: storing them in separate
     columns is what lets them be compared instead of silently overwriting
-    each other."""
+    each other.
+
+    aircraft_type/airline come from a registry lookup by icao24 (see
+    aircraft_db.py), not from the radio transmission itself -- raw ADS-B
+    carries no field for either."""
     conn.execute(
         "UPDATE events SET adsb_registration = ?, adsb_callsign = ?, "
-        "adsb_icao24 = ?, adsb_note = ? WHERE id = ?",
-        (registration, callsign, icao24, note, event_id),
+        "adsb_icao24 = ?, adsb_note = ?, adsb_aircraft_type = ?, adsb_airline = ? WHERE id = ?",
+        (registration, callsign, icao24, note, aircraft_type, airline, event_id),
     )
     conn.commit()
 

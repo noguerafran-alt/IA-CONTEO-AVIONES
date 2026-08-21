@@ -137,6 +137,17 @@ if not exist "yolov8n_openvino_model\" (
     )
 )
 
+REM Base de matricula/tipo de avion por ICAO24, para comparar contra ADS-B
+REM (opcional, ~90 MB, no critico si falla o no hay internet ahora).
+if not exist "tools\aircraft_db.sqlite" (
+    echo       Descargando base de aeronaves para ADS-B ^(~90 MB, puede tardar^)...
+    "%VPY%" aircraft_db.py --build
+    if errorlevel 1 (
+        echo       No se pudo bajar ahora ^(no es critico^). Reintenta luego con:
+        echo         aircraft_db.py --build
+    )
+)
+
 REM ---------- 6. Arrancar ----------
 echo [5/5] Iniciando el dashboard...
 set "LISTO="

@@ -90,14 +90,16 @@
     El <span class="ident type">tipo de avión</span> sale de la forma del fuselaje (nariz, góndolas, cola),
     o del modelo pintado en el avión cuando está visible.<br>
     La matrícula por <span class="ident adsb">ADS-B</span> la transmite el propio avión por radio: funciona
-    de noche, con lluvia y aunque el avión no muestre el costado. Si difiere de la leída por imagen,
-    se marca — esa discrepancia es información, no un error a esconder.
+    de noche, con lluvia y aunque el avión no muestre el costado. El <span class="ident adsb">tipo</span> y
+    la <span class="ident adsb">aerolínea</span> por ADS-B no van en la transmisión de radio en sí — salen de
+    cruzar el ICAO24 del avión contra el registro público de OpenSky. Si alguna de estas discrepa con lo leído
+    por imagen, se marca — esa discrepancia es información, no un error a esconder.
   </div>
   {% if events %}
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Thumbnail</th><th>Evento</th><th>Hora video</th><th>Track ID</th><th>Fuente</th><th>Matrícula<br><span style="font-weight:400;text-transform:none">imagen</span></th><th>Matrícula<br><span style="font-weight:400;text-transform:none">ADS-B</span></th><th>Vuelo</th><th>Tipo de avión</th><th>Aerolínea</th><th>Registrado</th></tr>
+      <tr><th>Thumbnail</th><th>Evento</th><th>Hora video</th><th>Track ID</th><th>Fuente</th><th>Matrícula<br><span style="font-weight:400;text-transform:none">imagen</span></th><th>Matrícula<br><span style="font-weight:400;text-transform:none">ADS-B</span></th><th>Vuelo</th><th>Tipo<br><span style="font-weight:400;text-transform:none">imagen</span></th><th>Tipo<br><span style="font-weight:400;text-transform:none">ADS-B</span></th><th>Aerolínea<br><span style="font-weight:400;text-transform:none">imagen</span></th><th>Aerolínea<br><span style="font-weight:400;text-transform:none">ADS-B</span></th><th>Registrado</th></tr>
     </thead>
     <tbody>
       {% for e in events %}
@@ -124,7 +126,19 @@
           {% elif e.aircraft_type_unconfirmed %}<span class="ident unconfirmed">{{ e.aircraft_type_unconfirmed }}</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
+        <td>
+          {% if e.adsb_aircraft_type %}
+            <span class="ident adsb {% if e.aircraft_type and e.aircraft_type != e.adsb_aircraft_type %}conflicto{% endif %}"
+                  title="De la base de registro OpenSky, por icao24">{{ e.adsb_aircraft_type }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td>{% if e.airline %}<span class="ident">{{ e.airline }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>
+          {% if e.adsb_airline %}
+            <span class="ident adsb {% if e.airline and e.airline != e.adsb_airline %}conflicto{% endif %}"
+                  title="De la base de registro OpenSky, por icao24">{{ e.adsb_airline }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td>{{ e.created_at }}</td>
       </tr>
       {% endfor %}
