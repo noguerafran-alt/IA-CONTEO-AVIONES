@@ -40,6 +40,46 @@ from adsb import DEFAULT_HISTORY_S, Observation
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 30003
 
+# Every Windows decoder picks its own port for the BaseStation feed, and which
+# one is running is not knowable in advance -- so try the known ones rather
+# than making the operator find out by trial and error:
+#   30003  dump1090 and most Linux/Pi tools, the de-facto standard
+#   31004  RTL1090 (its BaseStation port is 31004 + DeviceID*10, not 30003;
+#          RTL1090v2 matters here because it ships with RTL-SDR Blog V4
+#          support built in, so no DLL swapping)
+#   31014  RTL1090 second device
+#   30103  Virtual Radar Server rebroadcast default
+CANDIDATE_PORTS = [30003, 31004, 31014, 30103]
+
+
+def find_feed(host: str = DEFAULT_HOST, ports: list[int] | None = None,
+              timeout: float = 1.5) -> int | None:
+    """First port that accepts a connection AND sends parseable SBS traffic.
+
+    Accepting the connection is not enough: some tools listen on a port while
+    serving a different format, which would look connected but record nothing.
+    """
+    for port in (ports or CANDIDATE_PORTS):
+        try:
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                sock.settimeout(timeout)
+                buffer = b""
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    try:
+                        chunk = sock.recv(2048)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    for raw in buffer.split(b"\n")[:-1]:
+                        if parse_sbs_line(raw.decode("ascii", "ignore")):
+                            return port
+        except OSError:
+            continue
+    return None
+
 
 def _to_float(text: str) -> float | None:
     text = text.strip()

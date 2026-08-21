@@ -186,7 +186,9 @@ def main() -> None:
                         default=None, metavar="URL",
                         help="Usar dump1090 aircraft.json en vez del feed SBS-1")
     parser.add_argument("--host", default="127.0.0.1", help="Host del feed SBS-1")
-    parser.add_argument("--port", type=int, default=30003, help="Puerto del feed SBS-1")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Puerto del feed SBS-1. Si se omite, se autodetecta "
+                             "(30003 de dump1090, 31004 de RTL1090, y otros).")
     parser.add_argument("--minutes", type=float, default=None,
                         help="Parar despues de N minutos (por defecto, hasta Ctrl+C)")
     parser.add_argument("--min-interval", type=float, default=5.0,
@@ -198,9 +200,26 @@ def main() -> None:
         source = AdsbRecorder(url=args.json).start()
         print(f"Fuente: dump1090 JSON en {args.json}")
     else:
-        from adsb_sbs import SbsRecorder
-        source = SbsRecorder(host=args.host, port=args.port).start()
-        print(f"Fuente: feed SBS-1 en {args.host}:{args.port}")
+        from adsb_sbs import CANDIDATE_PORTS, SbsRecorder, find_feed
+
+        puerto = args.port
+        if puerto is None:
+            print(f"Buscando el feed en {args.host} (puertos {CANDIDATE_PORTS})...")
+            puerto = find_feed(args.host)
+            if puerto is None:
+                print("
+No se encontro ningun feed SBS-1 con datos.")
+                print("  1. Verifica que el software de ADS-B este corriendo.")
+                print("  2. Revisa en su configuracion que puerto publica BaseStation/SBS,")
+                print("     y pasalo con --port NUMERO.")
+                print("  3. Si el dongle es un RTL-SDR Blog V4, asegurate de que el")
+                print("     software tenga drivers actualizados: con los viejos el V4")
+                print("     no recibe nada. RTL1090v2 ya los trae.")
+                raise SystemExit(1)
+            print(f"  encontrado en el puerto {puerto}")
+
+        source = SbsRecorder(host=args.host, port=puerto).start()
+        print(f"Fuente: feed SBS-1 en {args.host}:{puerto}")
 
     recorder = Recorder(min_interval_s=args.min_interval)
     print(f"Guardando en {CSV_DIR} y en {DB_PATH.name}")

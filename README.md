@@ -95,13 +95,22 @@ proyecto.
 
 ### 2. Instalar un decodificador que publique los datos
 
-Hace falta un programa que lea el dongle y publique el resultado. Cualquiera
-que sirva el formato **SBS-1** en el puerto 30003 funciona (`dump1090` para
-Windows es la opción habitual).
+**Con un RTL-SDR Blog V4, usá RTL1090v2.** El V4 lleva un chip distinto al V3 y
+necesita drivers actualizados: con los viejos no recibe nada, o sintoniza mal.
+RTL1090v2 ya los trae, así que evita tener que reemplazar `rtlsdr.dll` a mano.
 
-**Ojo con el RTL-SDR Blog V4:** usa un chip distinto al V3 y necesita drivers
-actualizados. Si el software trae un `rtlsdr.dll` viejo, el V4 sintoniza mal o
-directamente no recibe. Hay que reemplazar ese archivo por el de RTL-SDR Blog.
+Otros programas con soporte V4 de fábrica: SDR#, SDR++, SDR-Console V3,
+SatDump. Si preferís otro decodificador, hay que bajar los drivers del V4 desde
+el repositorio de RTL-SDR Blog y reemplazar el `rtlsdr.dll` de esa carpeta.
+
+**El puerto se detecta solo.** Cada programa publica el feed BaseStation en un
+puerto distinto —`dump1090` usa el 30003, RTL1090 el **31004**— así que el
+grabador prueba los conocidos y usa el primero que efectivamente envíe datos
+SBS. No alcanza con que el puerto acepte la conexión: algunos programas
+escuchan ahí pero sirven otro formato, lo que parecería conectado y no
+grabaría nada.
+
+Si usás un puerto no estándar: `--port NUMERO`.
 
 ### 3. Grabar
 
