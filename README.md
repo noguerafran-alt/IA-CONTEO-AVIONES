@@ -84,43 +84,39 @@ Antes de tener cámara ya se puede recolectar. Sirve para responder con datos
 si la antena recibe desde esa ubicación, cuántas operaciones hay por hora, y
 si las aeronaves de la zona transmiten matrícula o solo el código ICAO24.
 
-### 1. Instalar el driver del dongle
+### Con un RTL-SDR Blog V4 (o cualquier RTL-SDR): no hace falta programa externo
 
-El RTL-SDR necesita el driver **WinUSB**, que se instala con **Zadig**
-(gratuito). Al conectar el dongle, en Zadig hay que elegir la entrada
-`Bulk-In, Interface (Interface 0)` y reemplazar el driver por `WinUSB`.
-
-Esto hace falta con cualquier software de ADS-B, no es específico de este
-proyecto.
-
-### 2. Instalar un decodificador que publique los datos
-
-**Con un RTL-SDR Blog V4, usá RTL1090v2.** El V4 lleva un chip distinto al V3 y
-necesita drivers actualizados: con los viejos no recibe nada, o sintoniza mal.
-RTL1090v2 ya los trae, así que evita tener que reemplazar `rtlsdr.dll` a mano.
-
-Otros programas con soporte V4 de fábrica: SDR#, SDR++, SDR-Console V3,
-SatDump. Si preferís otro decodificador, hay que bajar los drivers del V4 desde
-el repositorio de RTL-SDR Blog y reemplazar el `rtlsdr.dll` de esa carpeta.
-
-**El puerto se detecta solo.** Cada programa publica el feed BaseStation en un
-puerto distinto —`dump1090` usa el 30003, RTL1090 el **31004**— así que el
-grabador prueba los conocidos y usa el primero que efectivamente envíe datos
-SBS. No alcanza con que el puerto acepte la conexión: algunos programas
-escuchan ahí pero sirven otro formato, lo que parecería conectado y no
-grabaría nada.
-
-Si usás un puerto no estándar: `--port NUMERO`.
-
-### 3. Grabar
-
-Doble clic en **`GRABAR-ADSB.bat`**, o:
+Este proyecto lee el dongle **directamente**, sin depender de un decodificador
+de terceros. Usa el binario oficial `rtl_adsb.exe` de RTL-SDR Blog (que ya
+incluye los drivers correctos del V4) solo para pasar de radio a mensajes en
+crudo, y decodifica todo lo demás en Python con
+[pyModeS](https://github.com/junzis/pyModeS).
 
 ```bash
-python adsb_record.py                  # feed SBS-1 en localhost:30003
-python adsb_record.py --json           # si el software expone aircraft.json
-python adsb_record.py --minutes 60     # parar solo despues de una hora
+INSTALAR-ADSB.bat      # una vez: baja rtl_adsb.exe + guía el driver del dongle
+GRABAR-ADSB.bat        # cada vez: conectá el dongle y grabá
 ```
+
+`INSTALAR-ADSB.bat` baja los binarios oficiales, y guía el único paso manual
+que queda: instalar el driver **WinUSB** con **Zadig** (gratuito, se abre
+solo). Windows reconoce el dongle por defecto como sintonizador de TV, que no
+sirve para esto — hay que decirle que use WinUSB. Ese paso es igual para
+cualquier programa de ADS-B, no es específico de este proyecto.
+
+### Alternativa: un programa de ADS-B ya instalado
+
+Si preferís usar `dump1090`, RTL1090 u otro decodificador que ya tengas
+andando, `adsb_record.py` también sabe leerlos:
+
+```bash
+python adsb_record.py --source sbs     # feed BaseStation/SBS-1 (puerto autodetectado)
+python adsb_record.py --source json    # dump1090 aircraft.json
+```
+
+Sin indicar `--source`, se detecta solo: si existe
+`tools/rtlsdr/rtl_adsb.exe` usa el dongle directo, si no busca un feed SBS-1.
+
+### Grabando
 
 Genera dos salidas en paralelo:
 
@@ -145,14 +141,14 @@ algo relevante: 100 pies de altitud o 10 nudos de velocidad. Esos cambios son
 justamente los momentos que interesan —despegue, aproximación, aterrizaje— y
 nunca se descartan.
 
-### Una limitación del formato SBS-1
+### Sobre la matrícula: `registration` puede salir vacía
 
-SBS-1 transmite el **código ICAO24**, no la matrícula. Para traducir uno a otra
-hace falta una base de datos de aeronaves; sin ella los registros salen con
-`registration` vacío pero `icao24` completo, que igual identifica al avión de
-forma única. Si el software elegido publica `aircraft.json` en vez de SBS-1,
-ese formato sí suele incluir la matrícula ya resuelta: en ese caso conviene
-usar `--json`.
+La transmisión ADS-B cruda lleva el **código ICAO24** de la aeronave, no la
+matrícula ya traducida. `icao24` identifica al avión de forma única igual, así
+que no se pierde información, pero para ver la matrícula directamente hace
+falta cruzarlo contra una base de datos de aeronaves (pendiente). Si en cambio
+usás `--source json` contra un decodificador que publique `aircraft.json`,
+ese formato suele traer la matrícula ya resuelta.
 
 ## Identificación por ADS-B (la matrícula que la cámara no puede leer)
 

@@ -182,9 +182,15 @@ class Recorder:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--source", choices=["auto", "rtlsdr", "sbs", "json"], default="auto",
+                        help="auto (por defecto): usa el dongle directamente si "
+                             "tools/rtlsdr/rtl_adsb.exe existe (ver INSTALAR-ADSB.bat), "
+                             "si no busca un feed SBS-1. rtlsdr/sbs/json fuerzan una fuente.")
+    parser.add_argument("--exe", default=None, help="Ruta a rtl_adsb.exe (fuente rtlsdr)")
+    parser.add_argument("--device", type=int, default=0, help="Indice del dongle (fuente rtlsdr)")
     parser.add_argument("--json", nargs="?", const="http://127.0.0.1:8080/data/aircraft.json",
                         default=None, metavar="URL",
-                        help="Usar dump1090 aircraft.json en vez del feed SBS-1")
+                        help="Atajo para --source json con esta URL")
     parser.add_argument("--host", default="127.0.0.1", help="Host del feed SBS-1")
     parser.add_argument("--port", type=int, default=None,
                         help="Puerto del feed SBS-1. Si se omite, se autodetecta "
@@ -195,11 +201,36 @@ def main() -> None:
                         help="Segundos minimos entre registros del mismo avion")
     args = parser.parse_args()
 
-    if args.json:
+    modo = args.source
+    if args.json and modo == "auto":
+        modo = "json"
+
+    if modo == "auto":
+        from pathlib import Path as _Path
+        from adsb_rtlsdr import DEFAULT_EXE
+        exe_candidato = _Path(args.exe) if args.exe else DEFAULT_EXE
+        modo = "rtlsdr" if exe_candidato.exists() else "sbs"
+        print(f"Fuente automatica: {modo}"
+              + ("" if modo == "rtlsdr" else " (no se encontro tools/rtlsdr/rtl_adsb.exe;"
+                                             " correr INSTALAR-ADSB.bat para usar el dongle directo)"))
+
+    if modo == "json":
         from adsb import AdsbRecorder
-        source = AdsbRecorder(url=args.json).start()
-        print(f"Fuente: dump1090 JSON en {args.json}")
-    else:
+        url = args.json or "http://127.0.0.1:8080/data/aircraft.json"
+        source = AdsbRecorder(url=url).start()
+        print(f"Fuente: dump1090 JSON en {url}")
+
+    elif modo == "rtlsdr":
+        from adsb_rtlsdr import DEFAULT_EXE, RtlAdsbRecorder
+        exe = args.exe or DEFAULT_EXE
+        source = RtlAdsbRecorder(exe_path=exe, device_index=args.device).start()
+        print(f"Fuente: dongle RTL-SDR directo via {exe}")
+        if source.last_error and not source._thread:
+            print(f"\n{source.last_error}")
+            print("  Corre INSTALAR-ADSB.bat para bajar rtl_adsb.exe, o pasa --exe con la ruta.")
+            raise SystemExit(1)
+
+    else:  # sbs
         from adsb_sbs import CANDIDATE_PORTS, SbsRecorder, find_feed
 
         puerto = args.port
@@ -207,8 +238,7 @@ def main() -> None:
             print(f"Buscando el feed en {args.host} (puertos {CANDIDATE_PORTS})...")
             puerto = find_feed(args.host)
             if puerto is None:
-                print("
-No se encontro ningun feed SBS-1 con datos.")
+                print("\nNo se encontro ningun feed SBS-1 con datos.")
                 print("  1. Verifica que el software de ADS-B este corriendo.")
                 print("  2. Revisa en su configuracion que puerto publica BaseStation/SBS,")
                 print("     y pasalo con --port NUMERO.")
