@@ -282,7 +282,15 @@ def main() -> None:
             if ahora - ultimo_reporte >= 10:
                 ultimo_reporte = ahora
                 minutos = (ahora - inicio) / 60
-                estado = f" | ERROR: {source.last_error}" if source.last_error else ""
+                # "sin dongle conectado" no es un error: es el estado normal
+                # antes de enchufar la antena, y mostrarlo como ERROR asusta
+                # sin necesidad. Se distingue de una falla real del receptor.
+                if getattr(source, "waiting_for_device", False):
+                    estado = " | esperando el dongle (sin dispositivo conectado)"
+                elif source.last_error:
+                    estado = f" | ERROR: {source.last_error}"
+                else:
+                    estado = ""
                 print(f"[{minutos:5.1f} min] {len(recorder.aircraft):3d} aeronaves | "
                       f"{recorder.written:5d} registros | "
                       f"{len(recorder.with_registration)} con matricula{estado}")
@@ -303,8 +311,13 @@ def main() -> None:
         print(f"CSV                 : {CSV_DIR}")
         print(f"Base                : {DB_PATH}")
         if not recorder.aircraft:
-            print("\nNo se recibio nada. Verifica que el software de ADS-B este")
-            print("corriendo y sirviendo el feed, y que la antena tenga vista al cielo.")
+            if getattr(source, "waiting_for_device", False):
+                print("\nNo se detecto el dongle todavia -- es normal si aun no lo")
+                print("conectaste. Conectalo, revisa que Zadig haya instalado el")
+                print("driver WinUSB (INSTALAR-ADSB.bat), y volve a correr esto.")
+            else:
+                print("\nNo se recibio nada. Verifica que el software de ADS-B este")
+                print("corriendo y sirviendo el feed, y que la antena tenga vista al cielo.")
 
 
 if __name__ == "__main__":

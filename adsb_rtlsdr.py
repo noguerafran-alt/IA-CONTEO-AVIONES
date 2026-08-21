@@ -95,6 +95,7 @@ class RtlAdsbRecorder:
     last_error: str | None = field(default=None, repr=False)
     poll_count: int = 0     # messages successfully decoded (CRC valid)
     corrupt_count: int = 0  # messages with a bad checksum, discarded
+    waiting_for_device: bool = field(default=False, repr=False)
 
     def start(self) -> "RtlAdsbRecorder":
         if self._thread and self._thread.is_alive():
@@ -133,23 +134,54 @@ class RtlAdsbRecorder:
             self._stop.wait(self.restart_delay)
 
     def _run_once(self) -> None:
+        # stderr is captured, not discarded: rtl_adsb prints its actual reason
+        # for exiting there (no device, wrong driver, device busy), and that
+        # text is what turns "exited with code 1" into a message someone can
+        # act on instead of a bare error code.
         self._process = subprocess.Popen(
             [str(self.exe_path), "-d", str(self.device_index)],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
         self.last_error = None
+        self.waiting_for_device = False
         try:
             for line in self._process.stdout:
                 if self._stop.is_set():
                     break
                 self._handle_line(line)
             code = self._process.wait(timeout=2)
+            stderr_text = (self._process.stderr.read() or "").strip()
             if code not in (0, None) and not self._stop.is_set():
-                raise RuntimeError(f"rtl_adsb.exe termino con codigo {code}")
+                message = self._describe_exit(code, stderr_text)
+                self.waiting_for_device = message is None
+                if message is not None:
+                    self.last_error = message
+                    raise RuntimeError(message)
         finally:
             if self._process.poll() is None:
                 self._process.terminate()
+
+    @staticmethod
+    def _describe_exit(code: int, stderr_text: str) -> str | None:
+        """Turn rtl_adsb's own stderr into a message that says what to do.
+
+        Returns None for "no device connected" specifically: with no antenna
+        plugged in yet, that is not a malfunction, it is the honest current
+        state, and reporting it as a RuntimeError makes a normal situation
+        read like a crash.
+        """
+        lowered = stderr_text.lower()
+        if "no supported devices" in lowered:
+            return None
+        if "usb_claim_interface" in lowered or "already in use" in lowered:
+            return ("el dongle esta en uso por otro programa (SDR#, RTL1090, etc). "
+                    "Cerralo y volve a intentar.")
+        if "error accessing" in lowered or "libusb" in lowered:
+            return ("no se pudo abrir el dongle. Si es la primera vez, instala el "
+                    "driver WinUSB con Zadig (ver INSTALAR-ADSB.bat).")
+        detail = f": {stderr_text}" if stderr_text else ""
+        return f"rtl_adsb.exe termino con codigo {code}{detail}"
 
     def _handle_line(self, line: str) -> None:
         hex_message = parse_avr_line(line)
