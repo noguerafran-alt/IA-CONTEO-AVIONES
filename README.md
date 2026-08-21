@@ -77,6 +77,74 @@ Por tamaño o por derechos de terceros, y cómo obtenerlo:
 
 ---
 
+## Grabar datos ADS-B (funciona sin cámara)
+
+Antes de tener cámara ya se puede recolectar. Sirve para responder con datos
+—no con suposiciones— las preguntas que definen el resto del proyecto:
+si la antena recibe desde esa ubicación, cuántas operaciones hay por hora, y
+si las aeronaves de la zona transmiten matrícula o solo el código ICAO24.
+
+### 1. Instalar el driver del dongle
+
+El RTL-SDR necesita el driver **WinUSB**, que se instala con **Zadig**
+(gratuito). Al conectar el dongle, en Zadig hay que elegir la entrada
+`Bulk-In, Interface (Interface 0)` y reemplazar el driver por `WinUSB`.
+
+Esto hace falta con cualquier software de ADS-B, no es específico de este
+proyecto.
+
+### 2. Instalar un decodificador que publique los datos
+
+Hace falta un programa que lea el dongle y publique el resultado. Cualquiera
+que sirva el formato **SBS-1** en el puerto 30003 funciona (`dump1090` para
+Windows es la opción habitual).
+
+**Ojo con el RTL-SDR Blog V4:** usa un chip distinto al V3 y necesita drivers
+actualizados. Si el software trae un `rtlsdr.dll` viejo, el V4 sintoniza mal o
+directamente no recibe. Hay que reemplazar ese archivo por el de RTL-SDR Blog.
+
+### 3. Grabar
+
+Doble clic en **`GRABAR-ADSB.bat`**, o:
+
+```bash
+python adsb_record.py                  # feed SBS-1 en localhost:30003
+python adsb_record.py --json           # si el software expone aircraft.json
+python adsb_record.py --minutes 60     # parar solo despues de una hora
+```
+
+Genera dos salidas en paralelo:
+
+- **`output/adsb/adsb_AAAA-MM-DD.csv`** — una fila por observación, con
+  volcado inmediato a disco: el archivo se puede abrir en Excel **mientras la
+  grabación sigue corriendo**, y un corte de luz cuesta lo no escrito, no todo.
+- **`adsb_log.db`** — los mismos datos en SQLite, para consultarlos junto a los
+  de la cámara más adelante.
+
+Los archivos rotan por día, así ninguno se vuelve inmanejable.
+
+**Columnas:** `utc`, `epoch`, `icao24`, `registration`, `callsign`,
+`altitude_ft`, `ground_speed_kt`, `vertical_rate_fpm`, `latitude`,
+`longitude`, `on_ground`.
+
+### Por qué no guarda todos los mensajes
+
+Una aeronave transmite varias veces por segundo y la mayoría de esos mensajes
+repiten lo mismo. Guardar todo infla los archivos sin agregar información, así
+que solo se escribe una fila cuando pasaron unos segundos **o** cuando cambió
+algo relevante: 100 pies de altitud o 10 nudos de velocidad. Esos cambios son
+justamente los momentos que interesan —despegue, aproximación, aterrizaje— y
+nunca se descartan.
+
+### Una limitación del formato SBS-1
+
+SBS-1 transmite el **código ICAO24**, no la matrícula. Para traducir uno a otra
+hace falta una base de datos de aeronaves; sin ella los registros salen con
+`registration` vacío pero `icao24` completo, que igual identifica al avión de
+forma única. Si el software elegido publica `aircraft.json` en vez de SBS-1,
+ese formato sí suele incluir la matrícula ya resuelta: en ese caso conviene
+usar `--json`.
+
 ## Identificación por ADS-B (la matrícula que la cámara no puede leer)
 
 Una cámara no siempre puede leer la matrícula: está pintada al costado del
