@@ -34,3 +34,6 @@ yolov8n_openvino_model/
 
 # --- Binarios locales ---
 tools/
+
+# Journal transitorio de SQLite: aparece mientras se graba, no es del proyecto.
+*.db-journal

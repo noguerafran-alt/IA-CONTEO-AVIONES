@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Mapa ADS-B — Runway Video Analytics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 24px; }
+  a { color: #60a5fa; }
+
+  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 16px 24px; min-width: 140px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .sub { color: #4b5563; font-size: 0.8rem; margin-top: 2px; }
+  .card.alcance .n { color: #60a5fa; }
+  .card.trazas .n { color: #34d399; }
+
+  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+  .mapa-panel { flex: 1 1 560px; min-width: 320px; padding: 12px; }
+  .lateral { flex: 0 1 300px; min-width: 260px; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.5; margin: 10px 0 0; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 20px; }
+  .muted { color: #4b5563; }
+
+  svg { width: 100%; height: auto; display: block; }
+  .traza { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .traza-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+  g.avion.apagado { opacity: 0.18; }
+  .etiqueta { font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #0f1115;
+              stroke-width: 3px; stroke-linejoin: round; }
+  .anillo { fill: none; stroke: #262a33; stroke-width: 1; }
+  .anillo-txt { fill: #3d434f; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .costa { fill: none; stroke: #1e3a5f; stroke-width: 2; }
+  .costa-txt { fill: #2c4a6e; font-size: 10px; font-style: italic; }
+  .apto-txt { fill: #9aa0a6; font-size: 11px; font-weight: 600; paint-order: stroke;
+              stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
+  .rx-txt { fill: #f87171; font-size: 11px; font-weight: 700; paint-order: stroke;
+            stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
+
+  .lista { list-style: none; margin: 0; padding: 0; }
+  .lista li { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex;
+              align-items: center; gap: 8px; font-size: 0.87rem; }
+  .lista li:hover { background: #262a33; }
+  .lista li.apagado { opacity: 0.4; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .lista .id { font-weight: 600; }
+  .lista .meta { color: #9aa0a6; font-size: 0.8rem; margin-left: auto;
+                 font-variant-numeric: tabular-nums; }
+
+  .leyenda { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; font-size: 0.8rem;
+             color: #9aa0a6; }
+  .leyenda span { display: flex; align-items: center; gap: 6px; }
+  .leyenda i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+  .vacio { padding: 40px 24px; text-align: center; color: #9aa0a6; line-height: 1.6; }
+
+  /* La tarjeta de descartadas NO es un aviso de error y no va en amarillo: es
+     parte del resultado. Un numero de alcance publicado sin decir que se saco
+     de esa cuenta seria la mentira; esto es lo que lo evita. */
+  .descartadas { background: #1a1d24; border-left: 3px solid #6b7280; border-radius: 8px;
+                 padding: 14px 18px; margin-bottom: 20px; color: #9aa0a6;
+                 font-size: 0.87rem; line-height: 1.55; }
+  .descartadas strong { color: #e6e6e6; }
+  .descartadas .caso { color: #cbd5e1; }
+  .descartadas .aparte { display: block; margin-top: 8px; color: #6b7280; font-size: 0.83rem; }
+  .cruz { stroke: #6b7280; stroke-width: 1.6; fill: none; }
+  .cruz-txt { fill: #6b7280; font-size: 10px; font-style: italic; paint-order: stroke;
+              stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
+
+  .fuera { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+           background: #262a33; border-radius: 8px; padding: 10px 14px; margin: 12px 0 0;
+           color: #9aa0a6; font-size: 0.83rem; line-height: 1.45; }
+  .fuera button { background: #363b46; color: #e6e6e6; border: 1px solid #4b5563;
+                  border-radius: 6px; padding: 6px 12px; font-size: 0.82rem; cursor: pointer;
+                  white-space: nowrap; margin-left: auto; }
+  .fuera button:hover { background: #434955; }
+
+  /* Un mapa que dice "en vivo" tiene que delatar cuando NO esta entrando nada:
+     si la grabacion esta detenida, la pantalla se ve igual que si no volara
+     nadie. El punto distingue los dos casos de un vistazo. */
+  .estado { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 20px;
+            background: #1a1d24; border-radius: 20px; padding: 6px 14px;
+            font-size: 0.82rem; color: #9aa0a6; }
+  .estado .punto { width: 8px; height: 8px; border-radius: 50%; background: #4b5563; flex: none; }
+  .estado.grabando .punto { background: #34d399; animation: latir 2s ease-in-out infinite; }
+  .estado.detenida .punto { background: #fbbf24; }
+  .estado.error .punto { background: #f87171; }
+  @keyframes latir { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+  @media (prefers-reduced-motion: reduce) { .estado.grabando .punto { animation: none } }
+</style>
+</head>
+<body>
+  <h1>Dónde estuvo lo que la antena escuchó</h1>
+  <div class="subtitle">
+    Trayectorias decodificadas desde San Isidro ·
+    <a href="/adsb/analisis">análisis</a> · <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
+  </div>
+
+  <div class="estado" id="estado"><span class="punto"></span><span id="estado-txt">–</span></div>
+
+  <div id="aviso-ref" class="aviso" style="display:none"></div>
+
+  <div id="descartadas" class="descartadas" style="display:none"></div>
+
+  <div class="cards">
+    <div class="card trazas"><div class="n" id="c-trazas">–</div><div class="label">Aeronaves ubicadas</div>
+      <div class="sub" id="c-puntos"></div></div>
+    <div class="card alcance"><div class="n" id="c-mediana">–</div><div class="label">Alcance típico</div>
+      <div class="sub">mediana de las posiciones</div></div>
+    <div class="card"><div class="n" id="c-max">–</div><div class="label">Máximo</div>
+      <div class="sub" id="c-max-sub">un solo mensaje puede fijarlo</div></div>
+  </div>
+
+  <div class="layout">
+    <div class="panel mapa-panel">
+      <div id="mapa"><div class="vacio">Cargando…</div></div>
+      <div class="fuera" id="fuera" style="display:none"></div>
+      <div class="leyenda" id="leyenda" style="display:none">
+        <span><i style="background:#34d399"></i> en tierra / &lt; 3000 ft</span>
+        <span><i style="background:#fbbf24"></i> 3000 – 10 000 ft</span>
+        <span><i style="background:#fb923c"></i> 10 000 – 25 000 ft</span>
+        <span><i style="background:#60a5fa"></i> crucero &gt; 25 000 ft</span>
+        <span><i style="background:#6b7280"></i> sin altitud</span>
+      </div>
+    </div>
+
+    <div class="lateral">
+      <div class="panel">
+        <h2>Aeronaves en el mapa</h2>
+        <ul class="lista" id="lista"></ul>
+        <p class="nota" id="nota-lista"></p>
+      </div>
+      <div class="panel">
+        <h2>Cómo leerlo</h2>
+        <p class="nota" id="nota-mapa">–</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+// Proyeccion equirectangular centrada en el receptor. A menos de 100 km el
+// error contra una proyeccion conforme es de metros, y a cambio el mapa no
+// necesita ninguna libreria: es aritmetica de una linea.
+const R_KM = 6371.0088, RAD = Math.PI / 180;
+
+// Costa del Rio de la Plata, ESQUEMATICA y a proposito: son los pocos vertices
+// que hacen falta para reconocer la forma. Va etiquetada como tal en el dibujo
+// porque un trazo azul en un mapa se lee como dato medido si nadie aclara que
+// no lo es. No sale de los datos ADS-B ni se usa para calcular nada.
+const COSTA = [
+  [-34.32, -58.62], [-34.40, -58.55], [-34.46, -58.49], [-34.51, -58.46],
+  [-34.55, -58.40], [-34.60, -58.35], [-34.64, -58.34], [-34.68, -58.30],
+  [-34.72, -58.25], [-34.77, -58.18], [-34.82, -58.05], [-34.87, -57.90],
+];
+
+const colorAlt = ft => ft === null || ft === undefined ? "#6b7280"
+                     : ft < 3000  ? "#34d399"
+                     : ft < 10000 ? "#fbbf24"
+                     : ft < 25000 ? "#fb923c"
+                     :              "#60a5fa";
+
+const dist = v => v === null || v === undefined ? "–" : v.toFixed(1) + " km";
+
+function crear(tag, attrs, texto) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (texto !== undefined) el.textContent = texto;
+  return el;
+}
+
+// Una aeronave queda fuera del encuadre por defecto si hasta su paso MAS
+// CERCANO por la antena esta lejos del grueso. Se mide por el punto mas cercano
+// y no por el mas lejano para no recortar una traza por la mitad: la que entra,
+// entra entera.
+//
+// El umbral es 2.5 veces la mediana, con piso de 25 km. Multiplo de la mediana
+// y no un numero fijo porque el corte tiene que seguir a los datos: si la
+// antena se muda y pasa a escuchar el doble de lejos, un 40 km hardcodeado
+// empezaria a dejar afuera trafico normal. El piso evita el caso opuesto, una
+// sesion corta de aviones muy cercanos donde 2.5x la mediana daria 8 km y
+// marcaria como excepcional cualquier cosa a 10.
+function partirPorDistancia(trazas) {
+  const dists = trazas.map(t => Math.min(...t.points.map(p => p.km ?? Infinity)))
+                      .filter(d => isFinite(d)).sort((a, b) => a - b);
+  if (!dists.length) return {dentro: trazas, fuera: []};
+  const umbral = Math.max(dists[Math.floor(dists.length / 2)] * 2.5, 25);
+  const dentro = [], fuera = [];
+  for (const t of trazas) {
+    const cerca = Math.min(...t.points.map(p => p.km ?? Infinity));
+    (cerca <= umbral ? dentro : fuera).push(t);
+  }
+  // Si el corte dejaria el mapa vacio no se aplica: un mapa sin nada y un
+  // cartel diciendo que todo quedo afuera es peor que el encuadre grande.
+  return dentro.length ? {dentro, fuera, umbral} : {dentro: trazas, fuera: []};
+}
+
+function dibujar(datos, trazas) {
+  const rx = datos.receiver, aptos = datos.airports || [];
+  const descartadas = datos.rejected || [];
+  const cos0 = Math.cos(rx.lat * RAD);
+  // km al este / al norte del receptor.
+  const km = (lat, lon) => [(lon - rx.lon) * RAD * R_KM * cos0,
+                            (lat - rx.lat) * RAD * R_KM];
+
+  // El encuadre sale del contenido, no de un cuadrado centrado en la antena.
+  // Con un cuadrado, un solo avion lejano en un rincon obliga a dibujar ese
+  // radio en las cuatro direcciones y tres cuartos de la lamina quedan vacios.
+  // Los anillos se siguen trazando desde la antena y se recortan solos, que es
+  // como se ve un radar de verdad.
+  //
+  // Las DESCARTADAS no entran en esta cuenta a proposito: una sola posicion
+  // fantasma a 790 km escalaba el mapa entero y dejaba el trafico real en un
+  // pixel. Se dibujan igual (ver abajo) y si caen fuera del cuadro, se dice.
+  const puntos = [
+    [0, 0],                                        // la antena, siempre en cuadro
+    ...trazas.flatMap(t => t.points.map(p => km(p.lat, p.lon))),
+    ...aptos.map(a => km(a.lat, a.lon)),
+  ];
+  let minX = Math.min(...puntos.map(p => p[0])), maxX = Math.max(...puntos.map(p => p[0]));
+  let minY = Math.min(...puntos.map(p => p[1])), maxY = Math.max(...puntos.map(p => p[1]));
+
+  // Piso de 10 km de lado: sin esto, una sola posicion pegada a la antena daria
+  // un bbox de cero y una escala infinita.
+  const anchoKm = Math.max(maxX - minX, 10), altoKm = Math.max(maxY - minY, 10);
+  const margen = Math.max(anchoKm, altoKm) * 0.10;
+  minX -= margen; maxX += margen; minY -= margen; maxY += margen;
+
+  const ANCHO = 820, ALTO_MAX = 860;
+  let escala = ANCHO / (maxX - minX);
+  if ((maxY - minY) * escala > ALTO_MAX) escala = ALTO_MAX / (maxY - minY);
+  const laminaW = (maxX - minX) * escala, laminaH = (maxY - minY) * escala;
+
+  const px = (lat, lon) => {
+    const [x, y] = km(lat, lon);
+    return [(x - minX) * escala, (maxY - y) * escala];   // y del SVG crece hacia abajo
+  };
+  const centro = px(rx.lat, rx.lon);                     // origen de los anillos
+
+  const svg = crear("svg", {viewBox: `0 0 ${laminaW} ${laminaH}`,
+                            xmlns: "http://www.w3.org/2000/svg"});
+
+  // --- anillos de distancia -------------------------------------------------
+  // Se dibuja tambien el primero que se pasa del cuadro: su arco entra igual
+  // por alguna esquina y sirve de referencia. Cortar en el ultimo que entra
+  // entero dejaria el borde sin ninguna escala.
+  const radioVisible = Math.max(
+    Math.hypot(minX, minY), Math.hypot(maxX, minY),
+    Math.hypot(minX, maxY), Math.hypot(maxX, maxY));
+  for (const r of [10, 20, 40, 80, 160, 320]) {
+    svg.appendChild(crear("circle", {class: "anillo", cx: centro[0], cy: centro[1],
+                                     r: r * escala}));
+    // La etiqueta va sobre la vertical de la antena, donde el anillo cruza
+    // hacia arriba; si ese cruce quedo fuera del cuadro no se escribe, porque
+    // un numero flotando en el borde no dice a que circulo pertenece.
+    const yTexto = centro[1] - r * escala;
+    if (yTexto > 12)
+      svg.appendChild(crear("text", {class: "anillo-txt", x: centro[0] + 4,
+                                     y: yTexto + 12}, `${r} km`));
+    if (r > radioVisible) break;
+  }
+
+  // --- costa ----------------------------------------------------------------
+  const costaPx = COSTA.map(([la, lo]) => px(la, lo));
+  svg.appendChild(crear("polyline", {class: "costa",
+                                     points: costaPx.map(p => p.join(",")).join(" ")}));
+  // La aclaracion se ancla a un vertice que quede DENTRO del cuadro: el punto
+  // medio de la costa puede caer fuera segun como haya quedado el encuadre, y
+  // entonces el trazo azul se queda sin explicar.
+  // De los vertices visibles se elige el mas cercano a la mitad de la altura:
+  // los de los extremos caen contra el borde superior, donde ya estan las
+  // etiquetas de los anillos. El lado del texto se decide despues, segun donde
+  // haya lugar -- filtrar por espacio a la derecha descartaba justo los del
+  // medio, porque esta costa corre hacia el sureste y los de abajo son los que
+  // estan mas a la derecha.
+  const anclaCosta = costaPx
+    .filter(([x, y]) => x > 0 && x < laminaW && y > 20 && y < laminaH - 20)
+    .sort((a, b) => Math.abs(a[1] - laminaH / 2) - Math.abs(b[1] - laminaH / 2))[0];
+  if (anclaCosta) {
+    const cabe = anclaCosta[0] + 210 < laminaW;
+    svg.appendChild(crear("text", {
+      class: "costa-txt", x: anclaCosta[0] + (cabe ? 10 : -10), y: anclaCosta[1] + 4,
+      "text-anchor": cabe ? "start" : "end"}, "Río de la Plata (costa esquemática)"));
+  }
+
+  // --- aeropuertos ----------------------------------------------------------
+  for (const a of aptos) {
+    const [x, y] = px(a.lat, a.lon);
+    svg.appendChild(crear("rect", {x: x - 4, y: y - 4, width: 8, height: 8,
+                                   fill: "#9aa0a6", transform: `rotate(45 ${x} ${y})`}));
+    svg.appendChild(crear("text", {class: "apto-txt", x: x + 9, y: y + 4},
+                          `${a.name} (${a.code})`));
+  }
+
+  // --- receptor -------------------------------------------------------------
+  // La etiqueta va debajo del triangulo y centrada: a la derecha se cruzaba con
+  // las trazas que salen hacia el este, que es justo donde esta el rio.
+  const [rxX, rxY] = centro;
+  svg.appendChild(crear("path", {
+    d: `M ${rxX} ${rxY - 9} L ${rxX + 8} ${rxY + 6} L ${rxX - 8} ${rxY + 6} Z`,
+    fill: "#f87171"}));
+  svg.appendChild(crear("text", {class: "rx-txt", x: rxX, y: rxY + 20,
+                                 "text-anchor": "middle"}, "Antena"));
+
+  // --- trayectorias ---------------------------------------------------------
+  for (const t of trazas) {
+    const g = crear("g", {class: "avion", "data-icao": t.icao24});
+    const pts = t.points.map(p => ({...p, xy: px(p.lat, p.lon)}));
+
+    // Un segmento por tramo para que el color siga la altitud a lo largo del
+    // vuelo: una polilinea de un color solo mostraria la ultima altitud.
+    for (let i = 1; i < pts.length; i++) {
+      const [x1, y1] = pts[i - 1].xy, [x2, y2] = pts[i].xy;
+      g.appendChild(crear("line", {class: "traza", x1, y1, x2, y2,
+                                   stroke: colorAlt(pts[i].alt)}));
+      g.appendChild(crear("line", {class: "traza-hit", x1, y1, x2, y2}));
+    }
+    for (const p of pts)
+      g.appendChild(crear("circle", {cx: p.xy[0], cy: p.xy[1], r: 2.5,
+                                     fill: colorAlt(p.alt)}));
+
+    const ultimo = pts[pts.length - 1];
+    const nombre = t.registration || t.callsign || t.icao24;
+    const etiqueta = crear("text", {class: "etiqueta", x: ultimo.xy[0] + 7,
+                                    y: ultimo.xy[1] - 6, fill: colorAlt(ultimo.alt)}, nombre);
+    g.appendChild(etiqueta);
+
+    const alt = ultimo.alt === null || ultimo.alt === undefined
+              ? "sin altitud" : Math.round(ultimo.alt).toLocaleString("es-AR") + " ft";
+    g.appendChild(crear("title", {},
+      `${nombre} · ${t.points.length} posiciones · ${alt} · a ${dist(ultimo.km)} de la antena`));
+    svg.appendChild(g);
+  }
+
+  // --- posiciones descartadas -----------------------------------------------
+  // Se dibujan como cruz gris hueca, sueltas y sin unirse a ninguna traza.
+  // Sacarlas del dibujo tambien seria descartarlas en silencio; la version
+  // honesta es mostrarlas marcadas como lo que son, distintas de un dato.
+  // Las que caen fuera del encuadre no se pintan: una cruz clavada contra el
+  // borde miente sobre donde estaba. Se cuentan en la tarjeta de arriba, que
+  // es donde igual se leen sus numeros.
+  let fueraDeCuadro = 0;
+  for (const d of descartadas) {
+    const [x, y] = px(d.lat, d.lon);
+    if (x < 0 || x > laminaW || y < 0 || y > laminaH) { fueraDeCuadro++; continue; }
+    const g = crear("g", {class: "descartada"});
+    g.appendChild(crear("path", {class: "cruz",
+      d: `M ${x - 5} ${y - 5} L ${x + 5} ${y + 5} M ${x + 5} ${y - 5} L ${x - 5} ${y + 5}`}));
+    g.appendChild(crear("circle", {class: "cruz", cx: x, cy: y, r: 7}));
+    const alt = d.alt_ft === null || d.alt_ft === undefined
+              ? "sin altitud" : Math.round(d.alt_ft).toLocaleString("es-AR") + " ft";
+    const horiz = d.horizonte_km ? ` — horizonte ${Math.round(d.horizonte_km)} km` : "";
+    g.appendChild(crear("title", {},
+      `descartada: ${dist(d.km)} a ${alt}${horiz}`));
+    g.appendChild(crear("text", {class: "cruz-txt", x: x + 10, y: y + 4},
+                        `${d.icao24} descartada`));
+    svg.appendChild(g);
+  }
+  if (fueraDeCuadro) {
+    svg.appendChild(crear("text", {class: "cruz-txt", x: 8, y: laminaH - 8},
+      `${fueraDeCuadro} posición${fueraDeCuadro === 1 ? "" : "es"} descartada${fueraDeCuadro === 1 ? "" : "s"} `
+      + `queda${fueraDeCuadro === 1 ? "" : "n"} fuera de este encuadre (ver arriba)`));
+  }
+
+  const contenedor = document.getElementById("mapa");
+  contenedor.innerHTML = "";
+  contenedor.appendChild(svg);
+  document.getElementById("leyenda").style.display = "";
+}
+
+// La tarjeta de descartadas aparece SIEMPRE, con rechazos o sin ellos: un
+// contador ausente no se distingue de un contador que nunca corrio. Y la regla
+// de superficie se lista aparte porque su cero significa otra cosa -- que
+// nunca se ejercito, porque en estos datos no hay ni una posicion en tierra.
+function pintarDescartadas(datos) {
+  const caja = document.getElementById("descartadas");
+  const c = datos.coverage || {};
+  const rech = datos.rejected || [];
+  if (!c.gate_applied) { caja.style.display = "none"; return; }
+  caja.style.display = "";
+
+  const evaluadas = c.positions_evaluated || 0;
+  const superficie = c.surface_rule_exercised
+    ? ""
+    : `<span class="aparte">Regla de superficie: sin ejercitar — ninguna de las
+       posiciones evaluadas venía marcada en tierra, así que su contador en cero
+       no significa "sin rechazos" sino "nunca corrió".</span>`;
+
+  if (!rech.length) {
+    caja.innerHTML = `<strong>0 posiciones descartadas</strong> sobre
+      ${evaluadas.toLocaleString("es-AR")} evaluadas (horizonte de radio y
+      continuidad de velocidad).${superficie}`;
+    return;
+  }
+
+  const casos = rech.map(d => {
+    // UTC y etiquetado como tal, no hora local: es el mismo número que
+    // imprime el CLI y el que está en la columna `utc` de la base, así que se
+    // puede buscar la fila con un SELECT. En local sería 17:08 y no
+    // coincidiría con nada de lo que se puede consultar.
+    const hora = new Date(d.t * 1000).toISOString().slice(11, 19) + " UTC";
+    const alt = d.alt_ft === null || d.alt_ft === undefined
+              ? "sin altitud" : Math.round(d.alt_ft).toLocaleString("es-AR") + " ft";
+    let porque = "";
+    if (d.horizonte_km)
+      porque += ` El horizonte de radio a esa altitud es ${Math.round(d.horizonte_km)} km
+        y el límite que usamos es ${Math.round(d.limite_km)} km (1,35× el horizonte,
+        el margen de ducting que usa PiAware).`;
+    if (d.kt_implicita)
+      porque += ` Además el avión tendría que haber volado ${d.salto_km} km en
+        ${d.dt_s} s (${d.kt_implicita.toLocaleString("es-AR")} kt) desde su posición
+        anterior${d.gs_transmitida_kt ? `, transmitiendo ${d.gs_transmitida_kt} kt` : ""}.`;
+    return `<span class="caso">${d.icao24}, ${hora} — ${dist(d.km)} a ${alt}.</span>${porque}`;
+  }).join("<br>");
+
+  caja.innerHTML =
+    `<strong>${rech.length} posición${rech.length === 1 ? "" : "es"} descartada${rech.length === 1 ? "" : "s"}
+     por implausible</strong> sobre ${evaluadas.toLocaleString("es-AR")} evaluadas
+     (no entra${rech.length === 1 ? "" : "n"} en ninguno de los números de arriba).<br>
+     ${casos}
+     <span class="aparte">La altitud y el régimen de descenso de esas lecturas sí se
+     conservan: la trama era auténtica y lo único corrupto era el par lat/lon. Las
+     posiciones descartadas se dibujan en el mapa como cruz gris, sin unirlas a
+     ninguna traza.</span>${superficie}`;
+}
+
+// La lista SIEMPRE trae todas las aeronaves, esten dibujadas o no: es el lugar
+// donde se ve que las de fuera de cuadro existen y que no se perdio nada.
+function pintarLista(trazas, ocultas = new Set()) {
+  const lista = document.getElementById("lista");
+  lista.innerHTML = trazas.map(t => {
+    const ultimo = t.points[t.points.length - 1];
+    const nombre = t.registration || t.callsign || t.icao24;
+    const fuera = ocultas.has(t.icao24);
+    return `<li data-icao="${t.icao24}"${fuera ? ' class="apagado" title="fuera del encuadre actual"' : ""}>
+      <span class="swatch" style="background:${colorAlt(ultimo.alt)}"></span>
+      <span class="id">${nombre}</span>
+      <span class="meta">${t.points.length} pos · ${dist(ultimo.km)}</span>
+    </li>`;
+  }).join("");
+
+  // Resaltar es apagar el resto: con trazas que se cruzan, subir una sola de
+  // opacidad no alcanza para seguirla con la vista.
+  lista.querySelectorAll("li").forEach(li => {
+    const icao = li.dataset.icao;
+    if (ocultas.has(icao)) return;   // no esta en el mapa: resaltar apagaria todo
+    li.addEventListener("mouseenter", () => {
+      document.querySelectorAll("g.avion").forEach(g =>
+        g.classList.toggle("apagado", g.dataset.icao !== icao));
+      lista.querySelectorAll("li").forEach(o => o.classList.toggle("apagado", o !== li));
+    });
+    li.addEventListener("mouseleave", () => {
+      document.querySelectorAll("g.avion").forEach(g => g.classList.remove("apagado"));
+      lista.querySelectorAll("li").forEach(o => o.classList.remove("apagado"));
+    });
+  });
+}
+
+// Sin posiciones el mapa no se dibuja vacio ni se rellena con nada inventado:
+// se explica por que esta vacio, que es la respuesta util.
+function sinPosiciones(datos) {
+  const c = datos.coverage || {};
+  document.getElementById("mapa").innerHTML = `<div class="vacio">
+    <p><strong>Todavía no hay ninguna posición decodificada.</strong></p>
+    <p>Se grabaron ${(c.observations || 0).toLocaleString("es-AR")} mensajes de
+       ${c.aircraft || 0} aeronaves, pero ninguno alcanzó para fijar una posición.
+       En vuelo hacen falta dos tramas CPR (par e impar) de la misma aeronave y
+       pyModeS no emite la primera hasta juntar ~3 consistentes.</p>
+    <p>No hay mapa que dibujar hasta que lleguen. El conteo y la identificación
+       no dependen de esto: usan altitud, velocidad e ICAO24.</p>
+  </div>`;
+  document.getElementById("nota-lista").textContent = "Ninguna aeronave tiene posición todavía.";
+}
+
+// Estado que tiene que sobrevivir a los refrescos. Si viviera dentro de
+// cargar(), cada actualizacion devolveria el mapa al encuadre por defecto y
+// pelearia contra el usuario que acaba de apretar "Ver todo".
+let verTodo = false;
+let interactuando = false;      // mouse sobre la lista o el mapa
+let ultimoRefresco = 0;
+
+const REFRESCO_MS = 10000;
+
+function pintarEstado(estado, puntos) {
+  const caja = document.getElementById("estado");
+  const txt = document.getElementById("estado-txt");
+  const hace = ultimoRefresco ? `actualizado ${new Date(ultimoRefresco)
+                  .toLocaleTimeString("es-AR", {hour: "2-digit", minute: "2-digit",
+                                                second: "2-digit"})}` : "";
+  caja.className = "estado";
+  if (!estado) { caja.classList.add("error"); txt.textContent = "sin conexión con el servidor"; return; }
+  if (estado.error) {
+    caja.classList.add("error");
+    txt.textContent = `error de captura: ${estado.error}`;
+  } else if (estado.waiting_for_device) {
+    caja.classList.add("detenida");
+    txt.textContent = "esperando el dongle · " + hace;
+  } else if (estado.running) {
+    caja.classList.add("grabando");
+    txt.textContent = `grabando · ${puntos} posiciones · ${hace}`;
+  } else {
+    // El caso que motiva todo esto: el mapa se refresca pero nada cambia
+    // porque no hay nadie escuchando la radio.
+    caja.classList.add("detenida");
+    txt.innerHTML = `grabación detenida — el mapa no va a cambiar hasta que la
+                     arranques en <a href="/adsb">ADS-B en vivo</a> · ${hace}`;
+  }
+}
+
+async function cargar() {
+  let datos, estado = null;
+  try {
+    // En paralelo y no encadenados: son dos preguntas independientes y
+    // encadenarlas duplicaria la latencia de cada refresco.
+    const [rMapa, rEstado] = await Promise.all([
+      fetch("/api/adsb/mapa"),
+      fetch("/api/adsb/status").catch(() => null),
+    ]);
+    datos = await rMapa.json();
+    if (rEstado && rEstado.ok) estado = await rEstado.json();
+  } catch (e) {
+    pintarEstado(null, 0);
+    return;
+  }
+  ultimoRefresco = Date.now();
+
+  const rx = datos.receiver || {};
+  const c = datos.coverage || {};
+
+  // Si alguien movio la referencia por variable de entorno, el mapa lo dice: el
+  // triangulo rojo sigue dibujado en San Isidro y estaria mintiendo en silencio.
+  if (rx.surface_ref && rx.surface_ref_is_default === false) {
+    const aviso = document.getElementById("aviso-ref");
+    aviso.innerHTML = `<strong>Referencia de superficie cambiada por entorno.</strong>
+      <code>ADSB_SURFACE_REF</code> está en <code>${JSON.stringify(rx.surface_ref)}</code>,
+      distinta de la posición por defecto. El mapa dibuja la antena en San Isidro;
+      las posiciones en pista se decodifican desde esa otra referencia.`;
+    aviso.style.display = "";
+  }
+
+  const trazas = (datos.tracks || []).filter(t => t.points.length);
+  const puntos = trazas.reduce((n, t) => n + t.points.length, 0);
+
+  document.getElementById("c-trazas").textContent = trazas.length;
+  document.getElementById("c-puntos").textContent = puntos + " posiciones";
+  document.getElementById("c-mediana").textContent =
+    c.median_distance_km ? dist(c.median_distance_km) : "–";
+  document.getElementById("c-max").textContent = c.max_distance_km ? dist(c.max_distance_km) : "–";
+  // El p95 solo se muestra cuando hay muestra suficiente para que signifique
+  // algo. Con 43 posiciones cae en el tercer valor mas grande y repite el
+  // maximo con otro nombre, que es peor que no mostrarlo.
+  if (c.p95_distance_km && puntos >= 200)
+    document.getElementById("c-max-sub").textContent = `p95: ${dist(c.p95_distance_km)}`;
+
+  pintarEstado(estado, puntos);
+  pintarDescartadas(datos);
+
+  if (!trazas.length) { sinPosiciones(datos); return; }
+
+  const {dentro, fuera, umbral} = partirPorDistancia(trazas);
+  const aviso = document.getElementById("fuera");
+
+  const render = () => {
+    const visibles = verTodo ? trazas : dentro;
+    const ocultas = new Set(verTodo ? [] : fuera.map(t => t.icao24));
+    dibujar(datos, visibles);
+    pintarLista(trazas, ocultas);
+
+    if (!fuera.length) { aviso.style.display = "none"; return; }
+    const nombres = fuera.map(t => {
+      const p = t.points.reduce((a, b) => (b.km > a.km ? b : a), t.points[0]);
+      const alt = p.alt ? `, ${Math.round(p.alt).toLocaleString("es-AR")} ft` : "";
+      return `${t.registration || t.callsign || t.icao24} (${dist(p.km)}${alt})`;
+    }).join(", ");
+    aviso.style.display = "";
+    aviso.innerHTML = verTodo
+      ? `<span>Encuadre completo. ${nombres} ${fuera.length === 1 ? "obliga" : "obligan"}
+         a abrir el mapa hasta ${dist(Math.max(...fuera.flatMap(t => t.points.map(p => p.km))))},
+         y por eso queda tanto espacio vacío.</span>
+         <button id="btn-encuadre">Volver al grueso</button>`
+      : `<span><strong>${fuera.length} ${fuera.length === 1 ? "aeronave queda" : "aeronaves quedan"}
+         fuera del encuadre:</strong> ${nombres}. El mapa está ajustado a las que pasaron
+         a menos de ${Math.round(umbral)} km; ${fuera.length === 1 ? "esa" : "esas"} sigue
+         en la lista y en los números de arriba.</span>
+         <button id="btn-encuadre">Ver todo</button>`;
+    document.getElementById("btn-encuadre").addEventListener("click", () => {
+      verTodo = !verTodo;
+      render();
+    });
+  };
+  render();
+
+  const total = c.aircraft || 0;
+  document.getElementById("nota-lista").innerHTML =
+    `${trazas.length} de ${total} aeronaves tienen posición. Las otras
+     ${total - trazas.length} se escucharon igual, pero no llegaron las tramas CPR
+     que hacen falta para ubicarlas: se ven en el
+     <a href="/adsb/analisis">análisis</a>.`;
+
+  // El punto mas lejano ACEPTADO. Antes esta frase se construia sobre el
+  // fantasma de 789,5 km y decia "a esa distancia solo se escucha lo que va
+  // alto": una explicacion fisica correcta en la forma y falsa en el
+  // contenido, porque el dato sobre el que se apoyaba era el que hay que
+  // rechazar. Ahora dice lo que los datos aceptados realmente muestran, que es
+  // lo contrario: la antena esta lejisimos de su limite geometrico.
+  const todos = trazas.flatMap(t => t.points).filter(p => p.km !== null);
+  const lejano = todos.reduce((a, b) => (b.km > a.km ? b : a), todos[0]);
+  const horizLejano = lejano && lejano.alt
+    ? 4.124 * (Math.sqrt(lejano.alt * 0.3048) + Math.sqrt(10))
+    : null;
+  const lejanoTxt = horizLejano
+    ? ` El punto más lejano aceptado se recibió a ${dist(lejano.km)}, volando a
+        ${Math.round(lejano.alt).toLocaleString("es-AR")} ft. El horizonte de radio a esa
+        altitud es ${Math.round(horizLejano)} km, así que la antena está muy lejos de su
+        límite geométrico: lo que corta el alcance acá no es la curvatura de la Tierra.`
+    : "";
+
+  document.getElementById("nota-mapa").innerHTML =
+    `Cada traza es una aeronave y el color es su altitud en ese tramo, no el promedio
+     del vuelo. Los anillos se miden desde la antena, no desde un aeropuerto: el
+     receptor está en San Isidro, a ${rx.nearest_airport_km} km de
+     ${rx.nearest_airport}, y desde ahí quedan los tres aeropuertos de la zona dentro
+     del alcance.${lejanoTxt} El dibujo es SVG generado acá, sin mapas de terceros — el
+     sistema funciona sin internet y un mapa con tiles lo rompería.`;
+}
+
+// Redibujar mientras el mouse esta encima destruye el nodo bajo el cursor y se
+// pierde el resaltado a mitad de gesto. El refresco espera a que el usuario
+// suelte; los datos nuevos entran en el tick siguiente.
+for (const id of ["mapa", "lista"])
+  document.getElementById(id).addEventListener("mouseenter", () => { interactuando = true; });
+for (const id of ["mapa", "lista"])
+  document.getElementById(id).addEventListener("mouseleave", () => { interactuando = false; });
+
+// Con la pestana en segundo plano no se pide nada: el navegador ya frena los
+// timers, pero ademas no tiene sentido consultar un mapa que nadie mira.
+setInterval(() => {
+  if (!interactuando && !document.hidden) cargar();
+}, REFRESCO_MS);
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) cargar();      // al volver, mostrar lo de ahora y no lo de hace rato
+});
+
+cargar();
+</script>
+</body>
+</html>

@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from adsb import Observation
+from adsb_events import PositionGate, imprimir_rechazos
 
 CSV_DIR = Path(__file__).parent / "output" / "adsb"
 DB_PATH = Path(__file__).parent / "adsb_log.db"
@@ -44,6 +45,18 @@ COLUMNS = [
     "latitude", "longitude", "on_ground",
 ]
 
+# La columna del filtro va SOLO a la base y no al CSV. Agregarla a COLUMNS
+# cambiaria el encabezado del CSV del dia, y el archivo se abre en modo append:
+# las filas nuevas quedarian con un campo de mas bajo el encabezado viejo.
+COLUMNS_DB = COLUMNS + ["rejected_reason"]
+
+# rejected_reason tiene TRES estados y hay que respetarlos al consultar:
+#   NULL  fila escrita antes de que existiera el filtro -> NO EVALUADA.
+#         Las 8128 filas que ya estaban quedan asi. Tratarlas como limpias es
+#         mentir: nadie las miro cuando se escribieron (se las revisa en
+#         lectura, que es otro camino).
+#   ''    evaluada y limpia.
+#   texto el motivo del rechazo ('horizonte', 'velocidad', ...).
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS adsb_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,11 +70,40 @@ CREATE TABLE IF NOT EXISTS adsb_log (
     vertical_rate_fpm REAL,
     latitude REAL,
     longitude REAL,
-    on_ground INTEGER
+    on_ground INTEGER,
+    rejected_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_adsb_epoch ON adsb_log(epoch);
 CREATE INDEX IF NOT EXISTS idx_adsb_icao ON adsb_log(icao24);
 """
+
+
+def migrar_esquema(conn: sqlite3.Connection, db_path: Path | str = DB_PATH) -> bool:
+    """Agrega rejected_reason a una base vieja. Devuelve True si la agrego.
+
+    ALTER TABLE ADD COLUMN y no una tabla nueva: es no destructivo, instantaneo
+    (SQLite no reescribe las filas) y deja las que ya estaban en NULL, que es
+    justamente el valor que significa "no evaluada".
+    """
+    columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(adsb_log)")}
+    if not columnas or "rejected_reason" in columnas:
+        return False
+    try:
+        conn.execute("ALTER TABLE adsb_log ADD COLUMN rejected_reason TEXT")
+    except sqlite3.OperationalError as exc:
+        # Caso REAL, reproducido: con una grabacion en curso el ALTER choca
+        # contra la conexion de escritura del otro Recorder y sale "database is
+        # locked". No se degrada escribiendo sin la columna -- eso perderia el
+        # motivo del rechazo en silencio, que es justo lo que este cambio
+        # existe para evitar -- y no se reintenta, porque el candado no es
+        # transitorio: el otro proceso lo sostiene hasta que se lo detenga.
+        raise RuntimeError(
+            f"no se pudo agregar la columna rejected_reason a {db_path}: {exc}. "
+            f"Hay otra grabacion escribiendo en la misma base. Detenela "
+            f"(hay una sola antena, dos grabaciones se pelean por ella) y "
+            f"volve a arrancar esta.") from exc
+    conn.commit()
+    return True
 
 
 def as_row(observation: Observation) -> dict:
@@ -106,6 +148,15 @@ class Recorder:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        self.schema_migrated = migrar_esquema(self.conn, db_path)
+
+        # El filtro corre en ingestion pero NO rechaza: escribe el motivo y la
+        # fila se guarda igual, con su lat/lon intactos. Borrar antes de
+        # escribir destruiria la evidencia para siempre -- es exactamente lo
+        # que readsb evita con --position-persistence -- y ademas dejaria sin
+        # forma de auditar el filtro. Quien decide que se MUESTRA es el mismo
+        # gate corriendo en lectura (adsb_events.load_db).
+        self.gate = PositionGate()
 
         self._last: dict[str, tuple[float, float | None, float | None]] = {}
         self._csv_day: str | None = None
@@ -170,10 +221,15 @@ class Recorder:
         # the recorder is killed or the machine loses power mid-run.
         self._csv_file.flush()
 
+        # '' (evaluada y limpia) y no NULL: NULL ya significa "no evaluada" en
+        # las 8128 filas anteriores al filtro, y hacer que los dos casos se
+        # escriban igual borraria la unica forma de distinguirlos.
+        motivo = self.gate.feed(observation) or ""
+        valores = [row[c] if row[c] != "" else None for c in COLUMNS] + [motivo]
         self.conn.execute(
-            f"INSERT INTO adsb_log ({','.join(COLUMNS)}) "
-            f"VALUES ({','.join('?' * len(COLUMNS))})",
-            [row[c] if row[c] != "" else None for c in COLUMNS],
+            f"INSERT INTO adsb_log ({','.join(COLUMNS_DB)}) "
+            f"VALUES ({','.join('?' * len(COLUMNS_DB))})",
+            valores,
         )
         self.written += 1
         if self.written % 50 == 0:
@@ -188,7 +244,8 @@ class Recorder:
 
 def build_source(mode: str = "auto", *, exe: str | None = None, device: int = 0,
                  json_url: str | None = None, host: str = "127.0.0.1",
-                 port: int | None = None, log=print):
+                 port: int | None = None, surface_ref: str | None = None,
+                 log=print):
     """Start and return an ADS-B source, resolving 'auto' the same way the
     CLI and the web dashboard both do -- one place, so they cannot drift
     apart into picking different sources for the same situation.
@@ -216,13 +273,24 @@ def build_source(mode: str = "auto", *, exe: str | None = None, device: int = 0,
 
     if mode == "rtlsdr":
         from adsb_rtlsdr import DEFAULT_EXE, RtlAdsbRecorder
+        from receiver import parse_surface_ref
         exe_path = exe or DEFAULT_EXE
-        source = RtlAdsbRecorder(exe_path=exe_path, device_index=device).start()
+        # Se omite el argumento cuando no vino en vez de pasar None: pasar
+        # surface_ref=None pisaria el default_factory del dataclass (y con el la
+        # variable ADSB_SURFACE_REF) con "sin referencia", que apaga en silencio
+        # las posiciones de los aviones en pista.
+        extra = ({"surface_ref": parse_surface_ref(surface_ref)}
+                 if surface_ref else {})
+        source = RtlAdsbRecorder(exe_path=exe_path, device_index=device,
+                                 **extra).start()
         if source.last_error and not source._thread:
-            raise RuntimeError(
-                f"{source.last_error}\n"
-                "  Corre INSTALAR-ADSB.bat para bajar rtl_adsb.exe, o indica la ruta correcta."
-            )
+            # start() ahora tambien rechaza una referencia de superficie mal
+            # escrita, y para ese caso el consejo de bajar rtl_adsb.exe manda
+            # a la persona a arreglar lo que no esta roto.
+            ayuda = ("" if "surface_ref" in source.last_error else
+                     "\n  Corre INSTALAR-ADSB.bat para bajar rtl_adsb.exe, "
+                     "o indica la ruta correcta.")
+            raise RuntimeError(f"{source.last_error}{ayuda}")
         return source, f"dongle RTL-SDR directo via {exe_path}"
 
     # sbs
@@ -257,6 +325,11 @@ def main() -> None:
                              "si no busca un feed SBS-1. rtlsdr/sbs/json fuerzan una fuente.")
     parser.add_argument("--exe", default=None, help="Ruta a rtl_adsb.exe (fuente rtlsdr)")
     parser.add_argument("--device", type=int, default=0, help="Indice del dongle (fuente rtlsdr)")
+    parser.add_argument("--surface-ref", default=None, metavar="LAT,LON",
+                        help="Donde esta la antena, para decodificar la posicion de "
+                             "los aviones EN PISTA: 'lat,lon' o un codigo ICAO "
+                             "('SADF'). Por defecto usa la variable de entorno "
+                             "ADSB_SURFACE_REF, y si no esta, San Isidro. Ver receiver.py.")
     parser.add_argument("--json", nargs="?", const="http://127.0.0.1:8080/data/aircraft.json",
                         default=None, metavar="URL",
                         help="Atajo para --source json con esta URL")
@@ -273,14 +346,22 @@ def main() -> None:
     try:
         source, descripcion = build_source(
             args.source, exe=args.exe, device=args.device, json_url=args.json,
-            host=args.host, port=args.port,
+            host=args.host, port=args.port, surface_ref=args.surface_ref,
         )
     except RuntimeError as exc:
         print(f"\n{exc}")
         raise SystemExit(1)
     print(f"Fuente: {descripcion}")
 
-    recorder = Recorder(min_interval_s=args.min_interval)
+    try:
+        recorder = Recorder(min_interval_s=args.min_interval)
+    except (RuntimeError, ValueError) as exc:
+        # Base bloqueada por otra grabacion, o ADSB_SURFACE_REF mal escrito.
+        # Las dos son de configuracion y las dos tienen que salir como un
+        # mensaje leible, no como un traceback.
+        source.stop()
+        print(f"\n{exc}")
+        raise SystemExit(1)
     print(f"Guardando en {CSV_DIR} y en {DB_PATH.name}")
     print("Ctrl+C para terminar.\n")
 
@@ -337,6 +418,20 @@ def main() -> None:
         print(f"Con matricula       : {len(recorder.with_registration)}")
         print(f"Registros escritos  : {recorder.written}")
         print(f"Repetidos omitidos  : {recorder.skipped}")
+        # Se imprime siempre, con cero incluido: "0 descartadas" solo significa
+        # algo al lado de cuantas se evaluaron.
+        print(imprimir_rechazos(recorder.gate))
+        # Lo que descarta pyModeS y hasta ahora no leia nadie. Puede ser mayor
+        # que el numero de arriba: _motion_consistent (_pipe.py) ya venia
+        # tirando posiciones en silencio antes de que existiera este filtro.
+        stats = getattr(source, "decoder_stats", None)
+        if stats:
+            print(f"  decoder: position_rejected={stats.get('position_rejected', 0)}, "
+                  f"crc_fail={stats.get('crc_fail', 0)}, "
+                  f"altitude_mismatch={stats.get('altitude_mismatch', 0)}, "
+                  f"velocity_mismatch={stats.get('velocity_mismatch', 0)}")
+            print(f"  radio  : {getattr(source, 'corrupt_count', 0)} corruptos, "
+                  f"{getattr(source, 'unverified_count', 0)} sin CRC verificable")
         print(f"CSV                 : {CSV_DIR}")
         print(f"Base                : {DB_PATH}")
         if not recorder.aircraft:

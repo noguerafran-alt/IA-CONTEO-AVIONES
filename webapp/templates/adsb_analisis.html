@@ -22,6 +22,11 @@
 
   .panel { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
   .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.5; margin: 10px 0 0; }
+  .card.ruido .n { color: #9aa0a6; }
+  .alcance { background: #12202c; border-left: 3px solid #38bdf8; border-radius: 6px;
+             padding: 12px 16px; color: #bae6fd; font-size: 0.87rem; line-height: 1.55;
+             margin-bottom: 20px; }
+  .alcance b { color: #e0f2fe; }
   .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
            padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 20px; }
 
@@ -61,10 +66,20 @@
     <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
   </div>
 
+  <!-- Este aviso se muestra solo cuando la posición llega en 0 mensajes. Antes
+       decía que la posición "no se decodifica", lo cual era cierto por un bug
+       de este repo; arreglado eso, un 0 significa lo contrario: no llegaron
+       suficientes tramas CPR. El texto tenía que cambiar de sentido junto con
+       el código o iba a explicar el mismo síntoma al revés. -->
   <div id="aviso-posicion" class="aviso" style="display:none">
-    <strong>La posición (latitud/longitud) todavía no se decodifica.</strong>
-    Es un problema abierto, no un dato que falte por poca señal. No afecta el conteo
-    ni la identificación de aeronaves, que usan altitud, velocidad e ICAO24.
+    <strong>No se decodificó ninguna posición todavía.</strong>
+    En vuelo hacen falta dos tramas CPR (par e impar) de la misma aeronave, y
+    pyModeS no emite la primera posición hasta juntar ~3 consistentes: medido con
+    mensajes conocidos, la primera aparece recién en el 6.º mensaje. A 7–13 km de
+    las pistas, recibir pocas tramas seguidas de la misma aeronave es esperable.
+    Para los aviones <em>en pista</em> alcanza un solo mensaje, pero requiere que
+    esté configurada la referencia de superficie (<code>ADSB_SURFACE_REF</code>).
+    No afecta el conteo ni la identificación, que usan altitud, velocidad e ICAO24.
   </div>
 
   <div class="cards">
@@ -76,7 +91,14 @@
       <div class="sub">del registro por ICAO24</div></div>
     <div class="card eventos"><div class="n" id="c-eventos">–</div><div class="label">Operaciones</div>
       <div class="sub">aterrizajes y despegues</div></div>
+    <div class="card ruido"><div class="n" id="c-ruido">–</div><div class="label">Ruido descartado</div>
+      <div class="sub">direcciones vistas una sola vez</div></div>
   </div>
+
+  <!-- El alcance del analisis se declara arriba de todo y por separado del
+       filtro fisico. Son dos cosas distintas y confundirlas hace que la pagina
+       mienta: el recorte es una eleccion, el filtro corrige datos imposibles. -->
+  <div class="alcance" id="alcance"></div>
 
   <div class="panel">
     <h2>Qué trae cada campo</h2>
@@ -112,15 +134,22 @@
       <thead><tr>
         <th>ICAO24</th><th>Vuelo</th><th>Matrícula</th><th>Tipo</th><th>Operador</th>
         <th class="num">Alt. mín</th><th class="num">Alt. máx</th><th class="num">Vel. máx</th>
+        <!-- Distancia mínima al receptor y no lat/lon crudas: dos números de
+             seis decimales no se leen en una tabla, y "pasó a 8 km" sí. -->
+        <th class="num">Dist. mín</th>
         <th class="num">Msjs</th><th>Estado</th><th>Última vez</th>
       </tr></thead>
-      <tbody id="tabla-aviones"><tr><td colspan="11" class="empty">Cargando…</td></tr></tbody>
+      <tbody id="tabla-aviones"><tr><td colspan="12" class="empty">Cargando…</td></tr></tbody>
     </table>
   </div>
 
 <script>
 const num = (v, suf = "") => v === null || v === undefined ? '<span class="muted">–</span>'
                                                            : Math.round(v).toLocaleString("es-AR") + suf;
+// Las distancias van con un decimal: entre 7.3 y 13.3 km está la diferencia
+// entre San Fernando y Aeroparque, y redondeado a entero se pierde.
+const dist = v => v === null || v === undefined ? '<span class="muted">–</span>'
+                                                : v.toFixed(1) + " km";
 const hora = ts => new Date(ts * 1000).toLocaleString("es-AR",
                     {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
 
@@ -139,7 +168,7 @@ function pintarAeronaves(filtro = "") {
                                         .some(v => (v || "").toLowerCase().includes(texto)));
   const cuerpo = document.getElementById("tabla-aviones");
   if (!filas.length) {
-    cuerpo.innerHTML = '<tr><td colspan="11" class="empty">Sin resultados</td></tr>';
+    cuerpo.innerHTML = '<tr><td colspan="12" class="empty">Sin resultados</td></tr>';
     return;
   }
   cuerpo.innerHTML = filas.map(a => `<tr>
@@ -151,6 +180,7 @@ function pintarAeronaves(filtro = "") {
     <td class="num">${num(a.min_altitude_ft, " ft")}</td>
     <td class="num">${num(a.max_altitude_ft, " ft")}</td>
     <td class="num">${num(a.max_speed_kt, " kt")}</td>
+    <td class="num">${dist(a.min_distance_km)}</td>
     <td class="num">${a.messages}</td>
     <td>${chipEstado(a.phase)}</td>
     <td class="mono">${hora(a.last_seen)}</td>
@@ -163,7 +193,7 @@ async function cargar() {
 
   if (!aeronaves.length) {
     document.getElementById("tabla-aviones").innerHTML =
-      `<tr><td colspan="11" class="empty">${datos.empty_reason || "Todavía no hay datos grabados"}. `
+      `<tr><td colspan="12" class="empty">${datos.empty_reason || "Todavía no hay datos grabados"}. `
       + `Arrancá una grabación en <a href="/adsb">ADS-B en vivo</a>.</td></tr>`;
     return;
   }
@@ -171,6 +201,25 @@ async function cargar() {
   document.getElementById("c-aeronaves").textContent = aeronaves.length;
   document.getElementById("c-obs").textContent = datos.observations.toLocaleString("es-AR") + " mensajes";
   document.getElementById("c-identificadas").textContent = datos.identified;
+  document.getElementById("c-ruido").textContent = (datos.unconfirmed || 0).toLocaleString("es-AR");
+
+  // Se explica en prosa y no solo con numeros porque "46 aeronaves" a secas es
+  // ambiguo: no se distingue haber recibido poco de haber recortado el radio.
+  const radio = datos.analysis_radius_km;
+  const fuera = datos.outside_radius || 0;
+  const sinPos = datos.without_position || 0;
+  const ruido = datos.unconfirmed || 0;
+  document.getElementById("alcance").innerHTML =
+    `Este análisis cubre <b>${radio} km</b> alrededor de la antena (San Isidro): `
+    + `<b>${datos.within_radius}</b> aeronaves ubicadas dentro del radio`
+    + (fuera ? `, y <b>${fuera}</b> recibida${fuera > 1 ? "s" : ""} más lejos `
+             + `(hasta ${datos.outside_radius_max_km} km) que quedan fuera del recorte `
+             + `— la antena llega, el análisis no las cuenta.` : ".")
+    + (sinPos ? ` Otras <b>${sinPos}</b> son reales pero nunca emitieron posición, `
+              + `así que no se pueden ubicar: aparecen en la tabla sin distancia.` : "")
+    + (ruido ? ` Aparte se descartaron <b>${ruido.toLocaleString("es-AR")}</b> direcciones `
+             + `vistas una sola vez y nunca repetidas: son tramas sin CRC verificable, `
+             + `indistinguibles de ruido de radio.` : "");
   document.getElementById("c-ident-pct").textContent =
     Math.round(datos.identified / aeronaves.length * 100) + "% del total";
   document.getElementById("c-matriculas").textContent = datos.with_registration;
@@ -195,15 +244,55 @@ async function cargar() {
 
   const c = datos.coverage || {};
   // Un cero de operaciones significa cosas muy distintas segun esto, asi que
-  // se explica en vez de mostrar el numero pelado.
-  document.getElementById("cobertura-texto").innerHTML = c.can_see_runway_level
+  // se explica en vez de mostrar el numero pelado. Dos ejes: hasta que altura
+  // baja lo que se escucha, y hasta que distancia llega. El segundo recien se
+  // puede medir desde que la posicion se decodifica.
+  // Mediana y no percentil 95: con pocas posiciones el p95 cae en la cola en
+  // vez de recortarla. Medido sobre 43, el p95 daba 71.3 km cuando 39 de esas
+  // 43 estaban por debajo de 32 -- describía el avión de crucero más lejano,
+  // no el alcance de la antena. La mediana aguanta esa cola.
+  // Los descartados van pegados al alcance y no en otra parte de la pagina: el
+  // maximo publicado solo es honesto si al lado está lo que se sacó de esa
+  // cuenta. El cero se imprime explícito -- un contador ausente no se
+  // distingue de uno que nunca corrió.
+  const rechazados = c.gate_applied
+    ? (c.positions_rejected
+        ? ` <strong>${c.positions_rejected} posición${c.positions_rejected === 1 ? "" : "es"}
+            descartada${c.positions_rejected === 1 ? "" : "s"} por implausible</strong>
+            sobre ${(c.positions_evaluated || 0).toLocaleString("es-AR")} evaluadas
+            (${Object.entries(c.rejected_by_reason || {}).filter(([, v]) => v)
+                     .map(([k, v]) => `${k} ${v}`).join(", ")}), la peor a
+            ${dist(c.rejected_max_km)}: no entra en esos números. El detalle y el porqué,
+            en el <a href="/adsb/mapa">mapa</a>.`
+        : ` 0 posiciones descartadas sobre
+            ${(c.positions_evaluated || 0).toLocaleString("es-AR")} evaluadas
+            (horizonte de radio y continuidad de velocidad).`)
+    : "";
+  const alcance = c.with_position
+    ? ` Alcance medido con las posiciones decodificadas: <strong>${dist(c.median_distance_km)}</strong>
+        de mediana y ${dist(c.max_distance_km)} como máximo
+        (${c.with_position.toLocaleString("es-AR")} mensajes con posición aceptada).
+        La diferencia entre los dos es altitud, no potencia: lejos solo se escucha lo
+        que vuela alto. Se ven las trayectorias en el <a href="/adsb/mapa">mapa</a>.${rechazados}`
+    : rechazados;
+  document.getElementById("cobertura-texto").innerHTML = (c.can_see_runway_level
     ? `La antena <strong>sí</strong> recibe aeronaves a nivel de pista (altitud mínima recibida:
        <strong>${num(c.min_altitude_ft)} ft</strong>, ${c.below_3000ft} observaciones por debajo de
        3000 ft). Los aterrizajes y despegues detectados son confiables.`
+    // El receptor está en San Isidro, no al lado de una pista: 7.3 km a San
+    // Fernando, 13.3 km a Aeroparque, 39.1 km a Ezeiza (haversine sobre la
+    // tabla de aeropuertos de pyModeS). A esas distancias la línea de vista a
+    // un avión en el suelo la tapan el horizonte y los edificios, así que no
+    // recibir tráfico en tierra es el resultado físico esperado, no una falla
+    // del software. Lo que decía antes acá era que el receptor estaba a unos
+    // cientos de metros de la pista y que por eso esto iba a cambiar solo:
+    // era una suposición vieja escrita como si fuera un dato medido, y dejaba
+    // a quien la leyera esperando una mudanza que no arregla nada.
     : `La antena <strong>no</strong> recibió ninguna aeronave cerca del suelo
        (altitud mínima: ${num(c.min_altitude_ft)} ft). Sin eso es imposible detectar
-       operaciones — no porque no hayan ocurrido, sino porque desde esta ubicación no se
-       escuchan. Con el receptor a 220 m de la pista esto debería cambiar.`;
+       operaciones — no porque no hayan ocurrido, sino porque el receptor está en San
+       Isidro, a 7 km de San Fernando y 13 km de Aeroparque, y a esa distancia el
+       horizonte y los edificios tapan la vista a un avión en el suelo.`) + alcance;
 
   pintarAeronaves();
 }

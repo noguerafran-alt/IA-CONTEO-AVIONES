@@ -47,6 +47,12 @@
   .ident { color: #fbbf24; font-weight: 600; }
   .muted { color: #4b5563; }
   .ground { color: #9aa0a6; font-size: 0.78rem; }
+  /* Gris y no rojo: no es un error del sistema, es un dato que el filtro
+     considera imposible. Se ve, se lee y no alarma. */
+  .descartes { color: #6b7280; font-size: 0.8rem; line-height: 1.6; margin: 16px 0 0;
+               font-variant-numeric: tabular-nums; }
+  .descartada { color: #6b7280; font-size: 0.78rem; cursor: help; }
+  .descartada s { color: #6b7280; }
   .empty { color: #9aa0a6; padding: 24px; text-align: center; }
   .downloads { margin-top: 12px; font-size: 0.85rem; color: #9aa0a6; }
   .downloads a { margin-right: 12px; }
@@ -57,6 +63,7 @@
   <div class="subtitle">
     Aeronaves recibidas por el receptor RTL-SDR ·
     <a href="/adsb/analisis">análisis de todo lo grabado</a> ·
+    <a href="/adsb/mapa">mapa</a> ·
     <a href="/">volver al dashboard</a>
   </div>
 
@@ -84,14 +91,19 @@
     <div class="downloads" id="downloads"></div>
   </div>
 
+  <div class="descartes" id="descartes"></div>
+
   <h2>En rango ahora</h2>
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>ICAO24</th><th>Matrícula</th><th>Vuelo</th><th>Altitud</th><th>Velocidad</th><th>V/S</th><th>Visto hace</th></tr>
+      <!-- "Dist." es la distancia al receptor (San Isidro): dice si la antena
+           está escuchando cerca o lejos en este momento, que es distinto del
+           alcance histórico que informa la página de análisis. -->
+      <tr><th>ICAO24</th><th>Matrícula</th><th>Vuelo</th><th>Altitud</th><th>Velocidad</th><th>V/S</th><th>Dist.</th><th>Visto hace</th></tr>
     </thead>
     <tbody id="live-body">
-      <tr><td colspan="7" class="empty">Sin datos todavia. Iniciá el receptor arriba.</td></tr>
+      <tr><td colspan="8" class="empty">Sin datos todavia. Iniciá el receptor arriba.</td></tr>
     </tbody>
   </table>
   </div>
@@ -111,9 +123,46 @@ function fmt(value, digits, suffix) {
   return value.toFixed(digits) + suffix;
 }
 
+// Una posición descartada NO se muestra como un guión: un guión se lee como
+// "no llegó posición", que es un hecho distinto y hace desaparecer el descarte
+// en silencio. Se muestra el número tachado, con el motivo al lado y la
+// aritmética en el tooltip.
+function distanciaCelda(o) {
+  if (!o.rejected_reason) return fmt(o.distance_km, 1, ' km');
+  const titulo = `descartada por ${o.rejected_reason}: ${o.rejected_km} km`
+               + (o.rejected_hex ? ` · trama ${o.rejected_hex}` : '');
+  return `<span class="descartada" title="${titulo}">
+            <s>${o.rejected_km} km</s> ${o.rejected_reason}</span>`;
+}
+
+// Dos líneas de descartes, y las dos con el cero explícito. La segunda es la
+// que faltaba desde siempre: pyModeS ya venía tirando posiciones por su cuenta
+// (_motion_consistent) y este repo no leía ese contador en ningún lado, así
+// que la violación de "nada se descarta en silencio" existía antes de que
+// hubiera un filtro propio. Ese número puede ser MAYOR que el de la primera
+// línea, y publicarlo puede hacer quedar peor a la página: es el precio.
+function renderDescartes(data) {
+  const caja = document.getElementById('descartes');
+  if (!data.running && !data.positions_evaluated) { caja.textContent = ''; return; }
+  const motivos = Object.entries(data.rejected_by_reason || {})
+                        .map(([k, v]) => `${k} ${v}`).join(', ');
+  const d = data.decoder_stats || {};
+  const superficie = data.surface_rule_exercised ? ''
+    : ' · regla de superficie sin ejercitar (0 posiciones en tierra)';
+  caja.innerHTML =
+    `posiciones: ${(data.positions_evaluated || 0) - (data.positions_rejected || 0)} aceptadas,
+     ${data.positions_rejected || 0} descartada${data.positions_rejected === 1 ? '' : 's'}
+     (${motivos})${superficie}<br>
+     decoder: position_rejected=${d.position_rejected || 0},
+     crc_fail=${d.crc_fail || 0}, altitude_mismatch=${d.altitude_mismatch || 0},
+     velocity_mismatch=${d.velocity_mismatch || 0} ·
+     radio: ${data.corrupt_count || 0} corruptos,
+     ${data.unverified_count || 0} sin CRC verificable`;
+}
+
 function renderLive(rows) {
   if (!rows.length) {
-    liveBody.innerHTML = '<tr><td colspan="7" class="empty">Ninguna aeronave en rango en este momento.</td></tr>';
+    liveBody.innerHTML = '<tr><td colspan="8" class="empty">Ninguna aeronave en rango en este momento.</td></tr>';
     return;
   }
   liveBody.innerHTML = rows.map(o => `
@@ -124,6 +173,7 @@ function renderLive(rows) {
       <td class="mono">${o.on_ground ? '<span class="ground">en tierra</span>' : fmt(o.altitude_ft, 0, ' ft')}</td>
       <td class="mono">${fmt(o.ground_speed_kt, 0, ' kt')}</td>
       <td class="mono">${o.vertical_rate_fpm ? (o.vertical_rate_fpm > 0 ? '+' : '') + o.vertical_rate_fpm.toFixed(0) : '<span class="muted">—</span>'}</td>
+      <td class="mono">${distanciaCelda(o)}</td>
       <td class="mono">${o.seconds_ago.toFixed(0)}s</td>
     </tr>
   `).join('');
@@ -143,6 +193,7 @@ async function refresh() {
   document.getElementById('c-matricula').textContent = data.with_registration;
   document.getElementById('c-registros').textContent = data.written;
   renderLive(data.live);
+  renderDescartes(data);
 
   btnStart.disabled = data.running;
   btnStop.disabled = !data.running;

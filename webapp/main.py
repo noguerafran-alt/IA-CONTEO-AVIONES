@@ -260,19 +260,35 @@ def api_adsb_analysis():
     whole history, including sessions recorded days ago.
     """
     import adsb_report
-    from adsb_events import _load_db
+    from adsb_events import load_db
 
     db_path = ROOT / "adsb_log.db"
     if not db_path.exists():
         return JSONResponse({"aircraft": [], "observations": 0, "fields": [],
                              "empty_reason": "todavia no se grabo nada"})
 
-    info = adsb_report.overview(_load_db(str(db_path)))
+    # load_db devuelve tambien el filtro que corrio: sin el, coverage_report no
+    # puede distinguir "no hubo rechazos" de "nadie evaluo nada".
+    observaciones, gate = load_db(str(db_path))
+    info = adsb_report.overview(observaciones, gate)
     return JSONResponse({
         "observations": info["observations"],
         "identified": info["identified"],
         "with_registration": info["with_registration"],
         "registry_available": info["registry_available"],
+        # El recorte de alcance y el ruido descartado viajan al navegador para
+        # que la pagina pueda decir DE QUE esta hablando. Un titular de "46
+        # aeronaves" sin estos numeros al lado no se puede interpretar: no se
+        # sabe si la antena recibio poco, si se recorto el radio, o si se
+        # filtro ruido.
+        "analysis_radius_km": info["analysis_radius_km"],
+        "within_radius": info["within_radius"],
+        "outside_radius": info["outside_radius"],
+        "outside_radius_max_km": info["outside_radius_max_km"],
+        "without_position": info["without_position"],
+        "unconfirmed": info["unconfirmed"],
+        "unconfirmed_messages": info["unconfirmed_messages"],
+        "confirmed": info["confirmed"],
         "coverage": info["coverage"],
         "fields": info["fields"],
         "events": [
@@ -287,7 +303,79 @@ def api_adsb_analysis():
              "duration_s": s.duration_s, "min_altitude_ft": s.min_altitude_ft,
              "max_altitude_ft": s.max_altitude_ft, "max_speed_kt": s.max_speed_kt,
              "max_climb_fpm": s.max_climb_fpm, "max_descent_fpm": s.max_descent_fpm,
+             # La posicion y la distancia se serializan explicitamente porque
+             # este dict se arma campo por campo: agregar el campo al
+             # AircraftSummary no alcanza para que llegue al navegador.
+             "latitude": s.last_latitude, "longitude": s.last_longitude,
+             "min_distance_km": s.min_distance_km,
+             "max_distance_km": s.max_distance_km,
              "phase": s.phase, "events": len(s.events)}
             for s in info["aircraft"]
         ],
+    })
+
+
+@app.get("/adsb/mapa")
+def adsb_map_page(request: Request):
+    return templates.TemplateResponse(request, "adsb_mapa.html", {})
+
+
+@app.get("/api/adsb/mapa")
+def api_adsb_map():
+    """Trayectorias decodificadas, el receptor y los aeropuertos de la zona.
+
+    Manda coordenadas crudas y deja proyectar al navegador: la escala del mapa
+    depende de hasta donde llegaron los datos, y eso recien se sabe con todos
+    los puntos juntos.
+
+    Los aeropuertos salen de la tabla de pyModeS, la misma que usa el
+    decodificador. No se dibujan pistas: sus umbrales no estan en ninguna
+    fuente que este repo ya tenga, y una pista puesta a ojo se lee igual de
+    convincente que una real.
+    """
+    import adsb_report
+    from adsb_events import load_db
+    from receiver import RECEIVER_LAT, RECEIVER_LON, nearest_airport, surface_ref_default
+
+    referencia = surface_ref_default()
+    codigo, km_cercano = nearest_airport(RECEIVER_LAT, RECEIVER_LON)
+    receptor = {
+        "lat": RECEIVER_LAT, "lon": RECEIVER_LON, "name": "Receptor (San Isidro)",
+        "nearest_airport": codigo, "nearest_airport_km": round(km_cercano, 1),
+        # Que referencia esta REALMENTE activa, no la que por defecto estaria:
+        # si alguien exporto ADSB_SURFACE_REF, el mapa tiene que delatarlo o
+        # muestra un receptor en un lugar y decodifica desde otro.
+        "surface_ref": (list(referencia) if isinstance(referencia, tuple) else referencia),
+        "surface_ref_is_default": referencia == (RECEIVER_LAT, RECEIVER_LON),
+    }
+
+    aeropuertos = []
+    try:
+        from pyModeS.position._airports import AIRPORTS
+        for code, nombre in (("SADF", "San Fernando"), ("SABE", "Aeroparque"),
+                             ("SAEZ", "Ezeiza")):
+            if code in AIRPORTS:
+                lat, lon = AIRPORTS[code]
+                aeropuertos.append({"code": code, "name": nombre, "lat": lat, "lon": lon})
+    except Exception:
+        pass
+
+    db_path = ROOT / "adsb_log.db"
+    if not db_path.exists():
+        return JSONResponse({"tracks": [], "receiver": receptor, "airports": aeropuertos,
+                             "coverage": {}, "empty_reason": "todavia no se grabo nada"})
+
+    observaciones, gate = load_db(str(db_path))
+    from adsb_events import coverage_report
+    return JSONResponse({
+        "tracks": adsb_report.tracks(observaciones),
+        "receiver": receptor,
+        "airports": aeropuertos,
+        "coverage": coverage_report(observaciones, gate),
+        # Las descartadas viajan APARTE de las trazas y con sus coordenadas
+        # intactas: el mapa las dibuja como cruz gris, sin unirlas a nada y
+        # fuera del encuadre automatico. Tirarlas del dibujo tambien seria
+        # descartarlas en silencio; la version honesta es mostrarlas marcadas
+        # como lo que son.
+        "rejected": [r.as_dict() for r in gate.rechazos],
     })

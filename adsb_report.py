@@ -9,12 +9,24 @@ esta antena, sobre 3523 observaciones de 75 aeronaves:
     altitud                      51%                  96%
     velocidad                    30%                  95%
     distintivo de vuelo           3%                  63%
+    posicion                      0%                   0%
 
 Esa diferencia entre columnas es todo el punto de este modulo. El distintivo
 aparece en 3 de cada 100 mensajes, pero acumulando en el tiempo se termina
 conociendo el de casi dos tercios de las aeronaves. Por eso se resume por
 aeronave (quedandose con el ultimo valor conocido de cada campo) en vez de
 mostrar los mensajes crudos, que se ven casi vacios.
+
+El 0% de posicion de esa tabla NO es una medicion de la antena: esas 3523
+observaciones se grabaron con dos bugs encadenados que hacian imposible que
+llegara una posicion (adsb_rtlsdr.py leia decoded['lat'] cuando pyModeS emite
+'latitude', y los cargadores de adsb_events.py descartaban las columnas al
+releerlas). Ambos estan arreglados, asi que la fila de posicion de una
+grabacion NUEVA va a decir otra cosa; la de estas 3523 se queda en 0 para
+siempre porque el dato nunca se escribio. Numeros de posicion medidos aparte,
+por replay: el par CPR clasico da la primera posicion en el 6to mensaje (el
+bootstrap de pyModeS 3.6 exige ~3 posiciones consistentes antes de emitir), y
+un mensaje de superficie con surface_ref puesto la da con uno solo.
 
 La matricula y el tipo NO viajan por la radio: el avion transmite su direccion
 ICAO24, y con eso se busca en el registro local (aircraft_db.py). Si la base no
@@ -29,7 +41,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from adsb import Observation
-from adsb_events import EventDetector, coverage_report
+from adsb_events import EventDetector, PositionGate, coverage_report
+from receiver import RADIO_ANALISIS_KM
+from receiver import distance_km, resolve_ref
 
 try:
     import aircraft_db
@@ -53,6 +67,15 @@ class AircraftSummary:
     max_speed_kt: float | None = None
     max_climb_fpm: float | None = None
     max_descent_fpm: float | None = None
+    # Ultima posicion conocida, igual que el callsign: la posicion llega en
+    # pocos mensajes y el ultimo valor es el que sirve para saber donde esta.
+    last_latitude: float | None = None
+    last_longitude: float | None = None
+    # min_distance_km es el dato con sentido operativo (que tan cerca del
+    # receptor paso esta aeronave); max_distance_km es el alcance real medido
+    # de la antena, que es lo que hay que saber antes de pensar en moverla.
+    min_distance_km: float | None = None
+    max_distance_km: float | None = None
     events: list = field(default_factory=list)
 
     @property
@@ -77,12 +100,35 @@ class AircraftSummary:
         return "en crucero"
 
     @property
+    def confirmada(self) -> bool:
+        """Si se cree que esta direccion es una aeronave real y no ruido.
+
+        Las tramas DF0/4/5/11/16/20/21 llevan la paridad XOR-eada con la
+        direccion, asi que no se pueden validar solas y el ruido inventa una
+        direccion nueva por trama. Se cree una direccion si se repitio (2+
+        mensajes) o si trajo un campo que solo viaja en DF17/18, donde el CRC
+        si es verificable: distintivo de vuelo o posicion.
+
+        La MATRICULA no cuenta como confirmacion aunque parezca la mas fuerte:
+        no viaja por radio, sale de buscar la direccion en el registro local, y
+        el 3.8% de las direcciones de ruido cae en una direccion registrada por
+        puro azar. Al revés tambien enguana: solo el 37% de las aeronaves
+        confirmadas por DF17 estan en el registro.
+        """
+        return self.messages >= 2 or bool(self.callsign) or self.last_latitude is not None
+
+    @property
     def identified(self) -> bool:
         return bool(self.callsign or self.registration)
 
 
-def _merge(summary: AircraftSummary, observation: Observation) -> None:
-    """Acumular una observacion parcial sobre lo ya conocido."""
+def _merge(summary: AircraftSummary, observation: Observation, ref) -> None:
+    """Acumular una observacion parcial sobre lo ya conocido.
+
+    `ref` se recibe resuelta y no se calcula aca: distance_km cae por default
+    en las constantes de San Isidro, y con ADSB_SURFACE_REF puesto esta columna
+    estaria midiendo desde otro lugar que el resto del informe.
+    """
     summary.messages += 1
     if not summary.first_seen:
         summary.first_seen = observation.timestamp
@@ -106,6 +152,17 @@ def _merge(summary: AircraftSummary, observation: Observation) -> None:
             summary.max_climb_fpm = rate if summary.max_climb_fpm is None else max(summary.max_climb_fpm, rate)
         elif rate < 0:
             summary.max_descent_fpm = rate if summary.max_descent_fpm is None else min(summary.max_descent_fpm, rate)
+    if observation.latitude is not None and observation.longitude is not None:
+        # Las observaciones llegan ordenadas por tiempo desde summarize(), asi
+        # que la ultima que pisa estos campos es la mas reciente.
+        summary.last_latitude = observation.latitude
+        summary.last_longitude = observation.longitude
+        km = distance_km(observation.latitude, observation.longitude, ref)
+        if km is not None:
+            summary.min_distance_km = (km if summary.min_distance_km is None
+                                       else min(summary.min_distance_km, km))
+            summary.max_distance_km = (km if summary.max_distance_km is None
+                                       else max(summary.max_distance_km, km))
 
 
 def _enrich(summary: AircraftSummary) -> None:
@@ -123,13 +180,14 @@ def _enrich(summary: AircraftSummary) -> None:
 def summarize(observations: list[Observation]) -> list[AircraftSummary]:
     """Una fila por aeronave, ordenadas por la mas reciente primero."""
     ordered = sorted(observations, key=lambda o: o.timestamp)
+    ref = resolve_ref()
 
     summaries: dict[str, AircraftSummary] = {}
     for observation in ordered:
         summary = summaries.get(observation.icao24)
         if summary is None:
             summary = summaries[observation.icao24] = AircraftSummary(icao24=observation.icao24)
-        _merge(summary, observation)
+        _merge(summary, observation, ref)
 
     # Los eventos se detectan sobre el flujo completo, no por aeronave: el
     # detector necesita ver la secuencia en orden para reconocer transiciones.
@@ -142,6 +200,47 @@ def summarize(observations: list[Observation]) -> list[AircraftSummary]:
     for summary in summaries.values():
         _enrich(summary)
     return sorted(summaries.values(), key=lambda s: s.last_seen, reverse=True)
+
+
+def tracks(observations: list[Observation]) -> list[dict]:
+    """Las posiciones de cada aeronave en orden, para dibujarlas en el mapa.
+
+    Aparte de summarize() porque contesta otra pregunta: summarize se queda con
+    la ULTIMA posicion (donde esta la aeronave) y el mapa necesita TODAS (por
+    donde paso). Una aeronave con una sola posicion se dibuja como punto, no
+    como linea; las que no tienen ninguna no aparecen, que es lo correcto: no
+    hay nada que dibujar y no se inventa.
+
+    La altitud viaja pegada a cada punto porque el color del trazo la codifica,
+    y viene de la MISMA observacion que la posicion -- no del ultimo valor
+    conocido de la aeronave, que puede ser de otro momento del vuelo.
+    """
+    ref = resolve_ref()
+    con_posicion = [o for o in observations
+                    if o.latitude is not None and o.longitude is not None]
+    por_avion: dict[str, list[Observation]] = {}
+    for observation in sorted(con_posicion, key=lambda o: o.timestamp):
+        por_avion.setdefault(observation.icao24, []).append(observation)
+
+    resultado = []
+    for icao24, puntos in por_avion.items():
+        etiqueta = next((o.callsign.strip() for o in reversed(puntos) if o.callsign), None)
+        matricula = next((o.registration for o in reversed(puntos) if o.registration), None)
+        if aircraft_db is not None and aircraft_db.available() and not matricula:
+            entry = aircraft_db.lookup(icao24)
+            matricula = (entry or {}).get("registration") or None
+        resultado.append({
+            "icao24": icao24,
+            "callsign": etiqueta,
+            "registration": matricula,
+            "points": [
+                {"lat": o.latitude, "lon": o.longitude, "alt": o.altitude_ft,
+                 "t": o.timestamp,
+                 "km": distance_km(o.latitude, o.longitude, ref)}
+                for o in puntos
+            ],
+        })
+    return sorted(resultado, key=lambda t: len(t["points"]), reverse=True)
 
 
 def field_coverage(observations: list[Observation]) -> list[dict]:
@@ -159,7 +258,16 @@ def field_coverage(observations: list[Observation]) -> list[dict]:
         ("altitude_ft", "Altitud", lambda o: o.altitude_ft is not None, "transmitido"),
         ("ground_speed_kt", "Velocidad", lambda o: o.ground_speed_kt is not None, "transmitido"),
         ("vertical_rate_fpm", "Regimen vertical", lambda o: o.vertical_rate_fpm is not None, "transmitido"),
-        ("position", "Posicion", lambda o: o.latitude is not None, "PENDIENTE: no decodifica"),
+        # No dice "transmitido" a secas porque el mecanismo es distinto y
+        # explica por que esta fila puede tener un porcentaje por mensaje bajo
+        # con un porcentaje por aeronave alto -- justamente la distincion que
+        # esta tabla existe para mostrar. En vuelo hacen falta dos tramas CPR
+        # par+impar Y el bootstrap de pyModeS 3.6, que no emite la primera
+        # posicion hasta juntar 3 consistentes: medido por replay, la primera
+        # sale en el 6to mensaje. En pista alcanza un mensaje suelto, pero solo
+        # si esta configurada la referencia de superficie (ADSB_SURFACE_REF).
+        ("position", "Posicion", lambda o: o.latitude is not None,
+         "par de tramas CPR (en pista, una sola)"),
     ]
     filas = []
     for clave, nombre, presente, origen in campos:
@@ -173,18 +281,50 @@ def field_coverage(observations: list[Observation]) -> list[dict]:
     return filas
 
 
-def overview(observations: list[Observation]) -> dict:
-    """Todo lo que la pagina de analisis necesita, en una sola pasada."""
+def overview(observations: list[Observation],
+             gate: PositionGate | None = None) -> dict:
+    """Todo lo que la pagina de analisis necesita, en una sola pasada.
+
+    El gate viene de adsb_events.load_db/load_csv, que son quienes lo corren.
+    Si no se pasa, el informe sale igual pero con gate_applied=False, para que
+    la pagina no pueda confundir "no hubo rechazos" con "nadie evaluo".
+    """
     summaries = summarize(observations)
-    cobertura = coverage_report(observations)
+    cobertura = coverage_report(observations, gate)
+
+    # Tres grupos, no uno. Antes se devolvia todo junto y el titular decia
+    # "3123 aeronaves" cuando 2996 de esas direcciones se habian visto una
+    # sola vez y nunca mas: ruido contado como trafico, el numero mas visible
+    # de la pagina inflado 36 veces.
+    creibles     = [s for s in summaries if s.confirmada]
+    no_creibles  = [s for s in summaries if not s.confirmada]
+    radio        = RADIO_ANALISIS_KM
+    dentro       = [s for s in creibles
+                    if s.min_distance_km is not None and s.min_distance_km <= radio]
+    fuera        = [s for s in creibles
+                    if s.min_distance_km is not None and s.min_distance_km > radio]
+    sin_posicion = [s for s in creibles if s.min_distance_km is None]
+
     return {
-        "aircraft": summaries,
+        # El analisis habla del radio elegido; lo de afuera se informa por
+        # separado para que recortar no se confunda con no haber recibido.
+        "aircraft": dentro + sin_posicion,
+        "aircraft_all": summaries,
+        "analysis_radius_km": radio,
+        "within_radius": len(dentro),
+        "outside_radius": len(fuera),
+        "outside_radius_max_km": (round(max(s.min_distance_km for s in fuera), 1)
+                                  if fuera else None),
+        "without_position": len(sin_posicion),
+        "unconfirmed": len(no_creibles),
+        "unconfirmed_messages": sum(s.messages for s in no_creibles),
+        "confirmed": len(creibles),
         "coverage": cobertura,
         "fields": field_coverage(observations),
         "observations": len(observations),
-        "identified": sum(1 for s in summaries if s.identified),
-        "with_registration": sum(1 for s in summaries if s.registration),
-        "events": [e for s in summaries for e in s.events],
+        "identified": sum(1 for s in creibles if s.identified),
+        "with_registration": sum(1 for s in creibles if s.registration),
+        "events": [e for s in creibles for e in s.events],
         "registry_available": bool(aircraft_db and aircraft_db.available()),
     }
 
@@ -192,7 +332,7 @@ def overview(observations: list[Observation]) -> dict:
 if __name__ == "__main__":
     import argparse
 
-    from adsb_events import _load_csv, _load_db
+    from adsb_events import imprimir_rechazos, load_csv, load_db
 
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -201,24 +341,34 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.db:
-        datos, origen = _load_db(args.db), args.db
+        (datos, gate), origen = load_db(args.db), args.db
     elif args.csv:
-        datos, origen = _load_csv(args.csv), args.csv
+        (datos, gate), origen = load_csv(args.csv), args.csv
     else:
         parser.error("indica un CSV o --db")
 
-    info = overview(datos)
+    info = overview(datos, gate)
     print(f"=== {origen}")
     print(f"{info['observations']} observaciones, {len(info['aircraft'])} aeronaves, "
           f"{info['identified']} identificadas\n")
 
+    cobertura = info["coverage"]
+    if cobertura["with_position"]:
+        print(f"posiciones decodificadas: {cobertura['with_position']} | alcance "
+              f"mediana {cobertura['median_distance_km']:.1f} km, maximo "
+              f"{cobertura['max_distance_km']:.1f} km del receptor")
+    # Siempre, aunque no haya rechazos: el maximo publicado arriba solo es
+    # honesto si al lado esta lo que se saco de esa cuenta.
+    print(imprimir_rechazos(gate))
+    print()
+
     print(f"{'ICAO24':8s} {'VUELO':9s} {'MATRICULA':10s} {'TIPO':22s} "
-          f"{'ALT MIN':>8s} {'ALT MAX':>8s} {'VEL':>6s}  ESTADO")
-    print("-" * 100)
+          f"{'ALT MIN':>8s} {'ALT MAX':>8s} {'VEL':>6s} {'DIST':>7s}  ESTADO")
+    print("-" * 108)
     for s in info["aircraft"]:
-        def num(value):
-            return f"{value:.0f}" if value is not None else "-"
+        def num(value, decimales=0):
+            return f"{value:.{decimales}f}" if value is not None else "-"
         print(f"{s.icao24:8s} {(s.callsign or '-'):9s} {(s.registration or '-'):10s} "
               f"{(s.aircraft_type or '-')[:22]:22s} "
               f"{num(s.min_altitude_ft):>8s} {num(s.max_altitude_ft):>8s} "
-              f"{num(s.max_speed_kt):>6s}  {s.phase}")
+              f"{num(s.max_speed_kt):>6s} {num(s.min_distance_km, 1):>7s}  {s.phase}")

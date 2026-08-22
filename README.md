@@ -139,6 +139,251 @@ Los archivos rotan por día, así ninguno se vuelve inmanejable.
 `altitude_ft`, `ground_speed_kt`, `vertical_rate_fpm`, `latitude`,
 `longitude`, `on_ground`.
 
+### Dónde está la antena: `ADSB_SURFACE_REF`
+
+La posición de un avión no viaja completa en un mensaje: ADS-B la manda
+codificada en CPR, que da la posición **dentro de una zona** y hay que
+resolver cuál. Para los aviones **en vuelo** se resuelve con dos tramas
+(par + impar) de la misma aeronave. Para los aviones **en pista y rodando**
+—los que importan para contar operaciones— hace falta además un punto de
+referencia cercano, y ese punto es **dónde está la antena**.
+
+Por defecto se usa **San Isidro** (`-34.4708, -58.5128`). Para cambiarlo:
+
+```bash
+set ADSB_SURFACE_REF=-34.4708,-58.5128          # Windows, cmd
+python adsb_record.py --surface-ref -34.60,-58.40
+python adsb_record.py --surface-ref SADF        # o un código ICAO de aeropuerto
+```
+
+La variable de entorno es el canal que llega igual a la terminal y al
+dashboard (el dashboard nunca ve los argumentos de línea de comandos). No va
+en `.env` porque no es un secreto.
+
+**Por qué la referencia es la antena y no un aeropuerto:** la tolerancia
+medida es ±83 km (los 45 NM de DO-260B), así que un solo punto en San Isidro
+alcanza para los tres aeropuertos de la zona a la vez — San Fernando a 7.3 km,
+Aeroparque a 13.3 km y Ezeiza a 39.1 km, medidos con el haversine del repo.
+Poner `--surface-ref SADF` funciona igual pero descarta los otros dos sin
+necesidad. Ver [receiver.py](receiver.py), que es el único lugar donde vive
+esta coordenada: el decodificador y la métrica de distancia la importan de
+ahí, para no medir cada uno desde un punto distinto.
+
+**Comportamiento contraintuitivo, medido y vale saberlo:** pyModeS 3.6 no
+emite la primera posición de un avión en vuelo hasta juntar ~3 posiciones CPR
+consistentes entre sí. Reproduciendo el par de mensajes clásico, la primera
+latitud aparece en el **6.º mensaje**, no en el 2.º. En superficie, en cambio,
+un mensaje suelto ya alcanza (se resuelve contra la referencia, sin esperar
+pares). Que las primeras posiciones tarden en aparecer es normal.
+
+Las posiciones **en superficie** están implementadas y verificadas por replay
+de mensajes construidos (error de 0.25 a 0.62 m sobre los tres aeropuertos),
+pero **todavía no se validaron con tráfico real**: esta antena, a 7 km de la
+pista más cercana, no ha recibido un solo avión en tierra.
+
+### Alcance medido: la mediana, no el percentil 95
+
+Con la posición ya decodificando se puede medir hasta dónde llega la antena, y
+la primera medición real dejó una lección sobre qué número publicar. Sobre 43
+posiciones:
+
+| | distancia al receptor |
+|---|---|
+| 39 posiciones | 9.9 – 31.9 km |
+| 4 posiciones | 70.5 – 72.4 km |
+
+Esas 4 son todas del mismo avión, en crucero a 36 000 ft. Con esa forma, el
+percentil 95 cae **dentro** del grupo lejano (71.3 km): con n = 43 el p95 es
+literalmente el tercer valor más grande, así que no recorta la cola, la
+reporta. Publicarlo como "el alcance que la antena sostiene" era falso —
+sostiene unos 20 km, no 71.
+
+Por eso la interfaz muestra la **mediana** (19.7 km) junto al máximo, y el p95
+solo aparece cuando hay muestra suficiente para que signifique algo. La brecha
+entre mediana y máximo no es ruido: es altitud. A 70 km solo se escucha lo que
+vuela alto, porque a un avión bajo lo tapa el horizonte.
+
+### Filtro de posiciones imposibles: horizonte de radio, no "50 km"
+
+Sobre 783 posiciones decodificadas hay **exactamente una** imposible:
+
+| icao24 | hora (UTC) | posición | altitud | distancia |
+|---|---|---|---|---|
+| `e0b14a` | 20:08:27 | −28.07277, −54.90687 | 19 525 ft | **789.5 km** |
+
+Ese mismo avión estaba a 50.0 km a las 20:07:03 y volvió a su ruta normal a las
+20:08:53: un punto aislado entre dos tramos correctos. La entrada al punto son
+748.7 km en 36 s (40 813 kt) y la salida 756.0 km en 27 s (54 968 kt). Es un
+error de índice de zona CPR — la latitud emitida cae exactamente una zona impar
+de más (360/59 = 6.101695° contra los +6.101982° medidos, 32 m de diferencia).
+
+**Por qué 50 km era el corte equivocado.** Cortar a 50 km del aeropuerto tira
+además estas cuatro, que son legítimas (trazas continuas, muchos puntos):
+
+| icao24 | distancia | altitud | posiciones |
+|---|---|---|---|
+| `e49bff` | 72.4 km | 36 000 ft | 4 |
+| `e8061b` | 70.6 km | 27 950 ft | 65 |
+| `e49aa8` | 63.9 km | 16 750 ft | 25 |
+| `e492aa` | 59.1 km | 37 025 ft | 15 |
+
+Perderlas rompe justamente la medición de alcance de la antena, que es el
+propósito declarado de `/adsb/mapa`. Y un "50 km" hardcodeado no se puede
+defender: si la antena se muda, el número deja de tener sentido y nadie se
+entera.
+
+**La regla física.** El horizonte de radio a una altitud dada es geometría, no
+un umbral:
+
+```
+horizonte_km(alt_ft) = 4.124 * (sqrt(alt_ft * 0.3048) + sqrt(ANTENA_M))
+límite_km            = 1.35 * horizonte_km(alt_ft)
+```
+
+Es la misma fórmula que la clásica `1.23 * (sqrt(h1_ft) + sqrt(h2_ft))` en NM
+(`4.124 * sqrt(0.3048) / 1.852 = 1.2294`) y las dos ya llevan adentro el radio
+terrestre 4/3 por refracción (`3.57 * sqrt(4/3) = 4.1223`).
+
+| altitud | horizonte | límite (×1.35) |
+|---|---|---|
+| 0 ft | 13.0 km | 17.6 km |
+| 5 000 ft | 174.0 km | 234.9 km |
+| 10 000 ft | 240.7 km | 325.0 km |
+| 19 525 ft | 331.2 km | **447.1 km** |
+| 27 950 ft | 393.7 km | 531.5 km |
+| 36 000 ft | 445.0 km | 600.8 km |
+| 45 000 ft | 496.0 km | 669.6 km |
+
+El 1.35 existe porque el horizonte **no es una pared**: el ducting troposférico
+mete 1090 MHz bastante más lejos, y esta página existe justamente para medir
+recepciones excepcionales. El factor se puede citar en vez de defender: PiAware
+corta a 360 NM = 666.7 km, que es 1.344 veces el horizonte 4/3 de un avión a
+45 000 ft. Medido sobre las 783 posiciones, cualquier factor entre 1.0 y 2.38
+rechaza exactamente la misma única posición: dos órdenes de holgura.
+
+Con esa regla, las cuatro legítimas pasan con muchísimo margen:
+
+| icao24 | distancia | límite | margen |
+|---|---|---|---|
+| `e49bff` | 72.4 km | 600.8 km | 8.3× |
+| `e8061b` | 70.6 km | 531.5 km | 7.5× |
+| `e49aa8` | 63.9 km | 415.4 km | 6.5× |
+| `e492aa` | 59.1 km | 609.0 km | 10.3× |
+| `e0b14a` (fantasma) | 789.5 km | 447.1 km | **0.57× — rechazada** |
+
+**Segunda regla: continuidad de velocidad.** El horizonte solo atrapa el
+fantasma que cae lejísimos. Una zona de *longitud* mal elegida a 36 000 ft puede
+aterrizar a 200 km, muy por debajo del límite de 600.8 km, y el horizonte no la
+ve. Para eso corre `speed_check` de dump1090-fa contra la última posición
+**aceptada** (nunca la última recibida), con la velocidad que el propio avión
+transmitió y un factor ×2 de holgura por el sello de tiempo.
+
+Lo de "última aceptada" no es un detalle de estilo, está medido:
+
+| referencia | posiciones rechazadas |
+|---|---|
+| última **aceptada** | 1 (solo el fantasma) |
+| última **recibida** | 2 (el fantasma **y la posición buena de 20:08:53**) |
+
+Es la razón por la que dump1090 nunca guarda una posición rechazada como
+referencia — y de paso es un bug de pyModeS, cuyo `_update_position_history`
+(`_pipe.py:668-685`) mete al historial también las rechazadas, así que el
+*segundo* fantasma de una ráfaga pasa.
+
+El ×2 también está medido, no elegido: con las constantes crudas de dump1090-fa
+el peor caso legítimo de las 783 posiciones queda en 0.896 del límite (11 % de
+margen, demasiado poco); con ×2 baja a 0.45 y el fantasma sigue a 47× del
+límite. La razón física es que dump1090 sella tiempo con el reloj del SDR y acá
+el sello es `time.time()` en el hilo de Python, después del buffer USB.
+
+**Dos casos de borde más**, ambos declarados aunque hoy no se ejerciten:
+
+| regla | umbral | de dónde sale | ejercitada hoy |
+|---|---|---|---|
+| sin altitud | 555.6 km (300 NM) | `Modes.maxRange` de dump1090-fa | no (783 de 783 filas traen altitud) |
+| superficie | ±0.75° lat (83.5 km) | media celda CPR, DO-260B A.1.7.6 | **no** (126 filas `on_ground`, ninguna con posición) |
+
+**Nada se descarta en silencio.** El filtro no borra la fila: anula `lat`/`lon`
+y deja altitud, velocidad y régimen vertical, porque en el caso medido la trama
+era auténtica (los 19 525 ft encajan con los −2048 fpm transmitidos en las dos
+ramas del descenso) y lo único corrupto era el par lat/lon. El rechazo se
+publica en cuatro lugares: la tarjeta de `/adsb/mapa`, el texto de cobertura de
+`/adsb/analisis`, el CLI de `adsb_report.py` y `coverage_report()`. En el mapa
+el punto se **dibuja** como cruz gris hueca, sin unirlo a la traza y fuera del
+encuadre automático (era ese único punto el que escalaba el mapa entero a
+790 km).
+
+Corre en los dos lados: en **lectura** (`adsb_events.load_db`) es donde se
+arregla lo que ya está en la base, y en **ingestión** (`adsb_record.Recorder`)
+sin rechazar, solo escribiendo el motivo en la columna nueva `rejected_reason`.
+Esa columna tiene **tres** estados y confundirlos hace mentir cualquier
+consulta:
+
+| valor | significa |
+|---|---|
+| `NULL` | fila anterior al filtro — **no evaluada** |
+| `''` | evaluada y limpia |
+| texto | el motivo (`horizonte`, `velocidad`, `superficie`, `sin_altitud`) |
+
+La columna se agrega con `ALTER TABLE ADD COLUMN`, que es no destructivo e
+instantáneo, pero **necesita que no haya una grabación en curso**: con otra
+escribiendo, SQLite devuelve `database is locked` (reproducido). En ese caso el
+recorder no arranca y dice exactamente eso, en vez de degradarse escribiendo
+sin la columna — perder el motivo en silencio sería el bug que este cambio
+existe para evitar. Detené la grabación, arrancala de nuevo y la migración
+corre sola.
+
+**Lo que este filtro NO arregla**, y conviene decirlo: 2151 de 2343 icao24
+(91.8 %) aparecen una sola vez y ~2029 son direcciones fantasma nacidas de
+errores de bit en DF4/DF11/DF20, donde la paridad va XOR-eada con la dirección
+y no se puede verificar. Ninguna trae posición, así que ningún filtro de
+posición las ve, y la página que dice "2343 aeronaves distintas" está inflada
+~12×. Eso es otro filtro (`icao_verified`) y es un trabajo aparte.
+
+Y desde ahora se publica también **lo que descarta pyModeS**
+(`decoder.stats`: `position_rejected`, `crc_fail`, `altitude_mismatch`,
+`velocity_mismatch`), que el repo no leía en ningún lado. Ese número puede ser
+mayor que el del filtro propio: `_motion_consistent` ya venía tirando
+posiciones en silencio. Publicarlo puede hacer quedar peor a la página en el
+corto plazo; es el precio de no mentir.
+
+El test que fija el porqué es `test_adsb_events.py`, secciones 14 a 18. Si
+alguien "simplifica" esto a un corte fijo de 50 km, las cuatro legítimas se
+ponen en rojo.
+
+### Mapa: dónde estuvo lo que la antena escuchó
+
+`/adsb/mapa` dibuja las trayectorias decodificadas sobre los tres aeropuertos
+de la zona, con el receptor al centro y anillos de distancia. Cada traza se
+colorea por la altitud **de ese tramo**, así se distingue de un vistazo una
+aproximación de un vuelo de paso.
+
+Es un SVG generado en el navegador, **sin tiles ni CDN**: el resto del sistema
+funciona sin internet y un mapa con fondo de OpenStreetMap lo rompería justo
+cuando más se lo necesita. Se pierde el fondo satelital; la costa del Río de la
+Plata va dibujada como referencia esquemática y está etiquetada como tal.
+
+Por defecto el mapa se encuadra al grueso del tráfico y avisa cuántas aeronaves
+quedaron fuera, con un botón para verlas: un solo avión de crucero a 72 km
+obliga a abrir el encuadre tanto que las aproximaciones cercanas quedan
+ilegibles. Nada se oculta en silencio — las de fuera de cuadro siguen en la
+lista lateral y en los totales.
+
+Si no hay ninguna posición decodificada, la página **no** dibuja un mapa vacío
+ni rellena con posiciones simuladas: explica por qué está vacío.
+
+**Se actualiza solo cada 10 s**, así que sirve para mirar mientras la antena
+graba. Tres detalles que hacen que el modo en vivo no moleste:
+
+- El indicador de arriba dice si la captura está **corriendo o detenida**. Un
+  mapa que se refresca con la grabación parada se ve idéntico a un cielo vacío;
+  el punto de estado distingue los dos casos y enlaza a `/adsb` para arrancarla.
+- El refresco **se pausa mientras el mouse está sobre el mapa o la lista**:
+  redibujar destruye el nodo bajo el cursor y se pierde el resaltado a mitad de
+  gesto.
+- Con la pestaña en segundo plano no consulta nada, y al volver pide de nuevo
+  para no mostrar una foto vieja.
+
 ### Por qué no guarda todos los mensajes
 
 Una aeronave transmite varias veces por segundo y la mayoría de esos mensajes
@@ -239,9 +484,19 @@ a segundos de distancia, la telemetría desempatando, un avión lejano, el
 receptor caído, y uno que reporta muchas veces sin poder ganar por repetición.
 
 ```bash
-python test_adsb.py     # no necesita receptor
-python adsb.py --watch  # ver lo que se está recibiendo
+python test_adsb.py           # no necesita receptor
+python test_adsb_events.py    # aterrizajes/despegues y sus falsos positivos
+python test_adsb_position.py  # la posición, de la radio a la tabla
+python adsb.py --watch        # ver lo que se está recibiendo
 ```
+
+[test_adsb_position.py](test_adsb_position.py) reproduce mensajes hex conocidos
+y compara contra el valor exacto esperado, porque durante toda la primera etapa
+del proyecto la posición salió `None` en el 100% de los mensajes por dos bugs
+encadenados —el decodificador leía `decoded['lat']` cuando pyModeS emite
+`'latitude'`, y los cargadores descartaban las columnas al releerlas— y
+arreglar uno solo no cambiaba nada observable. Por eso se prueba la cadena
+completa: hex → `Observation` → SQLite/CSV → resumen → cobertura.
 
 ### Qué hace falta
 
@@ -300,6 +555,14 @@ Abrí `http://localhost:8000`. La página muestra:
 - **Contadores** de landings / takeoffs / total.
 - **Reproductor del video con el etiquetado** (recuadros, track id, trace, línea y contadores dibujados).
 - **Tabla de eventos** con thumbnail, tipo, hora, track id, fuente, matrícula y aerolínea. **Clic en cualquier fila salta el video a ese evento** (arranca 2s antes para que se vea el cruce).
+
+Y tres páginas de ADS-B, que funcionan sin cámara ni video:
+
+| Página | Para qué |
+|---|---|
+| `/adsb` | Grabar en vivo desde el dongle y ver lo que entra ahora |
+| `/adsb/analisis` | Una fila por aeronave sobre todo lo grabado, y qué aporta cada campo |
+| `/adsb/mapa` | Dónde estuvo cada aeronave: trayectorias, alcance real y aeropuertos |
 
 Para que el video se vea en el navegador hay que convertirlo primero: supervision escribe `mp4v`, que los navegadores no reproducen.
 
