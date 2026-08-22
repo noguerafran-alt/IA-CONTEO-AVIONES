@@ -281,6 +281,7 @@ def api_adsb_analysis():
         # aeronaves" sin estos numeros al lado no se puede interpretar: no se
         # sabe si la antena recibio poco, si se recorto el radio, o si se
         # filtro ruido.
+        "receiver_name": __import__("receiver").RECEIVER_NAME,
         "analysis_radius_km": info["analysis_radius_km"],
         "within_radius": info["within_radius"],
         "outside_radius": info["outside_radius"],
@@ -335,12 +336,24 @@ def api_adsb_map():
     """
     import adsb_report
     from adsb_events import load_db
-    from receiver import RECEIVER_LAT, RECEIVER_LON, nearest_airport, surface_ref_default
+    from receiver import (ANTENA_M, RECEIVER_ES_DEFAULT, RECEIVER_LAT, RECEIVER_LON,
+                          RECEIVER_NAME, distance_km, horizonte_km, nearest_airport,
+                          surface_ref_default)
 
     referencia = surface_ref_default()
     codigo, km_cercano = nearest_airport(RECEIVER_LAT, RECEIVER_LON)
+    # El horizonte a un blanco EN EL SUELO es el numero que decide si se pueden
+    # ver aviones en pista, y depende de la ALTURA de la antena mas que de la
+    # cercania: 13.0 km a 10 m contra 52.2 km a 160 m. Va al mapa como anillo
+    # para que la pregunta "desde aca veo la pista de Aeroparque?" se conteste
+    # mirando, sin hacer cuentas.
+    horizonte_suelo = horizonte_km(0)
     receptor = {
-        "lat": RECEIVER_LAT, "lon": RECEIVER_LON, "name": "Receptor (San Isidro)",
+        "lat": RECEIVER_LAT, "lon": RECEIVER_LON,
+        "name": RECEIVER_NAME,
+        "is_default": RECEIVER_ES_DEFAULT,
+        "antenna_m": ANTENA_M,
+        "surface_horizon_km": round(horizonte_suelo, 1),
         "nearest_airport": codigo, "nearest_airport_km": round(km_cercano, 1),
         # Que referencia esta REALMENTE activa, no la que por defecto estaria:
         # si alguien exporto ADSB_SURFACE_REF, el mapa tiene que delatarlo o
@@ -356,7 +369,15 @@ def api_adsb_map():
                              ("SAEZ", "Ezeiza")):
             if code in AIRPORTS:
                 lat, lon = AIRPORTS[code]
-                aeropuertos.append({"code": code, "name": nombre, "lat": lat, "lon": lon})
+                km = distance_km(lat, lon)
+                aeropuertos.append({
+                    "code": code, "name": nombre, "lat": lat, "lon": lon,
+                    "km": (round(km, 1) if km is not None else None),
+                    # Si la PISTA de este aeropuerto entra en el horizonte de
+                    # superficie desde donde esta la antena. Es lo que separa
+                    # "cuento sus operaciones" de "solo lo veo pasar por arriba".
+                    "surface_visible": (km is not None and km <= horizonte_suelo),
+                })
     except Exception:
         pass
 

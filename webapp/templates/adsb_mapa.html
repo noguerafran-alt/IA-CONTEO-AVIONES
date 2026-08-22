@@ -40,6 +40,11 @@
   .costa-txt { fill: #2c4a6e; font-size: 10px; font-style: italic; }
   .apto-txt { fill: #9aa0a6; font-size: 11px; font-weight: 600; paint-order: stroke;
               stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
+  .horizonte { fill: none; stroke: #34d399; stroke-width: 1.5; stroke-dasharray: 5 4;
+               opacity: 0.75; }
+  .horizonte-txt { fill: #34d399; font-size: 10px; font-weight: 600; opacity: 0.9;
+                   font-variant-numeric: tabular-nums; }
+  .rx-sub { fill: #9aa0a6; font-size: 9px; font-variant-numeric: tabular-nums; }
   .rx-txt { fill: #f87171; font-size: 11px; font-weight: 700; paint-order: stroke;
             stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
 
@@ -98,12 +103,13 @@
 <body>
   <h1>Dónde estuvo lo que la antena escuchó</h1>
   <div class="subtitle">
-    Trayectorias decodificadas desde San Isidro ·
+    Trayectorias decodificadas desde <span id="sub-receptor">la antena</span> ·
     <a href="/adsb/analisis">análisis</a> · <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
   </div>
 
   <div class="estado" id="estado"><span class="punto"></span><span id="estado-txt">–</span></div>
 
+  <div id="aviso-antena" class="aviso" style="display:none"></div>
   <div id="aviso-ref" class="aviso" style="display:none"></div>
 
   <div id="descartadas" class="descartadas" style="display:none"></div>
@@ -245,6 +251,27 @@ function dibujar(datos, trazas) {
   const svg = crear("svg", {viewBox: `0 0 ${laminaW} ${laminaH}`,
                             xmlns: "http://www.w3.org/2000/svg"});
 
+  // Fondo negro propio y no el del panel: sobre negro el azul del rio y los
+  // colores de altitud de las trazas ganan contraste, y el mapa se lee como un
+  // mapa y no como una tabla mas de la pagina.
+  svg.appendChild(crear("rect", {x: 0, y: 0, width: laminaW, height: laminaH,
+                                 fill: "#05070a"}));
+
+  // --- horizonte de superficie ----------------------------------------------
+  // El anillo mas importante del mapa: hasta aca se puede ver un avion EN LA
+  // PISTA. Afuera de este circulo un aeropuerto solo se ve por arriba, porque
+  // lo que esta en el suelo queda tapado por la curvatura de la Tierra. Depende
+  // de la ALTURA de la antena mucho mas que de la cercania, asi que se redibuja
+  // solo si se mueve o se sube el receptor.
+  if (rx.surface_horizon_km) {
+    svg.appendChild(crear("circle", {class: "horizonte", cx: centro[0], cy: centro[1],
+                                     r: rx.surface_horizon_km * escala}));
+    const yh = centro[1] - rx.surface_horizon_km * escala;
+    if (yh > 12)
+      svg.appendChild(crear("text", {class: "horizonte-txt", x: centro[0] + 4, y: yh - 4},
+                            `horizonte en pista ${rx.surface_horizon_km} km`));
+  }
+
   // --- anillos de distancia -------------------------------------------------
   // Se dibuja tambien el primero que se pasa del cuadro: su arco entra igual
   // por alguna esquina y sirve de referencia. Cortar en el ultimo que entra
@@ -291,10 +318,20 @@ function dibujar(datos, trazas) {
   // --- aeropuertos ----------------------------------------------------------
   for (const a of aptos) {
     const [x, y] = px(a.lat, a.lon);
-    svg.appendChild(crear("rect", {x: x - 4, y: y - 4, width: 8, height: 8,
-                                   fill: "#9aa0a6", transform: `rotate(45 ${x} ${y})`}));
-    svg.appendChild(crear("text", {class: "apto-txt", x: x + 9, y: y + 4},
-                          `${a.name} (${a.code})`));
+    // Relleno si la pista entra en el horizonte de superficie, hueco si no.
+    // Es la diferencia entre "puedo contar sus operaciones" y "solo lo veo
+    // pasar por arriba", y es el dato que decide donde conviene poner la antena.
+    const vePista = a.surface_visible;
+    svg.appendChild(crear("rect", {
+      x: x - 4, y: y - 4, width: 8, height: 8,
+      fill: vePista ? "#34d399" : "none",
+      stroke: vePista ? "#34d399" : "#6b7280", "stroke-width": 1.5,
+      transform: `rotate(45 ${x} ${y})`}));
+    svg.appendChild(crear("text", {
+      class: "apto-txt", x: x + 9, y: y + 4,
+      fill: vePista ? "#34d399" : "#6b7280"},
+      `${a.name} (${a.code})` + (a.km != null ? ` · ${a.km} km` : "")
+      + (vePista ? " · pista visible" : " · pista bajo el horizonte")));
   }
 
   // --- receptor -------------------------------------------------------------
@@ -304,8 +341,16 @@ function dibujar(datos, trazas) {
   svg.appendChild(crear("path", {
     d: `M ${rxX} ${rxY - 9} L ${rxX + 8} ${rxY + 6} L ${rxX - 8} ${rxY + 6} Z`,
     fill: "#f87171"}));
+  // El nombre de la ubicacion y no un "Antena" generico: si alguien mueve el
+  // receptor por ADSB_RECEIVER, el mapa tiene que decir desde donde esta
+  // midiendo. Un mapa que se dibuja igual desde dos lugares distintos miente.
   svg.appendChild(crear("text", {class: "rx-txt", x: rxX, y: rxY + 20,
-                                 "text-anchor": "middle"}, "Antena"));
+                                 "text-anchor": "middle"},
+                        rx.name || "Antena"));
+  if (rx.antenna_m)
+    svg.appendChild(crear("text", {class: "rx-sub", x: rxX, y: rxY + 32,
+                                   "text-anchor": "middle"},
+                          `antena a ${rx.antenna_m} m`));
 
   // --- trayectorias ---------------------------------------------------------
   for (const t of trazas) {
@@ -533,12 +578,32 @@ async function cargar() {
   const c = datos.coverage || {};
 
   // Si alguien movio la referencia por variable de entorno, el mapa lo dice: el
-  // triangulo rojo sigue dibujado en San Isidro y estaria mintiendo en silencio.
+  // triangulo rojo sigue dibujado donde dice RECEIVER y estaria mintiendo.
+  // La antena movida se avisa arriba de todo. Es el aviso mas importante de la
+  // pagina: todas las distancias, los anillos y el alcance informado se miden
+  // desde este punto, asi que si cambio y nadie lo dice, cada numero del mapa
+  // esta comparando contra un lugar que ya no existe.
+  // El subtitulo tambien sale de la config: tenerlo a mano decia "desde San
+  // Isidro" incluso con el aviso de mudanza a la vista justo debajo, o sea la
+  // pagina contradiciendose a si misma en dos lineas contiguas.
+  const subRx = document.getElementById("sub-receptor");
+  if (subRx && rx.name) subRx.textContent = rx.name;
+
+  const avisoAntena = document.getElementById("aviso-antena");
+  if (rx.is_default === false) {
+    avisoAntena.innerHTML = `<strong>La antena no está en la ubicación por defecto.</strong>
+      <code>ADSB_RECEIVER</code> la puso en <strong>${rx.name}</strong>
+      (${rx.lat.toFixed(4)}, ${rx.lon.toFixed(4)}), con la antena a ${rx.antenna_m} m, desde
+      donde el horizonte a un avión en pista es ${rx.surface_horizon_km} km.
+      Todo lo que este mapa mide —distancias, anillos, alcance— se mide desde ahí.`;
+    avisoAntena.style.display = "";
+  }
+
   if (rx.surface_ref && rx.surface_ref_is_default === false) {
     const aviso = document.getElementById("aviso-ref");
     aviso.innerHTML = `<strong>Referencia de superficie cambiada por entorno.</strong>
       <code>ADSB_SURFACE_REF</code> está en <code>${JSON.stringify(rx.surface_ref)}</code>,
-      distinta de la posición por defecto. El mapa dibuja la antena en San Isidro;
+      distinta de la posición por defecto. El mapa dibuja la antena en ${rx.name};
       las posiciones en pista se decodifican desde esa otra referencia.`;
     aviso.style.display = "";
   }
@@ -623,9 +688,11 @@ async function cargar() {
   document.getElementById("nota-mapa").innerHTML =
     `Cada traza es una aeronave y el color es su altitud en ese tramo, no el promedio
      del vuelo. Los anillos se miden desde la antena, no desde un aeropuerto: el
-     receptor está en San Isidro, a ${rx.nearest_airport_km} km de
-     ${rx.nearest_airport}, y desde ahí quedan los tres aeropuertos de la zona dentro
-     del alcance.${lejanoTxt} El dibujo es SVG generado acá, sin mapas de terceros — el
+     receptor está en ${rx.name}, a ${rx.nearest_airport_km} km de
+     ${rx.nearest_airport}, con la antena a ${rx.antenna_m} m. El círculo verde punteado
+     es hasta dónde se puede ver un avión <em>en la pista</em>: ${rx.surface_horizon_km} km
+     desde esta altura. Los aeropuertos con el rombo lleno tienen su pista dentro de ese
+     círculo; los huecos solo se ven por arriba.${lejanoTxt} El dibujo es SVG generado acá, sin mapas de terceros — el
      sistema funciona sin internet y un mapa con tiles lo rompería.`;
 }
 

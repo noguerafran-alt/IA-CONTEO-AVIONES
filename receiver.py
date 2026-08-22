@@ -39,8 +39,74 @@ from match_adsb import haversine_m
 # +-83 km de tolerancia cualquier punto del GBA decodifica lo mismo. La
 # precision si importa para la distancia medida, que es un numero que se
 # publica en el reporte de cobertura.
-RECEIVER_LAT = -34.4708
-RECEIVER_LON = -58.5128
+# Ubicaciones conocidas del receptor, con su altura de antena. Existen como
+# tabla y no como comentario porque este proyecto tiene dos lugares reales y
+# concretos, y escribir las coordenadas de memoria cada vez es exactamente como
+# se termina midiendo el alcance desde el lugar equivocado.
+#
+# La ALTURA no es un detalle decorativo: manda mas que la cercania para ver
+# aviones EN PISTA. El horizonte de radio a un blanco en el suelo es 13.0 km
+# con la antena a 10 m y 52.2 km a 160 m, asi que desde la torre se ve la
+# superficie de Aeroparque, San Fernando y Ezeiza, y desde un techo en San
+# Isidro no se ve ni la de Aeroparque, que queda a 13.3 km: 300 metros mas
+# lejos que el horizonte. Por eso nunca se decodifico una posicion en tierra.
+UBICACIONES: dict[str, tuple[float, float, float, str]] = {
+    "san-isidro": (-34.4708, -58.5128, 10.0, "San Isidro"),
+    "ypf": (-34.605378, -58.362517, 160.0, "Torre YPF (Puerto Madero)"),
+}
+UBICACION_DEFAULT = "san-isidro"
+
+
+def _resolver_receptor() -> tuple[float, float, str]:
+    """De donde escucha la antena: ADSB_RECEIVER, o San Isidro por defecto.
+
+    Acepta una clave de UBICACIONES ('ypf'), un par 'lat,lon', o un codigo ICAO
+    de aeropuerto. Que esto sea configurable no es lujo: mover la antena 20 km
+    cambia TODAS las distancias, los anillos del mapa y el alcance informado, y
+    con las coordenadas clavadas en el codigo la pagina seguiria midiendo desde
+    el lugar viejo sin decir nada. Un sistema que mide mal en silencio es peor
+    que uno que no mide.
+    """
+    crudo = (os.environ.get("ADSB_RECEIVER") or "").strip()
+    if not crudo:
+        lat, lon, _, nombre = UBICACIONES[UBICACION_DEFAULT]
+        return lat, lon, nombre
+    clave = crudo.lower().replace("_", "-")
+    if clave in UBICACIONES:
+        lat, lon, _, nombre = UBICACIONES[clave]
+        return lat, lon, nombre
+    # El par lat,lon se parsea aca mismo en vez de reusar parse_surface_ref:
+    # esta funcion corre a nivel de modulo, antes de que parse_surface_ref exista
+    # mas abajo, y llamarla desde aca daba NameError justo en el caso para el que
+    # la variable se agrego. Verificado antes de arreglarlo.
+    if "," in crudo:
+        try:
+            lat_txt, lon_txt = crudo.split(",", 1)
+            lat, lon = float(lat_txt), float(lon_txt)
+        except ValueError:
+            lat = lon = None
+        if lat is not None and -90 <= lat <= 90 and -180 <= lon <= 180:
+            nombre = os.environ.get("ADSB_RECEIVER_NAME") or f"{lat:.4f}, {lon:.4f}"
+            return lat, lon, nombre
+    else:
+        try:
+            from pyModeS.position._airports import AIRPORTS
+            codigo = crudo.upper()
+            if codigo in AIRPORTS:
+                lat, lon = AIRPORTS[codigo]
+                return lat, lon, os.environ.get("ADSB_RECEIVER_NAME") or codigo
+        except Exception:
+            pass
+    raise ValueError(
+        f"ADSB_RECEIVER={crudo!r} no se entiende. Usa una clave conocida "
+        f"({', '.join(sorted(UBICACIONES))}), un par 'lat,lon', o un codigo "
+        f"ICAO de aeropuerto en mayusculas.")
+
+
+RECEIVER_LAT, RECEIVER_LON, RECEIVER_NAME = _resolver_receptor()
+# True si nadie movio la antena por configuracion. El mapa lo usa para avisar
+# cuando lo que se esta midiendo NO es la ubicacion por defecto.
+RECEIVER_ES_DEFAULT = not (os.environ.get("ADSB_RECEIVER") or "").strip()
 
 DEFAULT_SURFACE_REF: tuple[float, float] = (RECEIVER_LAT, RECEIVER_LON)
 
@@ -68,7 +134,15 @@ RADIO_ANALISIS_KM = float(os.environ.get("ADSB_ANALYSIS_KM", 50.0))
 # medirla con cinta: con la antena a 0 m en vez de 10 m el horizonte del caso
 # fantasma de e0b14a (19525 ft) baja de 331.2 a 318.1 km y la violacion sube de
 # 2.38x a 2.48x. La conclusion no depende de este numero. Medido.
-ANTENA_M = float(os.environ.get("ADSB_ANTENNA_M", 10.0))
+# La altura sale del preset de la ubicacion y no de un 10.0 fijo: es el numero
+# que decide si se ven los aviones EN PISTA (13.0 km de horizonte a 10 m contra
+# 52.2 km a 160 m), asi que mover la antena a la torre y dejar la altura vieja
+# haria subestimar el alcance de superficie por cuatro. ADSB_ANTENNA_M lo pisa
+# si hay que medirlo con cinta.
+_ALTURA_PRESET = UBICACIONES.get(
+    (os.environ.get("ADSB_RECEIVER") or UBICACION_DEFAULT).strip().lower().replace("_", "-"),
+    (0.0, 0.0, 10.0, ""))[2]
+ANTENA_M = float(os.environ.get("ADSB_ANTENNA_M", _ALTURA_PRESET))
 
 # Cuanto mas alla del horizonte 4/3 se sigue aceptando una posicion.
 #

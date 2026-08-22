@@ -210,7 +210,8 @@ async function cargar() {
   const sinPos = datos.without_position || 0;
   const ruido = datos.unconfirmed || 0;
   document.getElementById("alcance").innerHTML =
-    `Este análisis cubre <b>${radio} km</b> alrededor de la antena (San Isidro): `
+    `Este análisis cubre <b>${radio} km</b> alrededor de la antena`
+    + (datos.receiver_name ? ` (${datos.receiver_name})` : "") + ": "
     + `<b>${datos.within_radius}</b> aeronaves ubicadas dentro del radio`
     + (fuera ? `, y <b>${fuera}</b> recibida${fuera > 1 ? "s" : ""} más lejos `
              + `(hasta ${datos.outside_radius_max_km} km) que quedan fuera del recorte `
