@@ -744,6 +744,7 @@ def _read_db(path: str) -> list[Observation]:
             # IndexError en vez de dar None. Sin esto, leer una base vieja
             # reventaria en vez de degradar a "esta fuente no lo media".
             signal_dbfs=(row["signal_dbfs"] if "signal_dbfs" in row.keys() else None),
+            track_deg=(row["track_deg"] if "track_deg" in row.keys() else None),
         )
         for row in rows
     ]

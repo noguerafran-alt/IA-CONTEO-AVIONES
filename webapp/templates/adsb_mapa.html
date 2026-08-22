@@ -315,20 +315,73 @@ function dibujar(datos, trazas) {
   // con el mismo criterio que los cuadraditos de la lista, para que las dos
   // mitades de la pagina no usen escalas distintas.
   const idxTraza = {};
+  // La ESTELA de cada aeronave: por donde paso. Va mas fina y sin marcadores en
+  // cada punto, para que la silueta del avion sea lo que se ve y la estela
+  // acompanie, como en un radar de verdad. Antes cada punto era un circulo del
+  // mismo peso visual que el resto y el mapa se leia como una nube de puntos.
   for (const t of trazas) {
     idxTraza[t.icao24] = trazos.length;
     const nombre = t.registration || t.callsign || t.icao24;
     trazos.push({
       x: t.points.map(q => kmE(q.lon)), y: t.points.map(q => kmN(q.lat)),
-      mode: "lines+markers", name: nombre,
-      line: {color: colorAlt(t.points[t.points.length - 1].alt), width: 1.6},
-      marker: {size: 4, color: t.points.map(q => colorAlt(q.alt))},
+      mode: "lines", name: nombre,
+      line: {color: colorAlt(t.points[t.points.length - 1].alt), width: 1.4},
+      opacity: 0.55,
       customdata: t.points.map(q => [q.alt, q.km]),
       hovertemplate: "<b>" + nombre + "</b><br>%{customdata[0]:,.0f} ft"
                    + "<br>%{customdata[1]:.1f} km de la antena<extra></extra>",
       showlegend: false,
     });
   }
+
+  // --- los aviones ----------------------------------------------------------
+  // Una silueta por aeronave en su ultima posicion, rotada al rumbo. El simbolo
+  // es arrow-wide, que tiene las alas hacia atras y a este tamano se lee como un
+  // avion; angleref "up" hace que el angulo sea absoluto y no relativo al punto
+  // anterior, o sea grados verdaderos con el 0 al norte.
+  //
+  // Sin rumbo NO se dibuja avion, se dibuja un circulo: una silueta apuntando a
+  // algun lado es una afirmacion sobre hacia donde va, y si el dato no esta,
+  // poner una direccion cualquiera es inventarla. Se ven distintos a proposito.
+  const conRumbo = trazas.filter(t => t.track_deg !== null && t.track_deg !== undefined);
+  const sinRumbo = trazas.filter(t => t.track_deg === null || t.track_deg === undefined);
+  const ultimo = t => t.points[t.points.length - 1];
+  const datosAvion = t => {
+    const u = ultimo(t);
+    return [t.registration || "—", t.callsign || "—", u.alt, u.km,
+            t.track_deg === null || t.track_deg === undefined ? "—" : Math.round(t.track_deg),
+            t.track_source === "calculado" ? " (calculado con 2 posiciones)" : "",
+            t.points.length, t.icao24];
+  };
+  const plantilla =
+      "<b>%{customdata[0]}</b>  %{customdata[1]}<br>"
+    + "%{customdata[2]:,.0f} ft · %{customdata[3]:.1f} km<br>"
+    + "rumbo %{customdata[4]}°%{customdata[5]}<br>"
+    + "<span style='color:#9aa0a6'>%{customdata[6]} posiciones · %{customdata[7]}</span>"
+    + "<extra></extra>";
+
+  if (conRumbo.length)
+    trazos.push({
+      x: conRumbo.map(t => kmE(ultimo(t).lon)), y: conRumbo.map(t => kmN(ultimo(t).lat)),
+      mode: "markers", name: "aeronaves",
+      marker: {
+        symbol: "arrow-wide", size: 15, angleref: "up",
+        angle: conRumbo.map(t => t.track_deg),
+        color: conRumbo.map(t => colorAlt(ultimo(t).alt)),
+        line: {color: "#05070a", width: 1},
+      },
+      customdata: conRumbo.map(datosAvion), hovertemplate: plantilla,
+    });
+
+  if (sinRumbo.length)
+    trazos.push({
+      x: sinRumbo.map(t => kmE(ultimo(t).lon)), y: sinRumbo.map(t => kmN(ultimo(t).lat)),
+      mode: "markers", name: "sin rumbo conocido",
+      marker: {symbol: "circle", size: 7,
+               color: sinRumbo.map(t => colorAlt(ultimo(t).alt)),
+               line: {color: "#05070a", width: 1}},
+      customdata: sinRumbo.map(datosAvion), hovertemplate: plantilla,
+    });
 
   // --- descartadas ----------------------------------------------------------
   // Se dibujan, no se esconden: una posicion rechazada que desaparece del mapa

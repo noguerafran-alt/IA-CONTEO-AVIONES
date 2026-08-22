@@ -212,6 +212,29 @@ def summarize(observations: list[Observation]) -> list[AircraftSummary]:
     return sorted(summaries.values(), key=lambda s: s.last_seen, reverse=True)
 
 
+def _rumbo_entre(puntos: list[Observation]) -> float | None:
+    """Rumbo verdadero entre las dos ultimas posiciones, o None.
+
+    Respaldo para cuando la aeronave no transmitio velocidad. Se usan las dos
+    ULTIMAS y no la primera y la ultima: sobre un vuelo entero la recta que une
+    los extremos puede no tener nada que ver con hacia donde va ahora.
+
+    Se descarta si las dos posiciones estan a menos de 200 m: a esa distancia el
+    rumbo lo domina el error de redondeo del CPR y saldria un numero al azar,
+    que dibujado como un avion apuntando a algun lado se lee como un dato.
+    """
+    if len(puntos) < 2:
+        return None
+    from math import atan2, cos, degrees, radians
+    b, a = puntos[-1], puntos[-2]
+    lat_media = radians((a.latitude + b.latitude) / 2)
+    norte = (b.latitude - a.latitude) * 111.32
+    este = (b.longitude - a.longitude) * 111.32 * cos(lat_media)
+    if (norte * norte + este * este) ** 0.5 < 0.2:
+        return None
+    return (degrees(atan2(este, norte)) + 360.0) % 360.0
+
+
 def tracks(observations: list[Observation]) -> list[dict]:
     """Las posiciones de cada aeronave en orden, para dibujarlas en el mapa.
 
@@ -232,6 +255,16 @@ def tracks(observations: list[Observation]) -> list[dict]:
     for observation in sorted(con_posicion, key=lambda o: o.timestamp):
         por_avion.setdefault(observation.icao24, []).append(observation)
 
+    # El rumbo de cada aeronave, para poder dibujarla apuntando a donde va en vez
+    # de como un punto. Se busca el ULTIMO transmitido, incluso en observaciones
+    # sin posicion: los mensajes de velocidad y los de posicion son distintos y
+    # casi nunca vienen juntos, asi que exigir que la trama traiga las dos cosas
+    # dejaria casi todos los aviones sin rumbo.
+    ultimo_rumbo: dict[str, float] = {}
+    for o in sorted(observations, key=lambda o: o.timestamp):
+        if getattr(o, "track_deg", None) is not None:
+            ultimo_rumbo[o.icao24] = o.track_deg
+
     resultado = []
     for icao24, puntos in por_avion.items():
         etiqueta = next((o.callsign.strip() for o in reversed(puntos) if o.callsign), None)
@@ -239,10 +272,21 @@ def tracks(observations: list[Observation]) -> list[dict]:
         if aircraft_db is not None and aircraft_db.available() and not matricula:
             entry = aircraft_db.lookup(icao24)
             matricula = (entry or {}).get("registration") or None
+        # Transmitido si lo hay; si no, calculado con las dos ultimas posiciones.
+        # Se informa CUAL de los dos es: el calculado es el rumbo promedio del
+        # tramo, que en plena curva no es el rumbo actual, y presentarlos como
+        # equivalentes seria vender precision que no existe.
+        rumbo, origen_rumbo = ultimo_rumbo.get(icao24), "transmitido"
+        if rumbo is None:
+            rumbo = _rumbo_entre(puntos)
+            origen_rumbo = "calculado" if rumbo is not None else None
+
         resultado.append({
             "icao24": icao24,
             "callsign": etiqueta,
             "registration": matricula,
+            "track_deg": rumbo,
+            "track_source": origen_rumbo,
             "points": [
                 {"lat": o.latitude, "lon": o.longitude, "alt": o.altitude_ft,
                  "t": o.timestamp,

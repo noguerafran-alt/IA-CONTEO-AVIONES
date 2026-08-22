@@ -51,7 +51,7 @@ COLUMNS = [
 # signal_dbfs va SOLO a la base, igual que rejected_reason: el CSV es el
 # formato de intercambio y agregarle una columna rompe a quien lo lea por
 # posicion. Es None salvo por el camino de adsb_iq.py, el unico que lo mide.
-COLUMNS_DB = COLUMNS + ["rejected_reason", "signal_dbfs"]
+COLUMNS_DB = COLUMNS + ["rejected_reason", "signal_dbfs", "track_deg"]
 
 # rejected_reason tiene TRES estados y hay que respetarlos al consultar:
 #   NULL  fila escrita antes de que existiera el filtro -> NO EVALUADA.
@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS adsb_log (
     longitude REAL,
     on_ground INTEGER,
     rejected_reason TEXT,
-    signal_dbfs REAL
+    signal_dbfs REAL,
+    track_deg REAL
 );
 CREATE INDEX IF NOT EXISTS idx_adsb_epoch ON adsb_log(epoch);
 CREATE INDEX IF NOT EXISTS idx_adsb_icao ON adsb_log(icao24);
@@ -96,7 +97,8 @@ def migrar_esquema(conn: sqlite3.Connection, db_path: Path | str = DB_PATH) -> b
     # tiempo tiene que poder sumarse a una base vieja sin reescribirla, y sin
     # que agregar la segunda rompa la migracion de la primera.
     faltantes = [(nombre, tipo) for nombre, tipo in
-                 (("rejected_reason", "TEXT"), ("signal_dbfs", "REAL"))
+                 (("rejected_reason", "TEXT"), ("signal_dbfs", "REAL"),
+                  ("track_deg", "REAL"))
                  if nombre not in columnas]
     if not faltantes:
         return False
@@ -171,7 +173,7 @@ class Recorder:
         # gate corriendo en lectura (adsb_events.load_db).
         self.gate = PositionGate()
 
-        self._last: dict[str, tuple[float, float | None, float | None]] = {}
+        self._last: dict[str, tuple[float, float | None, float | None, float | None]] = {}
         self._csv_day: str | None = None
         self._csv_file = None
         self._csv_writer: csv.DictWriter | None = None
@@ -201,7 +203,7 @@ class Recorder:
         previous = self._last.get(observation.icao24)
         if previous is None:
             return True
-        last_time, last_alt, last_speed = previous
+        last_time, last_alt, last_speed, last_track = previous
         if observation.timestamp - last_time >= self.min_interval_s:
             return True
         # Altitude or speed changing materially means the aircraft is doing
@@ -213,6 +215,20 @@ class Recorder:
         if last_speed is not None and observation.ground_speed_kt is not None:
             if abs(observation.ground_speed_kt - last_speed) >= 10:
                 return True
+        # El rumbo entra por el mismo motivo que la altitud y la velocidad -- una
+        # curva es tambien "el avion haciendo algo"-- y por uno mas fuerte: el
+        # rumbo viaja SOLO en los mensajes de velocidad, que son una minoria del
+        # flujo. Con la ventana de 5 s casi siempre caian dentro del limite de
+        # uno de posicion y se descartaban, asi que el rumbo transmitido no se
+        # grababa NUNCA: medido, 0 filas con track_deg sobre 75 s de aire real.
+        # La primera aparicion siempre se guarda; despues, cada 5 grados.
+        if observation.track_deg is not None:
+            if last_track is None:
+                return True
+            # El rumbo es circular: entre 359 y 1 grado hay 2 grados, no 358.
+            delta = abs(observation.track_deg - last_track) % 360.0
+            if min(delta, 360.0 - delta) >= 5.0:
+                return True
         return False
 
     def record(self, observation: Observation) -> None:
@@ -220,9 +236,18 @@ class Recorder:
             self.skipped += 1
             return
 
-        self._last[observation.icao24] = (observation.timestamp,
-                                          observation.altitude_ft,
-                                          observation.ground_speed_kt)
+        previo = self._last.get(observation.icao24)
+        self._last[observation.icao24] = (
+            observation.timestamp,
+            observation.altitude_ft,
+            observation.ground_speed_kt,
+            # El ultimo rumbo CONOCIDO, no el de esta observacion: la mayoria de
+            # las tramas no traen rumbo, y guardar None pisaria la referencia y
+            # haria que la siguiente con rumbo pareciera "la primera" de nuevo,
+            # escribiendo una fila por cada mensaje de velocidad.
+            observation.track_deg if observation.track_deg is not None
+            else (previo[3] if previo and len(previo) > 3 else None),
+        )
         self.aircraft.add(observation.icao24)
         if observation.registration:
             self.with_registration.add(observation.icao24)
@@ -239,7 +264,7 @@ class Recorder:
         # escriban igual borraria la unica forma de distinguirlos.
         motivo = self.gate.feed(observation) or ""
         valores = ([row[c] if row[c] != "" else None for c in COLUMNS]
-                   + [motivo, observation.signal_dbfs])
+                   + [motivo, observation.signal_dbfs, observation.track_deg])
         self.conn.execute(
             f"INSERT INTO adsb_log ({','.join(COLUMNS_DB)}) "
             f"VALUES ({','.join('?' * len(COLUMNS_DB))})",

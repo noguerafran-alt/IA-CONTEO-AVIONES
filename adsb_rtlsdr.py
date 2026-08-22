@@ -138,6 +138,14 @@ def decoded_to_observation(icao24: str, decoded: dict, timestamp: float,
         # "latitude"/"longitude", no "lat"/"lon": ver el docstring del modulo.
         latitude=decoded.get("latitude"),
         longitude=decoded.get("longitude"),
+        # "track" es el rumbo sobre el SUELO (subtipo 1-2, derivado de la
+        # velocidad GNSS) y "heading" es hacia donde apunta la nariz (subtipo
+        # 3-4). Se prefiere track porque es el que describe por donde se esta
+        # moviendo, que es lo que un mapa tiene que mostrar; con viento cruzado
+        # los dos difieren varios grados y dibujar la nariz haria ver a los
+        # aviones desalineados de su propia traza.
+        track_deg=(decoded.get("track") if decoded.get("track") is not None
+                   else decoded.get("heading")),
         signal_dbfs=signal_dbfs,
         registration=None,   # raw ADS-B carries ICAO24, not the tail number
     )

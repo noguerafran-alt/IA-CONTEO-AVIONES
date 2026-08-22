@@ -50,6 +50,13 @@ class Observation:
     # SBS-1 tiran la magnitud, y el aircraft.json de dump1090 la expone como
     # "rssi" pero todavia no se lee. None significa "esta fuente no lo mide",
     # que es distinto de "llego con 0 dBFS".
+    # Rumbo en grados verdaderos, 0 = norte. El avion lo TRANSMITE en los
+    # mensajes de velocidad, asi que no hay que deducirlo de dos posiciones: con
+    # dos posiciones sale el rumbo promedio del tramo, que en una curva no es el
+    # rumbo actual, y encima solo se puede calcular si las dos posiciones
+    # llegaron. Se deja el calculo como respaldo para cuando no hay mensaje de
+    # velocidad, pero el transmitido manda.
+    track_deg: float | None = None
     signal_dbfs: float | None = None
 
     @property
