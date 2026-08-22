@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>Mapa ADS-B — Runway Video Analytics</title>
+<!-- Plotly desde /static y no de un CDN: el sistema tiene que funcionar sin
+     internet. Se baja una vez con "python webapp/bajar_plotly.py". -->
+<script src="/static/plotly.min.js"></script>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
@@ -28,10 +31,14 @@
            padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 20px; }
   .muted { color: #4b5563; }
 
-  svg { width: 100%; height: auto; display: block; }
+  /* Plotly se ajusta al contenedor, asi que el contenedor necesita alto propio.
+     Antes lo llenaba un SVG con viewBox, que traia el suyo; sin eso el div
+     colapsaba a 106 px y scaleanchor compensaba estirando el eje X a 908 km
+     para mantener la escala 1:1 -- el mapa quedaba una franja. */
+  #mapa { width: 100%; height: min(78vh, 760px); min-height: 420px; }
+  svg { display: block; }
   .traza { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
   .traza-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
-  g.avion.apagado { opacity: 0.18; }
   .etiqueta { font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #0f1115;
               stroke-width: 3px; stroke-linejoin: round; }
   /* Con el zoom por viewBox los trazos engordarian en pantalla al acercarse.
@@ -218,292 +225,201 @@ function dibujar(datos, trazas) {
   const rx = datos.receiver, aptos = datos.airports || [];
   const descartadas = datos.rejected || [];
   GEO = datos.geo || {costa: [], pistas: []};
+
+  // Proyeccion equirectangular centrada en el receptor, en KILOMETROS. Los ejes
+  // son km al este y al norte, no grados: asi el zoom de Plotly se lee como
+  // distancia y no hay que traducir nada mentalmente. A menos de 150 km la
+  // distorsion es despreciable.
   const cos0 = Math.cos(rx.lat * RAD);
-  // km al este / al norte del receptor.
-  const km = (lat, lon) => [(lon - rx.lon) * RAD * R_KM * cos0,
-                            (lat - rx.lat) * RAD * R_KM];
+  const kmE = lon => (lon - rx.lon) * RAD * R_KM * cos0;
+  const kmN = lat => (lat - rx.lat) * RAD * R_KM;
 
-  // El encuadre sale del contenido, no de un cuadrado centrado en la antena.
-  // Con un cuadrado, un solo avion lejano en un rincon obliga a dibujar ese
-  // radio en las cuatro direcciones y tres cuartos de la lamina quedan vacios.
-  // Los anillos se siguen trazando desde la antena y se recortan solos, que es
-  // como se ve un radar de verdad.
-  //
-  // Las DESCARTADAS no entran en esta cuenta a proposito: una sola posicion
-  // fantasma a 790 km escalaba el mapa entero y dejaba el trafico real en un
-  // pixel. Se dibujan igual (ver abajo) y si caen fuera del cuadro, se dice.
-  const puntos = [
-    [0, 0],                                        // la antena, siempre en cuadro
-    ...trazas.flatMap(t => t.points.map(p => km(p.lat, p.lon))),
-    ...aptos.map(a => km(a.lat, a.lon)),
-  ];
-  let minX = Math.min(...puntos.map(p => p[0])), maxX = Math.max(...puntos.map(p => p[0]));
-  let minY = Math.min(...puntos.map(p => p[1])), maxY = Math.max(...puntos.map(p => p[1]));
-
-  // Piso de 10 km de lado: sin esto, una sola posicion pegada a la antena daria
-  // un bbox de cero y una escala infinita.
-  const anchoKm = Math.max(maxX - minX, 10), altoKm = Math.max(maxY - minY, 10);
-  const margen = Math.max(anchoKm, altoKm) * 0.10;
-  minX -= margen; maxX += margen; minY -= margen; maxY += margen;
-
-  const ANCHO = 820, ALTO_MAX = 860;
-  let escala = ANCHO / (maxX - minX);
-  if ((maxY - minY) * escala > ALTO_MAX) escala = ALTO_MAX / (maxY - minY);
-  const laminaW = (maxX - minX) * escala, laminaH = (maxY - minY) * escala;
-
-  const px = (lat, lon) => {
-    const [x, y] = km(lat, lon);
-    return [(x - minX) * escala, (maxY - y) * escala];   // y del SVG crece hacia abajo
-  };
-  const centro = px(rx.lat, rx.lon);                     // origen de los anillos
-
-  const svg = crear("svg", {viewBox: `0 0 ${laminaW} ${laminaH}`,
-                            xmlns: "http://www.w3.org/2000/svg"});
-
-  // Fondo negro propio y no el del panel: sobre negro el azul del rio y los
-  // colores de altitud de las trazas ganan contraste, y el mapa se lee como un
-  // mapa y no como una tabla mas de la pagina.
-  svg.appendChild(crear("rect", {x: 0, y: 0, width: laminaW, height: laminaH,
-                                 fill: "#05070a"}));
-
-  // --- horizonte de superficie ----------------------------------------------
-  // El anillo mas importante del mapa: hasta aca se puede ver un avion EN LA
-  // PISTA. Afuera de este circulo un aeropuerto solo se ve por arriba, porque
-  // lo que esta en el suelo queda tapado por la curvatura de la Tierra. Depende
-  // de la ALTURA de la antena mucho mas que de la cercania, asi que se redibuja
-  // solo si se mueve o se sube el receptor.
-  if (rx.surface_horizon_km) {
-    svg.appendChild(crear("circle", {class: "horizonte", cx: centro[0], cy: centro[1],
-                                     r: rx.surface_horizon_km * escala}));
-    const yh = centro[1] - rx.surface_horizon_km * escala;
-    if (yh > 12)
-      svg.appendChild(crear("text", {class: "horizonte-txt", x: centro[0] + 4, y: yh - 4},
-                            `horizonte en pista ${rx.surface_horizon_km} km`));
-  }
-
-  // --- anillos de distancia -------------------------------------------------
-  // Se dibuja tambien el primero que se pasa del cuadro: su arco entra igual
-  // por alguna esquina y sirve de referencia. Cortar en el ultimo que entra
-  // entero dejaria el borde sin ninguna escala.
-  const radioVisible = Math.max(
-    Math.hypot(minX, minY), Math.hypot(maxX, minY),
-    Math.hypot(minX, maxY), Math.hypot(maxX, maxY));
-  for (const r of [10, 20, 40, 80, 160, 320]) {
-    svg.appendChild(crear("circle", {class: "anillo", cx: centro[0], cy: centro[1],
-                                     r: r * escala}));
-    // La etiqueta va sobre la vertical de la antena, donde el anillo cruza
-    // hacia arriba; si ese cruce quedo fuera del cuadro no se escribe, porque
-    // un numero flotando en el borde no dice a que circulo pertenece.
-    const yTexto = centro[1] - r * escala;
-    if (yTexto > 12)
-      svg.appendChild(crear("text", {class: "anillo-txt", x: centro[0] + 4,
-                                     y: yTexto + 12}, `${r} km`));
-    if (r > radioVisible) break;
-  }
+  const GRIS_AGUA = "#12171c", GRIS_COSTA = "#4a5560", GRIS_ANILLO = "#262626";
+  const trazos = [];
 
   // --- agua y costa ---------------------------------------------------------
-  // El rio se rellena, no solo se contornea: en la foto satelital lo que hace
-  // reconocible la zona es la MANCHA de agua, no su borde. Con las dos orillas
-  // (argentina y uruguaya) mas dos esquinas lejanas al noreste, el poligono
-  // cubre el estuario y deja la tierra en el negro del fondo.
+  // El rio se rellena y no solo se contornea: en una foto satelital lo que hace
+  // reconocible la zona es la mancha de agua, no su borde.
   if ((GEO.costa || []).length >= 2) {
-    const ar = GEO.costa[0].map(([la, lo]) => px(la, lo));
-    const uy = GEO.costa[1].map(([la, lo]) => px(la, lo));
-    // El agua queda entre las dos orillas: se recorre la argentina de norte a
-    // sur y la uruguaya de vuelta, cerrando por el Atlantico.
-    const agua = ar.concat(uy.slice().reverse());
-    svg.appendChild(crear("polygon", {class: "agua",
-                                      points: agua.map(q => q.join(",")).join(" ")}));
+    const ar = GEO.costa[0], uy = GEO.costa[1];
+    const anillo = ar.concat(uy.slice().reverse());
+    trazos.push({
+      x: anillo.map(q => kmE(q[1])), y: anillo.map(q => kmN(q[0])),
+      fill: "toself", fillcolor: GRIS_AGUA, mode: "lines",
+      line: {width: 0}, hoverinfo: "skip", showlegend: false,
+    });
     for (const orilla of [ar, uy])
-      svg.appendChild(crear("polyline", {class: "costa",
-                                         points: orilla.map(q => q.join(",")).join(" ")}));
+      trazos.push({
+        x: orilla.map(q => kmE(q[1])), y: orilla.map(q => kmN(q[0])),
+        mode: "lines", line: {color: GRIS_COSTA, width: 1.2},
+        hoverinfo: "skip", showlegend: false,
+      });
   }
 
-  // --- aeropuertos ----------------------------------------------------------
-  for (const a of aptos) {
-    const [x, y] = px(a.lat, a.lon);
-    // Relleno si la pista entra en el horizonte de superficie, hueco si no.
-    // Es la diferencia entre "puedo contar sus operaciones" y "solo lo veo
-    // pasar por arriba", y es el dato que decide donde conviene poner la antena.
-    const vePista = a.surface_visible;
-    svg.appendChild(crear("rect", {
-      x: x - 4, y: y - 4, width: 8, height: 8,
-      fill: vePista ? "#34d399" : "none",
-      stroke: vePista ? "#34d399" : "#6b7280", "stroke-width": 1.5,
-      transform: `rotate(45 ${x} ${y})`}));
-    svg.appendChild(crear("text", {
-      class: "apto-txt", x: x + 9, y: y + 4,
-      fill: vePista ? "#34d399" : "#6b7280"},
-      `${a.name} (${a.code})` + (a.km != null ? ` · ${a.km} km` : "")
-      + (vePista ? " · pista visible" : " · pista bajo el horizonte")));
+  // --- anillos de distancia y horizonte de superficie ------------------------
+  // Un solo trazo con nulls entre circulos en vez de uno por anillo: Plotly
+  // corta la linea en cada null, y seis trazos que nadie va a togglear por
+  // separado solo ensucian la leyenda.
+  const circulo = (r, pasos) => {
+    const xs = [], ys = [];
+    for (let i = 0; i <= (pasos || 180); i++) {
+      const a = i / (pasos || 180) * 2 * Math.PI;
+      xs.push(r * Math.cos(a)); ys.push(r * Math.sin(a));
+    }
+    xs.push(null); ys.push(null);
+    return [xs, ys];
+  };
+  const ax = [], ay = [], etx = [], ety = [], ett = [];
+  for (const r of [10, 20, 40, 80, 160]) {
+    const c = circulo(r);
+    ax.push.apply(ax, c[0]); ay.push.apply(ay, c[1]);
+    etx.push(0); ety.push(r); ett.push(r + " km");
+  }
+  trazos.push({x: ax, y: ay, mode: "lines", line: {color: GRIS_ANILLO, width: 1},
+               hoverinfo: "skip", showlegend: false});
+  trazos.push({x: etx, y: ety, mode: "text", text: ett,
+               textposition: "top center", textfont: {color: "#555555", size: 9},
+               hoverinfo: "skip", showlegend: false});
+
+  if (rx.surface_horizon_km) {
+    const h = circulo(rx.surface_horizon_km);
+    trazos.push({
+      x: h[0], y: h[1], mode: "lines",
+      name: "horizonte en pista " + rx.surface_horizon_km + " km",
+      line: {color: "#34d399", width: 1.5, dash: "dash"},
+      hovertemplate: "hasta acá se ve un avión EN LA PISTA<br>"
+                   + rx.surface_horizon_km + " km<extra></extra>",
+    });
   }
 
   // --- pistas ---------------------------------------------------------------
-  // Se dibujan con los DOS umbrales reales de cada pista (ver geografia.py,
-  // datos de OurAirports), asi que la orientacion es la de verdad y no la
-  // deducida de la designacion: "13/31" es rumbo magnetico redondeado a diez
-  // grados, y con la declinacion de Buenos Aires eso deja la pista varios
-  // grados torcida. A esta escala una pista mide pocos pixeles, pero es lo que
-  // le da sentido a la direccion de las trazas: un avion que aterriza viene
-  // alineado con ella.
+  // Con los DOS umbrales reales de cada pista (geografia.py, datos de
+  // OurAirports), asi la orientacion sale del dato. Deducirla de la designacion
+  // la dejaria torcida: "13/31" es rumbo magnetico redondeado a diez grados y en
+  // Buenos Aires la declinacion ronda los -8 grados.
+  const pxs = [], pys = [], ptxt = [];
   for (const pista of (GEO.pistas || [])) {
-    const [x1, y1] = px(pista.le[0], pista.le[1]);
-    const [x2, y2] = px(pista.he[0], pista.he[1]);
-    svg.appendChild(crear("line", {class: "pista", x1, y1, x2, y2,
-                                   "vector-effect": "non-scaling-stroke"}));
+    const rotulo = pista.apt + " " + pista.nombre + " · " + pista.largo_m + " m";
+    pxs.push(kmE(pista.le[1]), kmE(pista.he[1]), null);
+    pys.push(kmN(pista.le[0]), kmN(pista.he[0]), null);
+    ptxt.push(rotulo, rotulo, "");
   }
-
-  // --- receptor -------------------------------------------------------------
-  // La etiqueta va debajo del triangulo y centrada: a la derecha se cruzaba con
-  // las trazas que salen hacia el este, que es justo donde esta el rio.
-  const [rxX, rxY] = centro;
-  svg.appendChild(crear("path", {
-    d: `M ${rxX} ${rxY - 9} L ${rxX + 8} ${rxY + 6} L ${rxX - 8} ${rxY + 6} Z`,
-    fill: "#f87171"}));
-  // El nombre de la ubicacion y no un "Antena" generico: si alguien mueve el
-  // receptor por ADSB_RECEIVER, el mapa tiene que decir desde donde esta
-  // midiendo. Un mapa que se dibuja igual desde dos lugares distintos miente.
-  svg.appendChild(crear("text", {class: "rx-txt", x: rxX, y: rxY + 20,
-                                 "text-anchor": "middle"},
-                        rx.name || "Antena"));
-  if (rx.antenna_m)
-    svg.appendChild(crear("text", {class: "rx-sub", x: rxX, y: rxY + 32,
-                                   "text-anchor": "middle"},
-                          `antena a ${rx.antenna_m} m`));
-
-  // --- zoom y arrastre ------------------------------------------------------
-  // Se mueve el viewBox y no un transform: asi el zoom es geometrico de verdad
-  // -las distancias siguen siendo distancias- y los anillos, la costa y las
-  // pistas se recortan solos contra el borde, como en un radar.
-  //
-  // Los trazos llevan vector-effect="non-scaling-stroke" para no engordar al
-  // acercarse, y los textos se re-escalan a mano en cada paso: una etiqueta que
-  // crece con el zoom termina tapando el mapa que uno estaba tratando de mirar.
-  const VB = {x: 0, y: 0, w: laminaW, h: laminaH};
-  const base = {...VB};
-  const TEXTOS = [];   // [nodo, tamano original] -- se llena al insertar en el DOM
-  const MARCAS = [];   // [nodo, radio original] -- idem, para los puntos
-
-  function aplicarVista() {
-    svg.setAttribute("viewBox", `${VB.x} ${VB.y} ${VB.w} ${VB.h}`);
-    const k = VB.w / base.w;                     // <1 = acercado
-    for (const [nodo, tamano] of TEXTOS) nodo.setAttribute("font-size", tamano * k);
-    for (const [nodo, r] of MARCAS) nodo.setAttribute("r", r * k);
-  }
-
-  svg.addEventListener("wheel", ev => {
-    ev.preventDefault();
-    const caja = svg.getBoundingClientRect();
-    // El punto bajo el cursor se queda quieto: es lo que hace que el zoom se
-    // sienta como agarrar el mapa y no como saltar a otro lado.
-    const fx = (ev.clientX - caja.left) / caja.width;
-    const fy = (ev.clientY - caja.top) / caja.height;
-    const factor = ev.deltaY > 0 ? 1.15 : 1 / 1.15;
-    const nuevoW = Math.min(base.w * 1.2, Math.max(base.w / 60, VB.w * factor));
-    const nuevoH = nuevoW * (base.h / base.w);
-    VB.x += (VB.w - nuevoW) * fx;
-    VB.y += (VB.h - nuevoH) * fy;
-    VB.w = nuevoW; VB.h = nuevoH;
-    aplicarVista();
-  }, {passive: false});
-
-  let arrastre = null;
-  svg.addEventListener("pointerdown", ev => {
-    arrastre = {x: ev.clientX, y: ev.clientY, vx: VB.x, vy: VB.y};
-    svg.setPointerCapture(ev.pointerId);
-    svg.style.cursor = "grabbing";
-  });
-  svg.addEventListener("pointermove", ev => {
-    if (!arrastre) return;
-    const caja = svg.getBoundingClientRect();
-    VB.x = arrastre.vx - (ev.clientX - arrastre.x) * (VB.w / caja.width);
-    VB.y = arrastre.vy - (ev.clientY - arrastre.y) * (VB.h / caja.height);
-    aplicarVista();
-  });
-  const soltar = () => { arrastre = null; svg.style.cursor = "grab"; };
-  svg.addEventListener("pointerup", soltar);
-  svg.addEventListener("pointercancel", soltar);
-  svg.addEventListener("dblclick", () => { Object.assign(VB, base); aplicarVista(); });
-  svg.style.cursor = "grab";
-  svg.style.touchAction = "none";
+  if (pxs.length)
+    trazos.push({x: pxs, y: pys, mode: "lines", name: "pistas",
+                 line: {color: "#f5f5f5", width: 3},
+                 text: ptxt, hovertemplate: "%{text}<extra></extra>"});
 
   // --- trayectorias ---------------------------------------------------------
+  // Una traza por aeronave y no todas juntas: asi cada una se puede resaltar
+  // desde la lista y el hover dice de quien es la linea. El color va por altitud
+  // con el mismo criterio que los cuadraditos de la lista, para que las dos
+  // mitades de la pagina no usen escalas distintas.
+  const idxTraza = {};
   for (const t of trazas) {
-    const g = crear("g", {class: "avion", "data-icao": t.icao24});
-    const pts = t.points.map(p => ({...p, xy: px(p.lat, p.lon)}));
-
-    // Un segmento por tramo para que el color siga la altitud a lo largo del
-    // vuelo: una polilinea de un color solo mostraria la ultima altitud.
-    for (let i = 1; i < pts.length; i++) {
-      const [x1, y1] = pts[i - 1].xy, [x2, y2] = pts[i].xy;
-      g.appendChild(crear("line", {class: "traza", x1, y1, x2, y2,
-                                   stroke: colorAlt(pts[i].alt)}));
-      g.appendChild(crear("line", {class: "traza-hit", x1, y1, x2, y2}));
-    }
-    for (const p of pts)
-      g.appendChild(crear("circle", {cx: p.xy[0], cy: p.xy[1], r: 2.5,
-                                     fill: colorAlt(p.alt)}));
-
-    const ultimo = pts[pts.length - 1];
+    idxTraza[t.icao24] = trazos.length;
     const nombre = t.registration || t.callsign || t.icao24;
-    const etiqueta = crear("text", {class: "etiqueta", x: ultimo.xy[0] + 7,
-                                    y: ultimo.xy[1] - 6, fill: colorAlt(ultimo.alt)}, nombre);
-    g.appendChild(etiqueta);
-
-    const alt = ultimo.alt === null || ultimo.alt === undefined
-              ? "sin altitud" : Math.round(ultimo.alt).toLocaleString("es-AR") + " ft";
-    g.appendChild(crear("title", {},
-      `${nombre} · ${t.points.length} posiciones · ${alt} · a ${dist(ultimo.km)} de la antena`));
-    svg.appendChild(g);
+    trazos.push({
+      x: t.points.map(q => kmE(q.lon)), y: t.points.map(q => kmN(q.lat)),
+      mode: "lines+markers", name: nombre,
+      line: {color: colorAlt(t.points[t.points.length - 1].alt), width: 1.6},
+      marker: {size: 4, color: t.points.map(q => colorAlt(q.alt))},
+      customdata: t.points.map(q => [q.alt, q.km]),
+      hovertemplate: "<b>" + nombre + "</b><br>%{customdata[0]:,.0f} ft"
+                   + "<br>%{customdata[1]:.1f} km de la antena<extra></extra>",
+      showlegend: false,
+    });
   }
 
-  // --- posiciones descartadas -----------------------------------------------
-  // Se dibujan como cruz gris hueca, sueltas y sin unirse a ninguna traza.
-  // Sacarlas del dibujo tambien seria descartarlas en silencio; la version
-  // honesta es mostrarlas marcadas como lo que son, distintas de un dato.
-  // Las que caen fuera del encuadre no se pintan: una cruz clavada contra el
-  // borde miente sobre donde estaba. Se cuentan en la tarjeta de arriba, que
-  // es donde igual se leen sus numeros.
-  let fueraDeCuadro = 0;
-  for (const d of descartadas) {
-    const [x, y] = px(d.lat, d.lon);
-    if (x < 0 || x > laminaW || y < 0 || y > laminaH) { fueraDeCuadro++; continue; }
-    const g = crear("g", {class: "descartada"});
-    g.appendChild(crear("path", {class: "cruz",
-      d: `M ${x - 5} ${y - 5} L ${x + 5} ${y + 5} M ${x + 5} ${y - 5} L ${x - 5} ${y + 5}`}));
-    g.appendChild(crear("circle", {class: "cruz", cx: x, cy: y, r: 7}));
-    const alt = d.alt_ft === null || d.alt_ft === undefined
-              ? "sin altitud" : Math.round(d.alt_ft).toLocaleString("es-AR") + " ft";
-    const horiz = d.horizonte_km ? ` — horizonte ${Math.round(d.horizonte_km)} km` : "";
-    g.appendChild(crear("title", {},
-      `descartada: ${dist(d.km)} a ${alt}${horiz}`));
-    g.appendChild(crear("text", {class: "cruz-txt", x: x + 10, y: y + 4},
-                        `${d.icao24} descartada`));
-    svg.appendChild(g);
-  }
-  if (fueraDeCuadro) {
-    svg.appendChild(crear("text", {class: "cruz-txt", x: 8, y: laminaH - 8},
-      `${fueraDeCuadro} posición${fueraDeCuadro === 1 ? "" : "es"} descartada${fueraDeCuadro === 1 ? "" : "s"} `
-      + `queda${fueraDeCuadro === 1 ? "" : "n"} fuera de este encuadre (ver arriba)`));
-  }
+  // --- descartadas ----------------------------------------------------------
+  // Se dibujan, no se esconden: una posicion rechazada que desaparece del mapa
+  // vuelve el descarte invisible. Cruz gris y sin unirla a ninguna traza.
+  if (descartadas.length)
+    trazos.push({
+      x: descartadas.map(d => kmE(d.lon)), y: descartadas.map(d => kmN(d.lat)),
+      mode: "markers", name: "descartadas",
+      marker: {symbol: "x", size: 9, color: "#6b7280"},
+      text: descartadas.map(d => d.icao24 + " · " + d.km + " km · descartada por " + d.motivo),
+      hovertemplate: "%{text}<extra></extra>",
+    });
 
-  const contenedor = document.getElementById("mapa");
-  contenedor.innerHTML = "";
-  contenedor.appendChild(svg);
+  // --- aeropuertos y receptor -----------------------------------------------
+  // Rombo lleno si la pista entra en el horizonte de superficie, hueco si no: es
+  // la diferencia entre poder contar sus operaciones y solo verlo pasar por
+  // arriba, y es el dato que decide donde conviene poner la antena.
+  trazos.push({
+    x: aptos.map(a => kmE(a.lon)), y: aptos.map(a => kmN(a.lat)),
+    mode: "markers+text",
+    marker: {symbol: "diamond", size: 9,
+             color: aptos.map(a => a.surface_visible ? "#34d399" : "rgba(0,0,0,0)"),
+             line: {color: aptos.map(a => a.surface_visible ? "#34d399" : "#9aa0a6"), width: 1.5}},
+    text: aptos.map(a => " " + a.name + " (" + a.code + ")"),
+    textposition: "middle right", textfont: {color: "#d4d4d4", size: 10},
+    customdata: aptos.map(a => [a.km, a.surface_visible ? "sí" : "no"]),
+    hovertemplate: "%{text}<br>%{customdata[0]:.1f} km"
+                 + "<br>pista visible: %{customdata[1]}<extra></extra>",
+    showlegend: false,
+  });
+  trazos.push({
+    x: [0], y: [0], mode: "markers+text",
+    marker: {symbol: "triangle-up", size: 13, color: "#f87171"},
+    text: [" " + rx.name], textposition: "middle right",
+    textfont: {color: "#f87171", size: 11},
+    hovertemplate: "<b>" + rx.name + "</b><br>antena a " + rx.antenna_m + " m"
+                 + "<br>horizonte en pista " + rx.surface_horizon_km + " km<extra></extra>",
+    showlegend: false,
+  });
 
-  // El tamano original de cada texto se lee DESPUES de insertar: viene de las
-  // clases CSS, no de un atributo, asi que antes de estar en el DOM no existe.
-  // Se guarda para poder re-escalarlo en cada paso de zoom y que las etiquetas
-  // mantengan su tamano en pantalla.
-  for (const t of svg.querySelectorAll("text")) {
-    const tam = parseFloat(getComputedStyle(t).fontSize) || 11;
-    TEXTOS.push([t, tam]);
-    t.setAttribute("font-size", tam);
-  }
-  for (const c of svg.querySelectorAll("circle.punto"))
-    MARCAS.push([c, parseFloat(c.getAttribute("r")) || 2]);
+  // --- encuadre -------------------------------------------------------------
+  // Sale del contenido y no de un cuadrado centrado en la antena: con un
+  // cuadrado, un solo avion lejano obliga a dibujar ese radio en las cuatro
+  // direcciones y tres cuartos de la lamina quedan vacios. Las descartadas NO
+  // entran en la cuenta: una posicion fantasma a 790 km escalaba el mapa entero
+  // y dejaba el trafico real en un pixel.
+  const xs = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmE(q.lon))), []),
+                        aptos.map(a => kmE(a.lon)));
+  const ys = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmN(q.lat))), []),
+                        aptos.map(a => kmN(a.lat)));
+  const margen = 0.08;
+  const anchoX = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), 10);
+  const anchoY = Math.max(Math.max.apply(null, ys) - Math.min.apply(null, ys), 10);
+  const rangoX = [Math.min.apply(null, xs) - anchoX * margen,
+                  Math.max.apply(null, xs) + anchoX * margen];
+  const rangoY = [Math.min.apply(null, ys) - anchoY * margen,
+                  Math.max.apply(null, ys) + anchoY * margen];
+
+  const ejeComun = {showgrid: false, zeroline: false, showticklabels: false,
+                    ticks: "", showline: false};
+  const disposicion = {
+    paper_bgcolor: "#05070a", plot_bgcolor: "#05070a",
+    margin: {l: 4, r: 4, t: 4, b: 4},
+    xaxis: Object.assign({}, ejeComun, {range: rangoX}),
+    // scaleanchor mantiene la misma escala en los dos ejes. Sin esto el zoom
+    // deforma el mapa y una traza recta se ve curva, que es peor que no tener
+    // zoom: invita a leer una maniobra donde no hubo ninguna.
+    yaxis: Object.assign({}, ejeComun, {range: rangoY, scaleanchor: "x", scaleratio: 1}),
+    showlegend: true,
+    legend: {x: 0, y: 1, bgcolor: "rgba(5,7,10,0.7)", bordercolor: "#262626",
+             borderwidth: 1, font: {color: "#d4d4d4", size: 10}},
+    hoverlabel: {bgcolor: "#1a1d24", bordercolor: "#363b46",
+                 font: {color: "#e6e6e6", size: 11}},
+    dragmode: "pan",
+  };
+  const opciones = {
+    responsive: true, scrollZoom: true, displaylogo: false,
+    // Se sacan los botones que no aplican: seleccionar puntos con lazo no hace
+    // nada con estos datos y solo ocupa lugar en la barra.
+    modeBarButtonsToRemove: ["select2d", "lasso2d"],
+    toImageButtonOptions: {filename: "mapa-adsb", scale: 2},
+  };
+
+  Plotly.newPlot("mapa", trazos, disposicion, opciones);
+  MAPA_IDX = idxTraza;
   document.getElementById("leyenda").style.display = "";
 }
+
+// Que traza de Plotly corresponde a cada aeronave, para poder resaltarla desde
+// la lista con un restyle en vez de volver a dibujar el mapa entero.
+let MAPA_IDX = {};
 
 // La tarjeta de descartadas aparece SIEMPRE, con rechazos o sin ellos: un
 // contador ausente no se distingue de un contador que nunca corrio. Y la regla
@@ -581,13 +497,18 @@ function pintarLista(trazas, ocultas = new Set()) {
   lista.querySelectorAll("li").forEach(li => {
     const icao = li.dataset.icao;
     if (ocultas.has(icao)) return;   // no esta en el mapa: resaltar apagaria todo
+    // Resaltar es un restyle de opacidad y no un redibujado: volver a llamar a
+    // newPlot en cada mouseenter perderia el zoom que la persona acababa de
+    // hacer, que es justo lo que estaba usando para mirar esa traza.
+    const indices = Object.values(MAPA_IDX);
+    const propio = MAPA_IDX[icao];
     li.addEventListener("mouseenter", () => {
-      document.querySelectorAll("g.avion").forEach(g =>
-        g.classList.toggle("apagado", g.dataset.icao !== icao));
+      if (propio === undefined) return;
+      Plotly.restyle("mapa", {opacity: indices.map(i => i === propio ? 1 : 0.12)}, indices);
       lista.querySelectorAll("li").forEach(o => o.classList.toggle("apagado", o !== li));
     });
     li.addEventListener("mouseleave", () => {
-      document.querySelectorAll("g.avion").forEach(g => g.classList.remove("apagado"));
+      Plotly.restyle("mapa", {opacity: indices.map(() => 1)}, indices);
       lista.querySelectorAll("li").forEach(o => o.classList.remove("apagado"));
     });
   });
@@ -780,11 +701,13 @@ async function cargar() {
      es hasta dónde se puede ver un avión <em>en la pista</em>: ${rx.surface_horizon_km} km
      desde esta altura. Los aeropuertos con el rombo lleno tienen su pista dentro de ese
      círculo; los huecos solo se ven por arriba.${lejanoTxt}
-     <br><br><strong>Rueda para acercar, arrastrá para mover, doble clic para volver.</strong>
-     El dibujo es SVG generado acá, sin tiles ni librerías: el sistema funciona sin internet
-     y un mapa que pide tiles lo rompería. La costa sale de Natural Earth y las pistas de
-     OurAirports, con los dos umbrales reales de cada una — dibujadas a ojo se verían igual
-     de convincentes y estarían torcidas.`;
+     <br><br><strong>Rueda para acercar, arrastrá para mover, doble clic para volver al
+     encuadre.</strong> Pasando el mouse por una traza dice de qué aeronave es, a qué altitud
+     y a qué distancia; la barra de arriba a la derecha exporta el mapa como imagen.
+     <br><br>Está hecho con Plotly servido desde el disco, no desde un CDN: el sistema tiene
+     que funcionar sin internet. No usa tiles ni un mapa base de terceros — la costa sale de
+     Natural Earth y las pistas de OurAirports, con los dos umbrales reales de cada una.
+     Dibujadas a ojo se verían igual de convincentes y estarían torcidas.`;
 }
 
 // Redibujar mientras el mouse esta encima destruye el nodo bajo el cursor y se

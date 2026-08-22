@@ -37,3 +37,6 @@ tools/
 
 # Journal transitorio de SQLite: aparece mientras se graba, no es del proyecto.
 *.db-journal
+
+# plotly.min.js se baja con webapp/bajar_plotly.py, no viaja en el repo.
+webapp/static/plotly.min.js

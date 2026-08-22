@@ -25,6 +25,14 @@ DATASET_DIR = ROOT / "dataset"
 
 app = FastAPI(title="Runway Video Analytics")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Plotly se sirve desde el disco y no desde un CDN: el sistema tiene que
+# funcionar sin internet, y una pagina que se queda en blanco porque no llego un
+# script de un tercero no es aceptable para algo que corre al lado de una pista.
+# El archivo se baja una vez con "python webapp/bajar_plotly.py" y esta en
+# .gitignore, igual que rtl_adsb.exe y la base de OpenSky.
+STATIC_DIR = Path(__file__).parent / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/thumbnails", StaticFiles(directory=str(THUMBNAILS_DIR)), name="thumbnails")
 app.mount("/videos", StaticFiles(directory=str(WEB_VIDEO_DIR)), name="videos")
 if (DATASET_DIR / "images").exists():

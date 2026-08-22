@@ -78,11 +78,11 @@
     <div class="bar">
       <span><span class="status-dot off" id="dot"></span><span id="status-text">detenido</span></span>
       <select id="source">
-        <option value="auto">Automatico</option>
-        <option value="rtlsdr">Dongle RTL-SDR directo</option>
-        <option value="iq">Dongle RTL-SDR + nivel de senal (IQ crudo)</option>
-        <option value="sbs">Feed SBS-1 (RTL1090, dump1090...)</option>
-        <option value="json">dump1090 aircraft.json</option>
+        <option value="auto" title="Usa el dongle directo si encuentra tools/rtlsdr/rtl_adsb.exe; si no, busca un feed SBS-1. Nunca elige IQ crudo: para el nivel de senal hay que pedirlo a mano.">Automatico</option>
+        <option value="rtlsdr" title="Corre rtl_adsb.exe, que entrega el hex ya decodificado. No trae nivel de senal. Toma el dongle en exclusiva.">Dongle RTL-SDR directo</option>
+        <option value="iq" title="Lee las muestras crudas con rtl_sdr.exe y demodula en Python (adsb_iq.py). Es el unico que mide el nivel de senal en dBFS. Toma el dongle en exclusiva.">Dongle RTL-SDR + nivel de señal (IQ crudo)</option>
+        <option value="sbs" title="Se conecta por TCP a OTRO programa que ya esta decodificando (prueba los puertos 30003, 31004, 31014, 30103). El dongle lo tiene ese programa, no este.">Feed SBS-1 (RTL1090, dump1090...)</option>
+        <option value="json" title="Consulta el JSON de un dump1090 corriendo (por defecto 127.0.0.1:8080). Necesita dump1090 con su servidor web; el dongle lo tiene el.">dump1090 aircraft.json</option>
       </select>
       <button class="primary" id="btn-start">Iniciar</button>
       <button class="danger" id="btn-stop" disabled>Detener</button>
