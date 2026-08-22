@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Análisis ADS-B — Runway Video Analytics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 24px; }
+  a { color: #60a5fa; }
+
+  .cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 16px 24px; min-width: 140px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .sub { color: #4b5563; font-size: 0.8rem; margin-top: 2px; }
+  .card.matricula .n { color: #34d399; }
+  .card.registros .n { color: #60a5fa; }
+  .card.eventos .n { color: #fbbf24; }
+
+  .panel { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.5; margin: 10px 0 0; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 20px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.9rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ident { color: #fbbf24; font-weight: 600; }
+  .matri { color: #34d399; font-weight: 600; }
+  .muted { color: #4b5563; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+
+  /* Cobertura: la barra hace visible de un vistazo la diferencia entre
+     "cuantos mensajes traen el campo" y "cuantas aeronaves terminan con el". */
+  .barra { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle;
+           background: #60a5fa; min-width: 2px; }
+  .barra.aviones { background: #34d399; }
+  .barra.nula { background: #4b5563; }
+
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; }
+  .chip.aterrizo { background: #14532d; color: #86efac; }
+  .chip.despego  { background: #1e3a5f; color: #93c5fd; }
+  .chip.tierra   { background: #3f2d12; color: #fcd34d; }
+  .chip.otro     { background: #262a33; color: #9aa0a6; }
+
+  input[type=search] { background: #262a33; color: #e6e6e6; border: 1px solid #363b46;
+                       border-radius: 6px; padding: 8px 14px; font-size: 0.9rem; width: 260px; }
+</style>
+</head>
+<body>
+  <h1>Análisis de lo grabado por ADS-B</h1>
+  <div class="subtitle">
+    Una fila por aeronave, juntando todos sus mensajes ·
+    <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
+  </div>
+
+  <div id="aviso-posicion" class="aviso" style="display:none">
+    <strong>La posición (latitud/longitud) todavía no se decodifica.</strong>
+    Es un problema abierto, no un dato que falte por poca señal. No afecta el conteo
+    ni la identificación de aeronaves, que usan altitud, velocidad e ICAO24.
+  </div>
+
+  <div class="cards">
+    <div class="card registros"><div class="n" id="c-aeronaves">–</div><div class="label">Aeronaves</div>
+      <div class="sub" id="c-obs"></div></div>
+    <div class="card matricula"><div class="n" id="c-identificadas">–</div><div class="label">Identificadas</div>
+      <div class="sub" id="c-ident-pct"></div></div>
+    <div class="card"><div class="n" id="c-matriculas">–</div><div class="label">Con matrícula</div>
+      <div class="sub">del registro por ICAO24</div></div>
+    <div class="card eventos"><div class="n" id="c-eventos">–</div><div class="label">Operaciones</div>
+      <div class="sub">aterrizajes y despegues</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Qué trae cada campo</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Campo</th><th>Origen</th>
+          <th colspan="2">En los mensajes</th>
+          <th colspan="2">En las aeronaves</th>
+        </tr></thead>
+        <tbody id="tabla-campos"></tbody>
+      </table>
+    </div>
+    <p class="nota">
+      Las dos columnas miden cosas distintas y la diferencia importa: un mensaje ADS-B
+      suelto trae la altitud <em>o</em> la velocidad <em>o</em> el distintivo de vuelo, casi
+      nunca dos. Por eso el distintivo aparece en muy pocos mensajes pero, acumulando en el
+      tiempo, se termina conociendo el de la mayoría de las aeronaves.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2>Cobertura de la antena</h2>
+    <p class="nota" id="cobertura-texto">–</p>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+    <h2 style="margin:0">Aeronaves</h2>
+    <input type="search" id="buscar" placeholder="filtrar por vuelo, matrícula, tipo…">
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>ICAO24</th><th>Vuelo</th><th>Matrícula</th><th>Tipo</th><th>Operador</th>
+        <th class="num">Alt. mín</th><th class="num">Alt. máx</th><th class="num">Vel. máx</th>
+        <th class="num">Msjs</th><th>Estado</th><th>Última vez</th>
+      </tr></thead>
+      <tbody id="tabla-aviones"><tr><td colspan="11" class="empty">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+const num = (v, suf = "") => v === null || v === undefined ? '<span class="muted">–</span>'
+                                                           : Math.round(v).toLocaleString("es-AR") + suf;
+const hora = ts => new Date(ts * 1000).toLocaleString("es-AR",
+                    {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
+
+function chipEstado(estado) {
+  const clase = estado === "aterrizo" ? "aterrizo" : estado === "despego" ? "despego"
+              : estado === "en tierra" ? "tierra" : "otro";
+  return `<span class="chip ${clase}">${estado}</span>`;
+}
+
+let aeronaves = [];
+
+function pintarAeronaves(filtro = "") {
+  const texto = filtro.trim().toLowerCase();
+  const filas = aeronaves.filter(a => !texto || [a.icao24, a.callsign, a.registration,
+                                                 a.aircraft_type, a.operator]
+                                        .some(v => (v || "").toLowerCase().includes(texto)));
+  const cuerpo = document.getElementById("tabla-aviones");
+  if (!filas.length) {
+    cuerpo.innerHTML = '<tr><td colspan="11" class="empty">Sin resultados</td></tr>';
+    return;
+  }
+  cuerpo.innerHTML = filas.map(a => `<tr>
+    <td class="mono">${a.icao24}</td>
+    <td class="ident">${a.callsign || '<span class="muted">–</span>'}</td>
+    <td class="matri">${a.registration || '<span class="muted">–</span>'}</td>
+    <td>${a.aircraft_type || '<span class="muted">–</span>'}</td>
+    <td>${a.operator || '<span class="muted">–</span>'}</td>
+    <td class="num">${num(a.min_altitude_ft, " ft")}</td>
+    <td class="num">${num(a.max_altitude_ft, " ft")}</td>
+    <td class="num">${num(a.max_speed_kt, " kt")}</td>
+    <td class="num">${a.messages}</td>
+    <td>${chipEstado(a.phase)}</td>
+    <td class="mono">${hora(a.last_seen)}</td>
+  </tr>`).join("");
+}
+
+async function cargar() {
+  const datos = await (await fetch("/api/adsb/analisis")).json();
+  aeronaves = datos.aircraft || [];
+
+  if (!aeronaves.length) {
+    document.getElementById("tabla-aviones").innerHTML =
+      `<tr><td colspan="11" class="empty">${datos.empty_reason || "Todavía no hay datos grabados"}. `
+      + `Arrancá una grabación en <a href="/adsb">ADS-B en vivo</a>.</td></tr>`;
+    return;
+  }
+
+  document.getElementById("c-aeronaves").textContent = aeronaves.length;
+  document.getElementById("c-obs").textContent = datos.observations.toLocaleString("es-AR") + " mensajes";
+  document.getElementById("c-identificadas").textContent = datos.identified;
+  document.getElementById("c-ident-pct").textContent =
+    Math.round(datos.identified / aeronaves.length * 100) + "% del total";
+  document.getElementById("c-matriculas").textContent = datos.with_registration;
+  document.getElementById("c-eventos").textContent = (datos.events || []).length;
+
+  const posicion = (datos.fields || []).find(f => f.key === "position");
+  if (posicion && posicion.messages === 0) {
+    document.getElementById("aviso-posicion").style.display = "";
+  }
+
+  document.getElementById("tabla-campos").innerHTML = (datos.fields || []).map(f => {
+    const nulo = f.messages === 0 ? " nula" : "";
+    return `<tr>
+      <td>${f.name}</td>
+      <td class="muted">${f.origin}</td>
+      <td class="num">${f.messages_pct.toFixed(0)}%</td>
+      <td style="width:120px"><span class="barra${nulo}" style="width:${Math.max(f.messages_pct, 1)}%"></span></td>
+      <td class="num">${f.aircraft_pct.toFixed(0)}%</td>
+      <td style="width:120px"><span class="barra aviones${nulo}" style="width:${Math.max(f.aircraft_pct, 1)}%"></span></td>
+    </tr>`;
+  }).join("");
+
+  const c = datos.coverage || {};
+  // Un cero de operaciones significa cosas muy distintas segun esto, asi que
+  // se explica en vez de mostrar el numero pelado.
+  document.getElementById("cobertura-texto").innerHTML = c.can_see_runway_level
+    ? `La antena <strong>sí</strong> recibe aeronaves a nivel de pista (altitud mínima recibida:
+       <strong>${num(c.min_altitude_ft)} ft</strong>, ${c.below_3000ft} observaciones por debajo de
+       3000 ft). Los aterrizajes y despegues detectados son confiables.`
+    : `La antena <strong>no</strong> recibió ninguna aeronave cerca del suelo
+       (altitud mínima: ${num(c.min_altitude_ft)} ft). Sin eso es imposible detectar
+       operaciones — no porque no hayan ocurrido, sino porque desde esta ubicación no se
+       escuchan. Con el receptor a 220 m de la pista esto debería cambiar.`;
+
+  pintarAeronaves();
+}
+
+document.getElementById("buscar").addEventListener("input", e => pintarAeronaves(e.target.value));
+cargar();
+</script>
+</body>
+</html>

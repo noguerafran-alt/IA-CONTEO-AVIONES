@@ -244,3 +244,50 @@ def adsb_download_one(filename: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+
+
+@app.get("/adsb/analisis")
+def adsb_analysis_page(request: Request):
+    return templates.TemplateResponse(request, "adsb_analisis.html", {})
+
+
+@app.get("/api/adsb/analisis")
+def api_adsb_analysis():
+    """Per-aircraft summary of everything recorded so far.
+
+    Reads the SQLite log rather than the live recorder's rolling window: the
+    window only keeps the last 15 minutes, and the point of this page is the
+    whole history, including sessions recorded days ago.
+    """
+    import adsb_report
+    from adsb_events import _load_db
+
+    db_path = ROOT / "adsb_log.db"
+    if not db_path.exists():
+        return JSONResponse({"aircraft": [], "observations": 0, "fields": [],
+                             "empty_reason": "todavia no se grabo nada"})
+
+    info = adsb_report.overview(_load_db(str(db_path)))
+    return JSONResponse({
+        "observations": info["observations"],
+        "identified": info["identified"],
+        "with_registration": info["with_registration"],
+        "registry_available": info["registry_available"],
+        "coverage": info["coverage"],
+        "fields": info["fields"],
+        "events": [
+            {"icao24": e.icao24, "type": e.event_type, "timestamp": e.timestamp,
+             "callsign": e.callsign, "reason": e.reason}
+            for e in info["events"]
+        ],
+        "aircraft": [
+            {"icao24": s.icao24, "callsign": s.callsign, "registration": s.registration,
+             "aircraft_type": s.aircraft_type, "operator": s.operator,
+             "messages": s.messages, "first_seen": s.first_seen, "last_seen": s.last_seen,
+             "duration_s": s.duration_s, "min_altitude_ft": s.min_altitude_ft,
+             "max_altitude_ft": s.max_altitude_ft, "max_speed_kt": s.max_speed_kt,
+             "max_climb_fpm": s.max_climb_fpm, "max_descent_fpm": s.max_descent_fpm,
+             "phase": s.phase, "events": len(s.events)}
+            for s in info["aircraft"]
+        ],
+    })
