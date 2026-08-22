@@ -45,6 +45,12 @@ class Observation:
     vertical_rate_fpm: float | None = None
     latitude: float | None = None
     longitude: float | None = None
+    # Nivel de senal del mensaje en dBFS (0 = saturacion). Solo lo trae el
+    # camino de adsb_iq.py, que demodula el IQ crudo: rtl_adsb.exe y el feed
+    # SBS-1 tiran la magnitud, y el aircraft.json de dump1090 la expone como
+    # "rssi" pero todavia no se lee. None significa "esta fuente no lo mide",
+    # que es distinto de "llego con 0 dBFS".
+    signal_dbfs: float | None = None
 
     @property
     def is_on_ground(self) -> bool:

@@ -48,7 +48,10 @@ COLUMNS = [
 # La columna del filtro va SOLO a la base y no al CSV. Agregarla a COLUMNS
 # cambiaria el encabezado del CSV del dia, y el archivo se abre en modo append:
 # las filas nuevas quedarian con un campo de mas bajo el encabezado viejo.
-COLUMNS_DB = COLUMNS + ["rejected_reason"]
+# signal_dbfs va SOLO a la base, igual que rejected_reason: el CSV es el
+# formato de intercambio y agregarle una columna rompe a quien lo lea por
+# posicion. Es None salvo por el camino de adsb_iq.py, el unico que lo mide.
+COLUMNS_DB = COLUMNS + ["rejected_reason", "signal_dbfs"]
 
 # rejected_reason tiene TRES estados y hay que respetarlos al consultar:
 #   NULL  fila escrita antes de que existiera el filtro -> NO EVALUADA.
@@ -71,7 +74,8 @@ CREATE TABLE IF NOT EXISTS adsb_log (
     latitude REAL,
     longitude REAL,
     on_ground INTEGER,
-    rejected_reason TEXT
+    rejected_reason TEXT,
+    signal_dbfs REAL
 );
 CREATE INDEX IF NOT EXISTS idx_adsb_epoch ON adsb_log(epoch);
 CREATE INDEX IF NOT EXISTS idx_adsb_icao ON adsb_log(icao24);
@@ -86,10 +90,19 @@ def migrar_esquema(conn: sqlite3.Connection, db_path: Path | str = DB_PATH) -> b
     justamente el valor que significa "no evaluada".
     """
     columnas = {fila[1] for fila in conn.execute("PRAGMA table_info(adsb_log)")}
-    if not columnas or "rejected_reason" in columnas:
+    if not columnas:
+        return False
+    # Una lista y no un solo ALTER: cada columna nueva que aparezca con el
+    # tiempo tiene que poder sumarse a una base vieja sin reescribirla, y sin
+    # que agregar la segunda rompa la migracion de la primera.
+    faltantes = [(nombre, tipo) for nombre, tipo in
+                 (("rejected_reason", "TEXT"), ("signal_dbfs", "REAL"))
+                 if nombre not in columnas]
+    if not faltantes:
         return False
     try:
-        conn.execute("ALTER TABLE adsb_log ADD COLUMN rejected_reason TEXT")
+        for nombre, tipo in faltantes:
+            conn.execute(f"ALTER TABLE adsb_log ADD COLUMN {nombre} {tipo}")
     except sqlite3.OperationalError as exc:
         # Caso REAL, reproducido: con una grabacion en curso el ALTER choca
         # contra la conexion de escritura del otro Recorder y sale "database is
@@ -225,7 +238,8 @@ class Recorder:
         # las 8128 filas anteriores al filtro, y hacer que los dos casos se
         # escriban igual borraria la unica forma de distinguirlos.
         motivo = self.gate.feed(observation) or ""
-        valores = [row[c] if row[c] != "" else None for c in COLUMNS] + [motivo]
+        valores = ([row[c] if row[c] != "" else None for c in COLUMNS]
+                   + [motivo, observation.signal_dbfs])
         self.conn.execute(
             f"INSERT INTO adsb_log ({','.join(COLUMNS_DB)}) "
             f"VALUES ({','.join('?' * len(COLUMNS_DB))})",
@@ -270,6 +284,26 @@ def build_source(mode: str = "auto", *, exe: str | None = None, device: int = 0,
         url = json_url or "http://127.0.0.1:8080/data/aircraft.json"
         source = AdsbRecorder(url=url).start()
         return source, f"dump1090 JSON en {url}"
+
+    if mode == "iq":
+        # Mismo dongle que "rtlsdr", distinto programa y distinto dato: en vez
+        # de pedirle el hex ya masticado a rtl_adsb.exe, se le piden las
+        # muestras crudas a rtl_sdr.exe y se demodula en Python. Cuesta mas CPU
+        # (medido: ~10x tiempo real, con margen sobrado) y a cambio cada mensaje
+        # trae su nivel de senal en dBFS, que el otro camino tira y no hay forma
+        # de recuperar despues.
+        from adsb_iq import DEFAULT_EXE as IQ_EXE, IqRecorder
+        from receiver import parse_surface_ref
+        exe_path = Path(exe) if exe else IQ_EXE
+        extra = ({"surface_ref": parse_surface_ref(surface_ref)}
+                 if surface_ref else {})
+        source = IqRecorder(exe_path=exe_path, device_index=device, **extra).start()
+        if source.last_error and not source._thread:
+            ayuda = ("" if "surface_ref" in source.last_error else
+                     "\n  Corre INSTALAR-ADSB.bat para bajar rtl_sdr.exe, "
+                     "o indica la ruta correcta.")
+            raise RuntimeError(f"{source.last_error}{ayuda}")
+        return source, f"IQ crudo con nivel de senal via {exe_path}"
 
     if mode == "rtlsdr":
         from adsb_rtlsdr import DEFAULT_EXE, RtlAdsbRecorder

@@ -80,7 +80,8 @@ def parse_avr_line(line: str) -> str | None:
     return match.group(1) if match else None
 
 
-def decoded_to_observation(icao24: str, decoded: dict, timestamp: float) -> Observation:
+def decoded_to_observation(icao24: str, decoded: dict, timestamp: float,
+                           signal_dbfs: float | None = None) -> Observation:
     """Merge one PipeDecoder result into an Observation.
 
     PipeDecoder tracks state per aircraft internally, but each call only
@@ -137,6 +138,7 @@ def decoded_to_observation(icao24: str, decoded: dict, timestamp: float) -> Obse
         # "latitude"/"longitude", no "lat"/"lon": ver el docstring del modulo.
         latitude=decoded.get("latitude"),
         longitude=decoded.get("longitude"),
+        signal_dbfs=signal_dbfs,
         registration=None,   # raw ADS-B carries ICAO24, not the tail number
     )
 
@@ -342,6 +344,17 @@ class RtlAdsbRecorder:
         hex_message = parse_avr_line(line)
         if not hex_message:
             return
+        self._procesar_hex(hex_message)
+
+    def _procesar_hex(self, hex_message: str, signal_dbfs: float | None = None) -> None:
+        """Decodificar un mensaje hex y sumarlo al historial.
+
+        Separado de _handle_line para que adsb_iq.IqRecorder pueda entrar por
+        aca con su propio hex y su nivel de senal, y herede sin copiar la
+        compuerta de confirmacion de direcciones, el historial y el conteo.
+        Duplicar esa compuerta seria la peor clase de duplicacion: dos copias
+        de una regla de aceptacion de datos que pueden divergir en silencio.
+        """
         decoded = self._decoder.decode(hex_message, timestamp=time.time())
         # Tres estados, no dos. pyModeS solo fija crc_valid para DF17/18/20/21;
         # para DF0/4/5/11/16 la clave viene con valor None porque el campo de
@@ -366,7 +379,7 @@ class RtlAdsbRecorder:
             # la metrica de calidad de senal (-e 1 vs -e 5) con mensajes que
             # nadie verifico.
             self.unverified_count += 1
-            if not self._direccion_creible(icao24, decoded, ahora):
+            if not self._direccion_creible(icao24, decoded, ahora, signal_dbfs):
                 return
         else:
             # Una trama con CRC verificable es autoridad sobre la direccion:
@@ -378,9 +391,10 @@ class RtlAdsbRecorder:
         self.poll_count += 1
         if decoded.get("latitude") is not None:
             self.position_hex[icao24] = (ahora, hex_message)
-        self.add(decoded_to_observation(icao24, decoded, ahora))
+        self.add(decoded_to_observation(icao24, decoded, ahora, signal_dbfs))
 
-    def _direccion_creible(self, icao24: str, decoded: dict, ahora: float) -> bool:
+    def _direccion_creible(self, icao24: str, decoded: dict, ahora: float,
+                           signal_dbfs: float | None = None) -> bool:
         """Decidir si una trama sin CRC verificable se puede creer.
 
         DF0/4/5/11/16/20/21 llevan la paridad XOR-eada con la direccion del
@@ -407,7 +421,8 @@ class RtlAdsbRecorder:
             # Primera aparicion: se RETIENE, no se tira. Si la direccion es
             # real la segunda trama llega en segundos y este mensaje entra
             # igual, sin perder el dato.
-            self._pendientes[icao24] = (ahora, decoded_to_observation(icao24, decoded, ahora))
+            self._pendientes[icao24] = (
+                ahora, decoded_to_observation(icao24, decoded, ahora, signal_dbfs))
             self._podar_pendientes(ahora)
             return False
         # Segunda aparicion: la direccion es real. Entra tambien la retenida.

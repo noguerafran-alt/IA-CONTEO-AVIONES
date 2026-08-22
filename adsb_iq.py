@@ -5,13 +5,31 @@ en el camino, asi que por ese camino es IMPOSIBLE saber si un mensaje llego
 fuerte o raspando el ruido. Ese dato hace falta para dos cosas concretas de
 este proyecto:
 
-  - Separar trafico real de ruido. Las tramas DF0/4/5/11/16/20/21 llevan la
-    paridad XOR-eada con la direccion del avion, asi que su CRC no se puede
-    verificar solo (ver adsb_rtlsdr.py). Hoy eso se resuelve por repeticion:
-    una direccion vista una sola vez se descarta. Con el nivel de senal se
-    puede decidir en el PRIMER mensaje, porque el ruido llega debil.
   - Medir la antena de verdad. "Alcance 72 km" no dice si llego justo o con
-    margen; el dBFS a esa distancia si.
+    margen; el dBFS a esa distancia si. Tambien delata si la ganancia esta
+    saturando, que no se puede ver de ninguna otra forma.
+  - Decidir donde poner la antena con numeros en vez de intuicion.
+
+LO QUE EL NIVEL DE SENAL NO SIRVE PARA HACER, medido y descartado. La idea
+original era usarlo para separar ruido de trafico real en el primer mensaje,
+en vez de esperar a que una direccion se repita (ver la compuerta de
+adsb_rtlsdr.py). No funciona, y no por poco. Sobre 40 s de aire:
+
+    poblacion                            n   mediana        rango
+    ADS-B DF17/18 con CRC valido        93   -15.0 dBFS   hasta -32.8
+    ruido con forma de DF17, CRC mal    45   -18.3 dBFS   -34.0 a -3.9
+
+El 89% del ruido llega MAS FUERTE que el ADS-B real mas debil, y el ruido
+alcanza -3.9 dBFS, arriba de la mediana de lo real. En las tramas cortas pasa
+lo mismo: las direcciones repetidas (reales) dan -17.9 de mediana contra -19.0
+las vistas una sola vez, 1.1 dB de diferencia con las distribuciones
+superpuestas.
+
+Tiene sentido visto en retrospectiva: lo que pasa el test de preambulo no es
+ruido termico -eso seria debil- sino energia de radio de verdad, interferencia
+y mensajes Mode-S solapados que por casualidad tienen la forma. Un umbral de
+dBFS tiraria trafico real y dejaria pasar ruido. La repeticion de direccion
+sigue siendo el unico discriminador que funciona.
 
 El metodo es el de dump1090 (github.com/antirez/dump1090, dump1090.c), leido
 para escribir esto:
@@ -43,9 +61,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
+
+from adsb_rtlsdr import RtlAdsbRecorder
 
 DEFAULT_EXE = Path(__file__).parent / "tools" / "rtlsdr" / "rtl_sdr.exe"
 
@@ -309,6 +330,50 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str = "49.6",
             error = (proceso.stderr.read() or b"").decode("utf-8", "replace").strip()
             if error:
                 print(f"  rtl_sdr: {error}", file=sys.stderr)
+
+
+class IqRecorder(RtlAdsbRecorder):
+    """Grabador que lee el IQ crudo y anota el nivel de senal de cada mensaje.
+
+    Hereda de RtlAdsbRecorder y NO reimplementa nada de la parte semantica: la
+    compuerta de confirmacion de direcciones, el historial rodante, el conteo y
+    la interfaz publica (start/stop/around/snapshot/is_receiving) son las
+    mismas. Lo unico que cambia es de donde salen los mensajes: en vez de leer
+    lineas AVR de rtl_adsb.exe, lee muestras de rtl_sdr.exe y las demodula aca,
+    lo que ademas devuelve el dBFS que el otro camino tira.
+
+    Tener dos copias de la compuerta de aceptacion seria la peor duplicacion
+    posible: dos reglas sobre que datos entran, capaces de divergir en silencio.
+    """
+    ganancia: str = "49.6"
+    segundos_por_bloque: float = 0.5
+
+    def start(self) -> "IqRecorder":
+        if self._thread and self._thread.is_alive():
+            return self
+        self.exe_path = Path(self.exe_path).resolve()
+        if not self.exe_path.exists():
+            self.last_error = f"no se encontro {self.exe_path}"
+            return self
+        self._validate_surface_ref()
+        import pyModeS as pms
+        self._decoder = pms.PipeDecoder(surface_ref=self.surface_ref,
+                                        local_ref_window=self.local_ref_window)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run_once(self) -> None:
+        # El nivel de senal viaja hasta la Observation, que es todo el punto de
+        # este camino. No se usa para filtrar: se midio y el ruido llega igual
+        # de fuerte que el trafico real (ver el docstring del modulo), asi que
+        # es un dato para medir la antena, no un criterio de aceptacion.
+        for mensaje in escuchar(exe=self.exe_path, ganancia=self.ganancia,
+                                segundos_por_bloque=self.segundos_por_bloque):
+            if self._stop.is_set():
+                break
+            self._procesar_hex(mensaje["hex"], mensaje["dbfs"])
 
 
 if __name__ == "__main__":
