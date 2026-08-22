@@ -53,6 +53,28 @@
                font-variant-numeric: tabular-nums; }
   .descartada { color: #6b7280; font-size: 0.78rem; cursor: help; }
   .descartada s { color: #6b7280; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .matri { color: #34d399; font-weight: 600; }
+
+  /* El nivel de senal se colorea porque el numero solo no dice si esta bien:
+     0 dBFS es saturacion y los valores utiles caen entre -3 y -40, o sea que
+     "mas cerca de cero" es mejor hasta que deja de serlo. */
+  .senal-buena  { color: #34d399; }
+  .senal-justa  { color: #9aa0a6; }
+  .senal-satura { color: #fbbf24; }
+
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; }
+  .chip.aterrizo { background: #14532d; color: #86efac; }
+  .chip.despego  { background: #1e3a5f; color: #93c5fd; }
+  .chip.tierra   { background: #3f2d12; color: #fcd34d; }
+  .chip.otro     { background: #262a33; color: #9aa0a6; }
+
+  .hist-grid { display: flex; gap: 28px; flex-wrap: wrap; }
+  .hist-grid > div { display: flex; flex-direction: column; }
+  .hist-grid b { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .hist-grid span { color: #9aa0a6; font-size: 0.8rem; text-transform: uppercase;
+                    letter-spacing: 0.03em; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 14px 0 0; }
   .empty { color: #9aa0a6; padding: 24px; text-align: center; }
   .downloads { margin-top: 12px; font-size: 0.85rem; color: #9aa0a6; }
   .downloads a { margin-right: 12px; }
@@ -94,17 +116,20 @@
 
   <div class="descartes" id="descartes"></div>
 
-  <h2>En rango ahora</h2>
+  <h2>Lo grabado hasta ahora</h2>
+  <div class="panel" id="historico"></div>
+
+  <h2>En rango ahora — registro completo de cada aeronave</h2>
   <div class="table-wrap">
   <table>
     <thead>
       <!-- "Dist." es la distancia al receptor (San Isidro): dice si la antena
            está escuchando cerca o lejos en este momento, que es distinto del
            alcance histórico que informa la página de análisis. -->
-      <tr><th>ICAO24</th><th>Matrícula</th><th>Vuelo</th><th>Altitud</th><th>Velocidad</th><th>V/S</th><th>Dist.</th><th>Visto hace</th></tr>
+      <tr><th>ICAO24</th><th>Vuelo</th><th>Matrícula</th><th>Tipo</th><th>Operador</th><th class="num">Alt. mín</th><th class="num">Alt. máx</th><th class="num">Vel. máx</th><th class="num">Dist.</th><th class="num">Señal</th><th class="num">Msjs</th><th>Estado</th></tr>
     </thead>
     <tbody id="live-body">
-      <tr><td colspan="8" class="empty">Sin datos todavia. Iniciá el receptor arriba.</td></tr>
+      <tr><td colspan="12" class="empty">Sin datos todavia. Iniciá el receptor arriba.</td></tr>
     </tbody>
   </table>
   </div>
@@ -161,23 +186,91 @@ function renderDescartes(data) {
      ${data.unverified_count || 0} sin CRC verificable`;
 }
 
-function renderLive(rows) {
-  if (!rows.length) {
-    liveBody.innerHTML = '<tr><td colspan="8" class="empty">Ninguna aeronave en rango en este momento.</td></tr>';
+// Una fila por aeronave con TODO lo que se sabe de ella, no su ultimo mensaje.
+//
+// Antes esta tabla se armaba con el ultimo mensaje de cada avion, y un mensaje
+// ADS-B suelto trae la altitud O la velocidad O el distintivo de vuelo, casi
+// nunca dos: se veia casi vacia de guiones mientras el receptor recibia
+// perfecto. Ahora el servidor acumula sobre la ventana rodante con la misma
+// funcion que alimenta la pagina de analisis, asi que cada fila se completa
+// sola a medida que llegan mensajes.
+function renderLive(filas) {
+  if (!filas.length) {
+    liveBody.innerHTML = '<tr><td colspan="12" class="empty">'
+      + 'Ninguna aeronave en rango en este momento.</td></tr>';
     return;
   }
-  liveBody.innerHTML = rows.map(o => `
+  liveBody.innerHTML = filas.map(a => `
     <tr>
-      <td class="mono">${o.icao24}</td>
-      <td>${o.registration ? `<span class="ident">${o.registration}</span>` : '<span class="muted">—</span>'}</td>
-      <td>${o.callsign || '<span class="muted">—</span>'}</td>
-      <td class="mono">${o.on_ground ? '<span class="ground">en tierra</span>' : fmt(o.altitude_ft, 0, ' ft')}</td>
-      <td class="mono">${fmt(o.ground_speed_kt, 0, ' kt')}</td>
-      <td class="mono">${o.vertical_rate_fpm ? (o.vertical_rate_fpm > 0 ? '+' : '') + o.vertical_rate_fpm.toFixed(0) : '<span class="muted">—</span>'}</td>
-      <td class="mono">${distanciaCelda(o)}</td>
-      <td class="mono">${o.seconds_ago.toFixed(0)}s</td>
+      <td class="mono">${a.icao24}</td>
+      <td>${a.callsign ? `<span class="ident">${a.callsign}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${a.registration ? `<span class="matri">${a.registration}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${a.aircraft_type || '<span class="muted">—</span>'}</td>
+      <td>${a.operator || '<span class="muted">—</span>'}</td>
+      <td class="mono num">${a.min_altitude_ft === 0 ? '<span class="ground">en tierra</span>' : fmt(a.min_altitude_ft, 0, ' ft')}</td>
+      <td class="mono num">${fmt(a.max_altitude_ft, 0, ' ft')}</td>
+      <td class="mono num">${fmt(a.max_speed_kt, 0, ' kt')}</td>
+      <td class="mono num">${fmt(a.min_distance_km, 1, ' km')}</td>
+      <td class="mono num">${a.signal_dbfs === null || a.signal_dbfs === undefined
+          ? '<span class="muted" title="esta fuente no mide el nivel de señal">—</span>'
+          : senalCelda(a.signal_dbfs)}</td>
+      <td class="mono num">${a.messages}</td>
+      <td>${chipFase(a.phase)}</td>
     </tr>
   `).join('');
+}
+
+// El dBFS se colorea porque el numero solo no dice si esta bien: 0 es
+// saturacion y los valores utiles caen entre -3 y -40, o sea que "mas cerca de
+// cero" es mejor hasta que deja de serlo.
+function senalCelda(dbfs) {
+  const clase = dbfs > -6 ? "senal-satura" : dbfs > -25 ? "senal-buena" : "senal-justa";
+  const titulo = dbfs > -6
+    ? "muy fuerte: puede estar saturando, conviene bajar la ganancia"
+    : dbfs > -25 ? "buena señal, con margen" : "al borde del ruido";
+  return `<span class="${clase}" title="${titulo}">${dbfs.toFixed(1)}</span>`;
+}
+
+function chipFase(fase) {
+  const clase = fase === "aterrizo" ? "aterrizo" : fase === "despego" ? "despego"
+              : fase === "en tierra" ? "tierra" : "otro";
+  return `<span class="chip ${clase}">${fase}</span>`;
+}
+
+// El resumen historico va al lado del vivo a proposito: cuando uno esta parado
+// mirando grabar, la pregunta que sigue a "que hay ahora" es "cuanto junte", y
+// tenerla en otra pagina obliga a perder de vista el receptor para contestarla.
+// Los numeros salen de la MISMA regla que la pagina de analisis (una direccion
+// se cree si se repitio o si trajo un campo de DF17), asi que las dos paginas
+// no pueden dar totales distintos para lo mismo.
+function renderHistorico(h) {
+  const caja = document.getElementById('historico');
+  if (!h || !h.observations) {
+    caja.innerHTML = '<span class="muted">Todavía no hay nada grabado.</span>';
+    return;
+  }
+  const desde = h.first_seen ? new Date(h.first_seen * 1000) : null;
+  const hasta = h.last_seen ? new Date(h.last_seen * 1000) : null;
+  const fmtF = d => d ? d.toLocaleString("es-AR",
+    {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "–";
+  const pct = (n, d) => d ? Math.round(n / d * 100) + "%" : "–";
+  caja.innerHTML = `
+    <div class="hist-grid">
+      <div><b>${h.aircraft.toLocaleString("es-AR")}</b><span>aeronaves</span></div>
+      <div><b>${h.identified.toLocaleString("es-AR")}</b><span>con vuelo · ${pct(h.identified, h.aircraft)}</span></div>
+      <div><b>${h.with_registration.toLocaleString("es-AR")}</b><span>con matrícula · ${pct(h.with_registration, h.aircraft)}</span></div>
+      <div><b>${h.with_position.toLocaleString("es-AR")}</b><span>ubicadas · ${pct(h.with_position, h.aircraft)}</span></div>
+      <div><b>${h.observations.toLocaleString("es-AR")}</b><span>mensajes</span></div>
+    </div>
+    <p class="nota">
+      Desde ${fmtF(desde)} hasta ${fmtF(hasta)}. Se descartaron
+      <b>${h.noise.toLocaleString("es-AR")}</b> direcciones vistas una sola vez y nunca
+      repetidas, indistinguibles de ruido de radio: no entran en el conteo.
+      La matrícula y el tipo no viajan por radio — salen de cruzar la dirección ICAO24
+      contra el registro local, así que las que faltan no están en él.
+      <a href="/adsb/analisis">Ver el análisis completo</a> ·
+      <a href="/adsb/mapa">verlas en el mapa</a>.
+    </p>`;
 }
 
 async function refresh() {
@@ -190,10 +283,18 @@ async function refresh() {
     return;
   }
 
+  const vivas = data.aircraft || [];
   document.getElementById('c-total').textContent = data.aircraft_total;
-  document.getElementById('c-matricula').textContent = data.with_registration;
+  // Se cuenta sobre el registro acumulado y NO con data.with_registration, que
+  // viene del grabador y cuenta el campo registration de la observacion cruda:
+  // por radio ese campo llega siempre vacio, porque la matricula no se
+  // transmite. La tarjeta decia 0 mientras la tabla de abajo mostraba LV-FVM y
+  // LV-GVE, o sea la misma pagina contradiciendose a dos centimetros.
+  document.getElementById('c-matricula').textContent =
+    vivas.filter(a => a.registration).length;
   document.getElementById('c-registros').textContent = data.written;
-  renderLive(data.live);
+  renderLive(vivas);
+  renderHistorico(data.historico);
   renderDescartes(data);
 
   btnStart.disabled = data.running;

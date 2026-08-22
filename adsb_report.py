@@ -74,6 +74,12 @@ class AircraftSummary:
     # min_distance_km es el dato con sentido operativo (que tan cerca del
     # receptor paso esta aeronave); max_distance_km es el alcance real medido
     # de la antena, que es lo que hay que saber antes de pensar en moverla.
+    # El nivel de senal MAS FUERTE que se recibio de esta aeronave, en dBFS.
+    # El mas fuerte y no el promedio ni el ultimo: la pregunta que contesta es
+    # "cuan bien llega esta aeronave cuando llega bien", que es lo que dice si
+    # la antena la esta tomando con margen o al borde. El promedio lo ensucian
+    # los mensajes captados justo al entrar y salir del alcance.
+    signal_dbfs: float | None = None
     min_distance_km: float | None = None
     max_distance_km: float | None = None
     events: list = field(default_factory=list)
@@ -146,6 +152,10 @@ def _merge(summary: AircraftSummary, observation: Observation, ref) -> None:
     speed = observation.ground_speed_kt
     if speed is not None:
         summary.max_speed_kt = speed if summary.max_speed_kt is None else max(summary.max_speed_kt, speed)
+    senal = getattr(observation, "signal_dbfs", None)
+    if senal is not None:
+        summary.signal_dbfs = (senal if summary.signal_dbfs is None
+                               else max(summary.signal_dbfs, senal))
     rate = observation.vertical_rate_fpm
     if rate is not None:
         if rate > 0:
@@ -327,6 +337,110 @@ def overview(observations: list[Observation],
         "events": [e for s in creibles for e in s.events],
         "registry_available": bool(aircraft_db and aircraft_db.available()),
     }
+
+
+def resumen_historico(db_path: str) -> dict:
+    """Cuanto se vio en TODA la historia grabada, con SQL y sin cargar nada.
+
+    La pagina en vivo se refresca cada dos segundos. Cargar las diez mil
+    observaciones de la base y volver a resumirlas en cada refresco para
+    contestar siempre lo mismo seria absurdo, asi que esto son agregados de
+    SQLite: cuesta milisegundos y no crece con el historial.
+
+    La regla de credibilidad es LA MISMA que la de AircraftSummary.confirmada,
+    escrita en SQL: una direccion se cree si se repitio (2+ mensajes) o si trajo
+    un campo que solo viaja en DF17/18, donde el CRC si es verificable. Tiene que
+    ser la misma o la pagina en vivo y la de analisis darian dos totales
+    distintos para lo mismo, que es la peor forma de perder la confianza de quien
+    las mira.
+    """
+    import sqlite3
+    from pathlib import Path as _Path
+
+    vacio = {"observations": 0, "aircraft": 0, "identified": 0,
+             "with_registration": 0, "with_position": 0, "noise": 0,
+             "first_seen": None, "last_seen": None, "days": 0}
+    if not _Path(db_path).exists():
+        return vacio
+
+    # mode=ro: esto corre en el hilo de request MIENTRAS el Recorder escribe en
+    # la misma base. Una conexion de lectura-escritura sobre una base con journal
+    # abierto puede disparar rollback recovery y escribir desde el lector.
+    conn = sqlite3.connect(_Path(db_path).absolute().as_uri() + "?mode=ro", uri=True)
+    try:
+        fila = conn.execute("""
+            SELECT COUNT(*) obs, MIN(epoch) desde, MAX(epoch) hasta
+              FROM adsb_log
+        """).fetchone()
+        if not fila or not fila[0]:
+            return vacio
+        obs, desde, hasta = fila
+
+        # Una pasada agrupando por direccion, y arriba se cuenta cuantos grupos
+        # caen en cada categoria. Hacerlo en subconsulta y no con varios SELECT
+        # evita recorrer la tabla una vez por numero.
+        cred = conn.execute("""
+            SELECT
+              SUM(creible) aeronaves,
+              SUM(creible AND tiene_vuelo) identificadas,
+              SUM(creible AND tiene_posicion) con_posicion,
+              SUM(NOT creible) ruido
+            FROM (
+              SELECT
+                (COUNT(*) >= 2
+                 OR MAX(callsign IS NOT NULL)
+                 OR MAX(latitude IS NOT NULL)) creible,
+                MAX(callsign IS NOT NULL) tiene_vuelo,
+                MAX(latitude IS NOT NULL) tiene_posicion
+              FROM adsb_log GROUP BY icao24
+            )
+        """).fetchone()
+
+        # La matricula NO se cuenta con SQL aunque la tabla tenga la columna:
+        # esa columna queda vacia por el camino del dongle, porque la matricula
+        # no viaja por radio. Sale de buscar la direccion en el registro local,
+        # asi que hay que preguntarle al registro. Contar la columna daba cero y
+        # contradecia a la pagina de analisis, que si enriquece.
+        creibles = [f[0] for f in conn.execute("""
+            SELECT icao24 FROM adsb_log GROUP BY icao24
+             HAVING COUNT(*) >= 2
+                 OR MAX(callsign IS NOT NULL)
+                 OR MAX(latitude IS NOT NULL)
+        """)]
+    finally:
+        conn.close()
+
+    aeronaves, identificadas, con_posicion, ruido = [int(v or 0) for v in cred]
+    # lookup tiene cache, asi que a partir del segundo refresco esto es gratis.
+    con_matricula = (sum(1 for i in creibles if aircraft_db.lookup(i))
+                     if aircraft_db and aircraft_db.available() else 0)
+    return {
+        "observations": int(obs),
+        "aircraft": aeronaves,
+        "identified": identificadas,
+        "with_registration": con_matricula,
+        "with_position": con_posicion,
+        "noise": ruido,
+        "first_seen": desde,
+        "last_seen": hasta,
+        "days": max(1, round((hasta - desde) / 86400.0)) if hasta and desde else 0,
+    }
+
+
+def resumen_en_vivo(observaciones: list) -> list:
+    """El registro COMPLETO de cada aeronave de la ventana en vivo.
+
+    Es la misma funcion que alimenta la pagina de analisis, corrida sobre la
+    ventana rodante en vez de sobre la base. No es una comodidad: la tabla de la
+    pagina en vivo se armaba con el ULTIMO mensaje de cada avion, y un mensaje
+    ADS-B suelto trae la altitud O la velocidad O el distintivo, casi nunca dos,
+    asi que se veia casi vacia mientras el receptor recibia perfecto. Acumulando
+    sobre la ventana, cada fila se completa sola con el tiempo.
+
+    Ordenadas por la mas reciente primero, que es lo que se quiere mirar cuando
+    se esta parado al lado de la antena.
+    """
+    return summarize(observaciones)
 
 
 if __name__ == "__main__":

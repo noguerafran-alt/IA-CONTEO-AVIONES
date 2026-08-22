@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import io
 import sqlite3
+from functools import lru_cache as _lru_cache
 import sys
 import urllib.request
 from pathlib import Path
@@ -124,6 +125,7 @@ def available() -> bool:
     return DB_PATH.exists()
 
 
+@_lru_cache(maxsize=8192)
 def lookup(icao24: str) -> dict | None:
     """Registration/manufacturer/model/typecode/operator for one ICAO24, or
     None if the database isn't built yet or the aircraft isn't in it (common

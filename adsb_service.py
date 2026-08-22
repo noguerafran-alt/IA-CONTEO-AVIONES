@@ -39,6 +39,7 @@ class AdsbService:
     _source = None
     _recorder: Recorder | None = None
     _latest: dict[str, Observation] = field(default_factory=dict, repr=False)
+    _historico_cache: tuple | None = field(default=None, repr=False)
     # Motivo de rechazo de la ULTIMA posicion de cada aeronave, o None.
     #
     # La tabla "En rango ahora" se arma desde _latest y no pasa por la base, o
@@ -217,7 +218,77 @@ class AdsbService:
                 }
                 for o in live
             ],
+            # El registro ACUMULADO de cada aeronave de la ventana, y el resumen
+            # de todo lo grabado hasta ahora. Ver _registro_acumulado.
+            "aircraft": self._registro_acumulado(now, ref),
+            "historico": self._resumen_historico(),
         }
+
+    def _registro_acumulado(self, now: float, ref) -> list[dict]:
+        """Una fila por aeronave con TODO lo que se sabe de ella, no su ultimo mensaje.
+
+        La tabla en vivo se armaba desde _latest, o sea el ultimo mensaje de cada
+        avion, y un mensaje ADS-B suelto trae la altitud O la velocidad O el
+        distintivo de vuelo, casi nunca dos: la tabla se veia casi vacia mientras
+        el receptor recibia perfecto. Acumulando sobre la ventana rodante, cada
+        fila se completa sola a medida que llegan mensajes.
+
+        Se reusa adsb_report.summarize, la MISMA funcion que alimenta la pagina
+        de analisis, corrida sobre la ventana en vez de sobre la base. Escribir
+        una segunda version aca serian dos acumuladores capaces de divergir, y la
+        pagina en vivo y la historica mostrarian distinto para el mismo avion.
+        Medido: 15 ms para 500 observaciones, y la ventana rodante no pasa de
+        unos pocos miles.
+        """
+        source = self._source
+        if source is None:
+            return []
+        try:
+            import adsb_report
+            resumenes = adsb_report.summarize(source.snapshot())
+        except Exception:
+            # Nunca dejar que un error del resumen tumbe el estado: sin esto, la
+            # pagina entera se queda sin datos -incluido el boton de detener-
+            # por un problema en una tabla informativa.
+            return []
+        filas = []
+        for r in resumenes:
+            if now - r.last_seen > LIVE_TIMEOUT_S * 5:
+                continue     # ya no esta en rango: vive en el historico, no aca
+            filas.append({
+                "icao24": r.icao24, "callsign": r.callsign,
+                "registration": r.registration, "aircraft_type": r.aircraft_type,
+                "operator": r.operator, "messages": r.messages,
+                "min_altitude_ft": r.min_altitude_ft, "max_altitude_ft": r.max_altitude_ft,
+                "max_speed_kt": r.max_speed_kt,
+                "max_climb_fpm": r.max_climb_fpm, "max_descent_fpm": r.max_descent_fpm,
+                "latitude": r.last_latitude, "longitude": r.last_longitude,
+                "min_distance_km": r.min_distance_km,
+                "signal_dbfs": r.signal_dbfs,
+                "phase": r.phase, "events": len(r.events),
+                "duration_s": round(r.duration_s, 1),
+                "seconds_ago": round(now - r.last_seen, 1),
+            })
+        return filas
+
+    def _resumen_historico(self) -> dict:
+        """Lo grabado en toda la historia, cacheado unos segundos.
+
+        Son agregados de SQL y cuestan 9 ms, pero la pagina se refresca cada dos
+        segundos y este numero no cambia lo suficiente para justificar
+        recalcularlo cada vez. Diez segundos de cache alcanzan: si entraron
+        mensajes nuevos, el contador de la izquierda ya lo dice en vivo.
+        """
+        ahora = time.time()
+        if self._historico_cache and ahora - self._historico_cache[0] < 10.0:
+            return self._historico_cache[1]
+        try:
+            import adsb_report
+            resumen = adsb_report.resumen_historico(str(DB_PATH))
+        except Exception:
+            resumen = {}
+        self._historico_cache = (ahora, resumen)
+        return resumen
 
 
 # One instance per process, shared by every request the dashboard handles --
