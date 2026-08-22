@@ -138,8 +138,21 @@ class RtlAdsbRecorder:
         # for exiting there (no device, wrong driver, device busy), and that
         # text is what turns "exited with code 1" into a message someone can
         # act on instead of a bare error code.
+        # -e 1 instead of rtl_adsb's default of 5 allowed bit errors. Measured
+        # on this antenna over 70-second captures, counting how many emitted
+        # messages actually pass CRC:
+        #
+        #   -e 5 (default)   219 messages,  4 valid (1.8%),  2 position frames
+        #   -e 1             139 messages, 79 valid (56.8%), 42 position frames
+        #   -e 0              90 messages, 63 valid (70.0%), 28 position frames
+        #
+        # The default emits mostly noise -- its DF distribution is nearly
+        # uniform across 16..31, which is what random bits look like, not real
+        # traffic. -e 1 yields 20x more usable messages than the default; -e 0
+        # is cleaner per message but throws away enough real ones to end up
+        # with fewer, so -e 1 is the better operating point.
         self._process = subprocess.Popen(
-            [str(self.exe_path), "-d", str(self.device_index)],
+            [str(self.exe_path), "-d", str(self.device_index), "-e", "1"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
