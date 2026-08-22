@@ -362,6 +362,12 @@ def api_adsb_map():
         "surface_ref_is_default": referencia == (RECEIVER_LAT, RECEIVER_LON),
     }
 
+    # La costa y las pistas van por el mismo endpoint y no en el template: son
+    # datos, con fuente y fecha, no decoracion. En el HTML no se pueden citar ni
+    # regenerar.
+    import geografia
+    geo = geografia.como_json()
+
     aeropuertos = []
     try:
         from pyModeS.position._airports import AIRPORTS
@@ -384,13 +390,15 @@ def api_adsb_map():
     db_path = ROOT / "adsb_log.db"
     if not db_path.exists():
         return JSONResponse({"tracks": [], "receiver": receptor, "airports": aeropuertos,
-                             "coverage": {}, "empty_reason": "todavia no se grabo nada"})
+                             "coverage": {}, "geo": geo,
+                             "empty_reason": "todavia no se grabo nada"})
 
     observaciones, gate = load_db(str(db_path))
     from adsb_events import coverage_report
     return JSONResponse({
         "tracks": adsb_report.tracks(observaciones),
         "receiver": receptor,
+        "geo": geo,
         "airports": aeropuertos,
         "coverage": coverage_report(observaciones, gate),
         # Las descartadas viajan APARTE de las trazas y con sus coordenadas

@@ -34,10 +34,18 @@
   g.avion.apagado { opacity: 0.18; }
   .etiqueta { font-size: 11px; font-weight: 600; paint-order: stroke; stroke: #0f1115;
               stroke-width: 3px; stroke-linejoin: round; }
-  .anillo { fill: none; stroke: #262a33; stroke-width: 1; }
-  .anillo-txt { fill: #3d434f; font-size: 10px; font-variant-numeric: tabular-nums; }
-  .costa { fill: none; stroke: #1e3a5f; stroke-width: 2; }
-  .costa-txt { fill: #2c4a6e; font-size: 10px; font-style: italic; }
+  /* Con el zoom por viewBox los trazos engordarian en pantalla al acercarse.
+     non-scaling-stroke los deja del mismo grosor visual siempre, que es lo que
+     uno espera de un mapa: al acercarse se ven mas detalles, no lineas mas
+     gordas. */
+  .traza, .anillo, .costa, .horizonte, .pista, .agua { vector-effect: non-scaling-stroke; }
+  .anillo { fill: none; stroke: #2a2a2a; stroke-width: 1; }
+  .agua { fill: #101418; stroke: none; }
+  .pista { stroke: #f5f5f5; stroke-width: 2.5; stroke-linecap: butt; }
+  .pista-txt { fill: #d4d4d4; font-size: 9px; font-variant-numeric: tabular-nums; }
+  .anillo-txt { fill: #555555; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .costa { fill: none; stroke: #4a5560; stroke-width: 1.5; }
+  .costa-txt { fill: #5a6570; font-size: 10px; font-style: italic; }
   .apto-txt { fill: #9aa0a6; font-size: 11px; font-weight: 600; paint-order: stroke;
               stroke: #0f1115; stroke-width: 3px; stroke-linejoin: round; }
   .horizonte { fill: none; stroke: #34d399; stroke-width: 1.5; stroke-dasharray: 5 4;
@@ -159,11 +167,11 @@ const R_KM = 6371.0088, RAD = Math.PI / 180;
 // que hacen falta para reconocer la forma. Va etiquetada como tal en el dibujo
 // porque un trazo azul en un mapa se lee como dato medido si nadie aclara que
 // no lo es. No sale de los datos ADS-B ni se usa para calcular nada.
-const COSTA = [
-  [-34.32, -58.62], [-34.40, -58.55], [-34.46, -58.49], [-34.51, -58.46],
-  [-34.55, -58.40], [-34.60, -58.35], [-34.64, -58.34], [-34.68, -58.30],
-  [-34.72, -58.25], [-34.77, -58.18], [-34.82, -58.05], [-34.87, -57.90],
-];
+// La costa y las pistas llegan del API (ver geografia.py): son datos con fuente
+// -Natural Earth y OurAirports- y no una linea dibujada a ojo. La esquematica de
+// 12 puntos que habia antes no se reconocia como el Rio de la Plata, que es
+// justamente lo unico que permite ubicarse en un mapa sin nombres de calles.
+let GEO = {costa: [], pistas: []};
 
 const colorAlt = ft => ft === null || ft === undefined ? "#6b7280"
                      : ft < 3000  ? "#34d399"
@@ -209,6 +217,7 @@ function partirPorDistancia(trazas) {
 function dibujar(datos, trazas) {
   const rx = datos.receiver, aptos = datos.airports || [];
   const descartadas = datos.rejected || [];
+  GEO = datos.geo || {costa: [], pistas: []};
   const cos0 = Math.cos(rx.lat * RAD);
   // km al este / al norte del receptor.
   const km = (lat, lon) => [(lon - rx.lon) * RAD * R_KM * cos0,
@@ -292,27 +301,22 @@ function dibujar(datos, trazas) {
     if (r > radioVisible) break;
   }
 
-  // --- costa ----------------------------------------------------------------
-  const costaPx = COSTA.map(([la, lo]) => px(la, lo));
-  svg.appendChild(crear("polyline", {class: "costa",
-                                     points: costaPx.map(p => p.join(",")).join(" ")}));
-  // La aclaracion se ancla a un vertice que quede DENTRO del cuadro: el punto
-  // medio de la costa puede caer fuera segun como haya quedado el encuadre, y
-  // entonces el trazo azul se queda sin explicar.
-  // De los vertices visibles se elige el mas cercano a la mitad de la altura:
-  // los de los extremos caen contra el borde superior, donde ya estan las
-  // etiquetas de los anillos. El lado del texto se decide despues, segun donde
-  // haya lugar -- filtrar por espacio a la derecha descartaba justo los del
-  // medio, porque esta costa corre hacia el sureste y los de abajo son los que
-  // estan mas a la derecha.
-  const anclaCosta = costaPx
-    .filter(([x, y]) => x > 0 && x < laminaW && y > 20 && y < laminaH - 20)
-    .sort((a, b) => Math.abs(a[1] - laminaH / 2) - Math.abs(b[1] - laminaH / 2))[0];
-  if (anclaCosta) {
-    const cabe = anclaCosta[0] + 210 < laminaW;
-    svg.appendChild(crear("text", {
-      class: "costa-txt", x: anclaCosta[0] + (cabe ? 10 : -10), y: anclaCosta[1] + 4,
-      "text-anchor": cabe ? "start" : "end"}, "Río de la Plata (costa esquemática)"));
+  // --- agua y costa ---------------------------------------------------------
+  // El rio se rellena, no solo se contornea: en la foto satelital lo que hace
+  // reconocible la zona es la MANCHA de agua, no su borde. Con las dos orillas
+  // (argentina y uruguaya) mas dos esquinas lejanas al noreste, el poligono
+  // cubre el estuario y deja la tierra en el negro del fondo.
+  if ((GEO.costa || []).length >= 2) {
+    const ar = GEO.costa[0].map(([la, lo]) => px(la, lo));
+    const uy = GEO.costa[1].map(([la, lo]) => px(la, lo));
+    // El agua queda entre las dos orillas: se recorre la argentina de norte a
+    // sur y la uruguaya de vuelta, cerrando por el Atlantico.
+    const agua = ar.concat(uy.slice().reverse());
+    svg.appendChild(crear("polygon", {class: "agua",
+                                      points: agua.map(q => q.join(",")).join(" ")}));
+    for (const orilla of [ar, uy])
+      svg.appendChild(crear("polyline", {class: "costa",
+                                         points: orilla.map(q => q.join(",")).join(" ")}));
   }
 
   // --- aeropuertos ----------------------------------------------------------
@@ -334,6 +338,21 @@ function dibujar(datos, trazas) {
       + (vePista ? " · pista visible" : " · pista bajo el horizonte")));
   }
 
+  // --- pistas ---------------------------------------------------------------
+  // Se dibujan con los DOS umbrales reales de cada pista (ver geografia.py,
+  // datos de OurAirports), asi que la orientacion es la de verdad y no la
+  // deducida de la designacion: "13/31" es rumbo magnetico redondeado a diez
+  // grados, y con la declinacion de Buenos Aires eso deja la pista varios
+  // grados torcida. A esta escala una pista mide pocos pixeles, pero es lo que
+  // le da sentido a la direccion de las trazas: un avion que aterriza viene
+  // alineado con ella.
+  for (const pista of (GEO.pistas || [])) {
+    const [x1, y1] = px(pista.le[0], pista.le[1]);
+    const [x2, y2] = px(pista.he[0], pista.he[1]);
+    svg.appendChild(crear("line", {class: "pista", x1, y1, x2, y2,
+                                   "vector-effect": "non-scaling-stroke"}));
+  }
+
   // --- receptor -------------------------------------------------------------
   // La etiqueta va debajo del triangulo y centrada: a la derecha se cruzaba con
   // las trazas que salen hacia el este, que es justo donde esta el rio.
@@ -351,6 +370,62 @@ function dibujar(datos, trazas) {
     svg.appendChild(crear("text", {class: "rx-sub", x: rxX, y: rxY + 32,
                                    "text-anchor": "middle"},
                           `antena a ${rx.antenna_m} m`));
+
+  // --- zoom y arrastre ------------------------------------------------------
+  // Se mueve el viewBox y no un transform: asi el zoom es geometrico de verdad
+  // -las distancias siguen siendo distancias- y los anillos, la costa y las
+  // pistas se recortan solos contra el borde, como en un radar.
+  //
+  // Los trazos llevan vector-effect="non-scaling-stroke" para no engordar al
+  // acercarse, y los textos se re-escalan a mano en cada paso: una etiqueta que
+  // crece con el zoom termina tapando el mapa que uno estaba tratando de mirar.
+  const VB = {x: 0, y: 0, w: laminaW, h: laminaH};
+  const base = {...VB};
+  const TEXTOS = [];   // [nodo, tamano original] -- se llena al insertar en el DOM
+  const MARCAS = [];   // [nodo, radio original] -- idem, para los puntos
+
+  function aplicarVista() {
+    svg.setAttribute("viewBox", `${VB.x} ${VB.y} ${VB.w} ${VB.h}`);
+    const k = VB.w / base.w;                     // <1 = acercado
+    for (const [nodo, tamano] of TEXTOS) nodo.setAttribute("font-size", tamano * k);
+    for (const [nodo, r] of MARCAS) nodo.setAttribute("r", r * k);
+  }
+
+  svg.addEventListener("wheel", ev => {
+    ev.preventDefault();
+    const caja = svg.getBoundingClientRect();
+    // El punto bajo el cursor se queda quieto: es lo que hace que el zoom se
+    // sienta como agarrar el mapa y no como saltar a otro lado.
+    const fx = (ev.clientX - caja.left) / caja.width;
+    const fy = (ev.clientY - caja.top) / caja.height;
+    const factor = ev.deltaY > 0 ? 1.15 : 1 / 1.15;
+    const nuevoW = Math.min(base.w * 1.2, Math.max(base.w / 60, VB.w * factor));
+    const nuevoH = nuevoW * (base.h / base.w);
+    VB.x += (VB.w - nuevoW) * fx;
+    VB.y += (VB.h - nuevoH) * fy;
+    VB.w = nuevoW; VB.h = nuevoH;
+    aplicarVista();
+  }, {passive: false});
+
+  let arrastre = null;
+  svg.addEventListener("pointerdown", ev => {
+    arrastre = {x: ev.clientX, y: ev.clientY, vx: VB.x, vy: VB.y};
+    svg.setPointerCapture(ev.pointerId);
+    svg.style.cursor = "grabbing";
+  });
+  svg.addEventListener("pointermove", ev => {
+    if (!arrastre) return;
+    const caja = svg.getBoundingClientRect();
+    VB.x = arrastre.vx - (ev.clientX - arrastre.x) * (VB.w / caja.width);
+    VB.y = arrastre.vy - (ev.clientY - arrastre.y) * (VB.h / caja.height);
+    aplicarVista();
+  });
+  const soltar = () => { arrastre = null; svg.style.cursor = "grab"; };
+  svg.addEventListener("pointerup", soltar);
+  svg.addEventListener("pointercancel", soltar);
+  svg.addEventListener("dblclick", () => { Object.assign(VB, base); aplicarVista(); });
+  svg.style.cursor = "grab";
+  svg.style.touchAction = "none";
 
   // --- trayectorias ---------------------------------------------------------
   for (const t of trazas) {
@@ -415,6 +490,18 @@ function dibujar(datos, trazas) {
   const contenedor = document.getElementById("mapa");
   contenedor.innerHTML = "";
   contenedor.appendChild(svg);
+
+  // El tamano original de cada texto se lee DESPUES de insertar: viene de las
+  // clases CSS, no de un atributo, asi que antes de estar en el DOM no existe.
+  // Se guarda para poder re-escalarlo en cada paso de zoom y que las etiquetas
+  // mantengan su tamano en pantalla.
+  for (const t of svg.querySelectorAll("text")) {
+    const tam = parseFloat(getComputedStyle(t).fontSize) || 11;
+    TEXTOS.push([t, tam]);
+    t.setAttribute("font-size", tam);
+  }
+  for (const c of svg.querySelectorAll("circle.punto"))
+    MARCAS.push([c, parseFloat(c.getAttribute("r")) || 2]);
   document.getElementById("leyenda").style.display = "";
 }
 
@@ -692,8 +779,12 @@ async function cargar() {
      ${rx.nearest_airport}, con la antena a ${rx.antenna_m} m. El círculo verde punteado
      es hasta dónde se puede ver un avión <em>en la pista</em>: ${rx.surface_horizon_km} km
      desde esta altura. Los aeropuertos con el rombo lleno tienen su pista dentro de ese
-     círculo; los huecos solo se ven por arriba.${lejanoTxt} El dibujo es SVG generado acá, sin mapas de terceros — el
-     sistema funciona sin internet y un mapa con tiles lo rompería.`;
+     círculo; los huecos solo se ven por arriba.${lejanoTxt}
+     <br><br><strong>Rueda para acercar, arrastrá para mover, doble clic para volver.</strong>
+     El dibujo es SVG generado acá, sin tiles ni librerías: el sistema funciona sin internet
+     y un mapa que pide tiles lo rompería. La costa sale de Natural Earth y las pistas de
+     OurAirports, con los dos umbrales reales de cada una — dibujadas a ojo se verían igual
+     de convincentes y estarían torcidas.`;
 }
 
 // Redibujar mientras el mouse esta encima destruye el nodo bajo el cursor y se
