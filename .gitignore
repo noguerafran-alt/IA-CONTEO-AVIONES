@@ -48,3 +48,6 @@ webapp/static/plotly.min.js
 # hasta el checkpoint.
 *.db-wal
 *.db-shm
+
+# Tabla del Doc 8643: se importa con tipos_avion.py, no viaja en el repo.
+tools/aircraft_types.sqlite

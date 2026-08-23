@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con el registro COMPLETO de OpenSky importado.
+Última actualización: 2026-08-23, con el Doc 8643 de la OACI importado.
 
 ---
 
@@ -210,6 +210,31 @@ de país lo caza**), y `a88552` decía `N680XP` y era `N6480G` (los dos EEUU →
 chequeo NO lo caza**, por eso las `N-` se excluyen). Quedan 4/4 en el patrón
 `LV`, con **n=4**: se informa como *probable*, nunca como confirmada, y en la
 interfaz va con punteado y el origen en el tooltip.
+
+**El Doc 8643 de la OACI agrega lo que el registro no tiene.** Medido sobre las
+107 aeronaves con typecode y 10+ mensajes: **27 ganan modelo** que el registro no
+traía (`A359` y `C82S` salían vacíos), y **106 ganan motores y categoría de
+estela**, datos que el registro no incluye. La estela clasifica el tráfico por
+peso: 82 medias, 13 pesadas, 10 ligeras.
+
+Dos decisiones que importan. **El modelo del Doc 8643 no pisa al del registro**,
+solo rellena: el Doc tiene un nombre por designador y cuando el designador cubre
+varias variantes le puede tocar la ejecutiva — `B38M` → "737 MAX 8 **BBJ**",
+`A359` → "**Prestige** (A-350-900)", nombres equivocados para un avión de línea.
+El registro sabe la variante del avión concreto; el Doc sabe la familia.
+
+Y entre las variantes de un mismo designador **ni la primera ni la última sirve**:
+para `B38M` el archivo trae "BBJ (737 MAX 8)", "737 MAX 8" y "737 MAX 8 BBJ" — la
+base está en el medio. Se elige descartando las que llevan marcador VIP y tomando
+la más corta de las que sobran, y así salen "737 MAX 8", "A-350-900 XWB",
+"777-200". Va en `tools/aircraft_types.sqlite`, **separado del registro**, porque
+`--desde` reconstruye el registro entero y una tabla ahí se perdería en silencio.
+
+**El `aircraftDatabase-2024-04`: NO sirve.** Aporta **1 sola** matrícula
+(`3935e2`, francesa, 2 mensajes) sobre las 198 que faltaban. Y confirma algo útil:
+de esas 198, **165 tienen 1–2 mensajes y cero posiciones** — son ruido, no aviones.
+Solo 13 tienen 10+ mensajes, y tres las cubre la inferencia por distintivo. El
+hueco real son unos 5-7 aviones, no 198.
 
 **El registro que importa es el export COMPLETO de OpenSky, no el de
 `data-samples`.** Son dos datasets distintos y la diferencia es grande. Medido
@@ -443,6 +468,7 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `geografia.py` | costa del Río de la Plata y pistas reales, con su fuente |
 | `aeropuerto.py` | atribuir operaciones a UN aeropuerto |
 | `identidad.py` | todo lo que se puede saber de cada vuelo, con su procedencia |
+| `tipos_avion.py` | tipo de avión por el Doc 8643 de la OACI: modelo, motores, estela |
 | `test_adsb_position.py` | 8 escenarios de posición y CRC |
 | `test_adsb_incremental.py` | el cursor no pierde ni repite filas, y da igual que `load_db` |
 | `webapp/bajar_plotly.py` | baja Plotly una vez |

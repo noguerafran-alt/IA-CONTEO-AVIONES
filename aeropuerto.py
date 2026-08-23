@@ -111,6 +111,13 @@ class Operacion:
     operator: str | None = None
     operator_source: str | None = None
     operator_code: str | None = None
+    # Del Doc 8643: motores y categoria de estela. La estela es un dato
+    # operativo real -define la separacion minima en aproximacion- y ademas
+    # clasifica el trafico por peso sin depender del modelo exacto.
+    motores: int | None = None
+    tipo_motor: str | None = None
+    estela: str | None = None
+    estela_texto: str | None = None
     min_altitude_ft: float | None = None
     min_distance_km: float | None = None
     track_deg: float | None = None
@@ -494,6 +501,10 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
             operator=(ident.operator if ident else None),
             operator_source=(ident.operator_source if ident else None),
             operator_code=(ident.operator_code if ident else None),
+            motores=(ident.motores if ident else None),
+            tipo_motor=(ident.tipo_motor if ident else None),
+            estela=(ident.estela if ident else None),
+            estela_texto=(ident.estela_texto if ident else None),
             min_altitude_ft=r["min_alt"], min_distance_km=round(r["min_d"], 2),
             track_deg=r["track"], pista=pista, alineada=alineada, posiciones=r["n"],
         ))
@@ -546,6 +557,8 @@ def como_json(inf: Informe | None) -> dict | None:
              "registration_source": o.registration_source,
              "operator": o.operator, "operator_source": o.operator_source,
              "operator_code": o.operator_code,
+             "motores": o.motores, "tipo_motor": o.tipo_motor,
+             "estela": o.estela, "estela_texto": o.estela_texto,
              "min_altitude_ft": o.min_altitude_ft, "min_distance_km": o.min_distance_km,
              "track_deg": o.track_deg, "pista": o.pista, "alineada": o.alineada,
              "confirmada": o.confirmada, "posiciones": o.posiciones}

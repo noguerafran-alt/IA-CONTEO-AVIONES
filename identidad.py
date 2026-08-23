@@ -185,6 +185,12 @@ class Identidad:
     operator: str | None = None
     operator_source: str | None = None          # 'registro' | 'distintivo'
     operator_code: str | None = None
+    # Del Doc 8643 de la OACI (tipos_avion.py). Son datos que el registro de
+    # OpenSky no trae, asi que no hay conflicto posible: se suman siempre.
+    motores: int | None = None
+    tipo_motor: str | None = None
+    estela: str | None = None            # L / M / H / J
+    estela_texto: str | None = None      # "media (7 a 136 t)"
     messages: int = 0
     # Direcciones que trajeron este mismo distintivo con muchos menos mensajes.
     # Se informan en vez de borrarse: son la huella de tramas con la direccion
@@ -267,6 +273,17 @@ def resolver_desde_conteo(conteo: dict[str, int], distintivo: dict[str, str],
                           alias=[d for d, dueña in alias_de.items() if dueña == direccion])
 
         entrada = aircraft_db.lookup(direccion) if aircraft_db.available() else None
+        # El Doc 8643 rellena el modelo cuando el registro no lo tiene -27 de 107
+        # aeronaves con typecode en estos datos- y agrega motores y categoria de
+        # estela, que el registro no trae. Nunca pisa el modelo del registro: el
+        # Doc 8643 tiene un nombre por designador y puede tocarle la version
+        # ejecutiva, que para un avion de linea es un nombre equivocado.
+        if entrada:
+            try:
+                import tipos_avion
+                entrada = tipos_avion.enriquecer(entrada)
+            except Exception:
+                pass
         if entrada:
             ident.registration = entrada.get("registration") or None
             ident.aircraft_type = aircraft_db.describe_type(entrada)
@@ -275,6 +292,10 @@ def resolver_desde_conteo(conteo: dict[str, int], distintivo: dict[str, str],
                 ident.registration_source = "registro"
             if ident.operator:
                 ident.operator_source = "registro"
+            ident.motores = entrada.get("motores")
+            ident.tipo_motor = entrada.get("tipo_motor")
+            ident.estela = entrada.get("estela")
+            ident.estela_texto = entrada.get("estela_texto")
 
         # La inferencia SOLO rellena lo que el registro dejo vacio. Nunca pisa un
         # dato duro con uno probable.
@@ -306,6 +327,8 @@ def como_json(ident: Identidad) -> dict:
         "aircraft_type": ident.aircraft_type,
         "operator": ident.operator, "operator_source": ident.operator_source,
         "operator_code": ident.operator_code,
+        "motores": ident.motores, "tipo_motor": ident.tipo_motor,
+        "estela": ident.estela, "estela_texto": ident.estela_texto,
         "messages": ident.messages, "alias": ident.alias,
         "confirmada": ident.confirmada,
     }
