@@ -10,8 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con la mudanza a Aeroparque, los mapas en
-tiempo real y el arreglo del "graba pero no entra nada".
+Última actualización: 2026-08-23, con la ganancia de campo medida (20, no `auto`).
 
 ---
 
@@ -111,7 +110,7 @@ el puerto — ese servidor seguiría midiendo desde San Isidro sin decirlo. El
 equivalente a mano:
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && cmd /c "set ADSB_RECEIVER=aeroparque && set ADSB_GAIN=auto && set ADSB_SOURCE=iq && ..\.venv\Scripts\python.exe main.py"
+cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && cmd /c "set ADSB_RECEIVER=aeroparque && set ADSB_GAIN=20 && set ADSB_SOURCE=iq && ..\.venv\Scripts\python.exe main.py"
 ```
 
 ---
@@ -187,6 +186,15 @@ aterrizaje, hasta los mismos pies; lo único que los separa es que uno se va. Po
 eso se mira el reascenso posterior al punto más bajo, y las aproximaciones que no
 se pudieron resolver se cuentan **aparte**.
 
+**`ADSB_GAIN=auto` NO sirve para medir de cerca — usar 20.** Medido desde San
+Isidro, a 13,3 km: con `auto` el **11,5% de los mensajes pasaba de −6 dBFS** y el
+pico llegaba a **−4,1**, o sea contra el techo del receptor; con 25 el pico era
+−23,6 y la saturación **0%**. A 1,15 km del umbral la señal llega unos **21 dB
+más fuerte** (`20·log₁₀(13300/1150)`), así que `auto` daría **+17 dBFS**:
+saturación total, y saturar hace *perder* mensajes. `MEDIR-EN-AEROPARQUE.bat`
+fija **20** por eso. Si entran pocas aeronaves y la saturación figura en 0%,
+subirla — el panel de señal de `/adsb` es el instrumento.
+
 **Más ganancia no es mejor.** Lejos cada dB alcanza un avión más lejano; pegado a
 la pista el receptor satura y se pierden mensajes. Medido: con ganancia 30 desde
 San Isidro la mediana cae a −33,5 dBFS y entra **una** aeronave en 70 s, contra
@@ -216,7 +224,8 @@ Validación por contraste, mismos datos, mismo código:
 | Aeroparque | 13,3 km | no | 2134 ft AGL | 0 aterrizajes, con advertencia |
 
 **A 300 m de la pista esto se da vuelta.** Ahí conviene: bajar la ganancia
-(`ADSB_GAIN=auto` para arrancar), mirar el panel de señal de `/adsb`, y si las
+(`ADSB_GAIN=20`, no `auto`: ver la medición más arriba), mirar el panel de señal
+de `/adsb`, y si las
 "aproximaciones sin resolver" quedan altas, subir `ADSB_AIRPORT_RADIUS_KM`.
 
 **Y lo que ninguna antena arregla:** la matrícula y el tipo no viajan por radio,

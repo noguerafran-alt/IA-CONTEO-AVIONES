@@ -53,7 +53,15 @@ REM pegado a la pista satura y se pierden mensajes. Medido en la otra punta:
 REM con ganancia 30 desde San Isidro entraba UNA aeronave en 70 s contra 6-8 con
 REM 49.6, asi que tampoco se puede bajar a ciegas. 'auto' es el punto de partida
 REM y el panel de senal de /adsb es donde se decide si moverla.
-set ADSB_GAIN=auto
+REM Ganancia 20 y NO auto. Medido desde San Isidro, a 13.3 km: con auto el
+REM 11.5%% de los mensajes pasaba de -6 dBFS y el pico llegaba a -4.1, o sea
+REM contra el techo del receptor. A 1.15 km del umbral la senal llega unos
+REM 21 dB mas fuerte (20*log10(13300/1150)), asi que auto daria +17 dBFS:
+REM saturacion total, y saturar hace PERDER mensajes. Con 25 el pico era
+REM -23.6 y la saturacion 0%%, asi que 20 deja margen.
+REM Si en el dashboard entran pocas aeronaves y la saturacion figura en 0%%,
+REM subila. El panel de senal de /adsb es el instrumento, no la intuicion.
+set ADSB_GAIN=20
 
 REM La fuente por defecto seria "auto", que resuelve a rtl_adsb y NUNCA elige
 REM IQ. Hay que fijarla o el camino recomendado queda como un paso manual que se
