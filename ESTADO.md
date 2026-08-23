@@ -17,9 +17,10 @@ tiempo real y el arreglo del "graba pero no entra nada".
 
 ## Lo primero que hay que saber
 
-**La antena está en San Isidro, no en Aeroparque.** El repo nombra Aeroparque por
-todos lados, pero eso es el material de *video* (`data/aeroparque_full.mp4`). Es
-el error más fácil de cometer acá.
+**Que el repo diga "Aeroparque" por todos lados no dice dónde está la antena.**
+Eso es el material de *video* (`data/aeroparque_full.mp4`), y es el error más
+fácil de cometer acá. Durante toda la historia del proyecto la antena estuvo en
+**San Isidro**, a 13,3 km: todo el histórico se grabó desde ahí.
 
 **La mudanza se hace el 2026-08-23** (hoy), a `-34.551378, -58.437306`, que está
 a **1153 m del umbral 13** de Aeroparque. Quedó como preset `aeroparque` en
@@ -104,10 +105,13 @@ Todas documentadas en `.env.example`. Ninguna es secreta (no van en `.env`).
 | `ADSB_DB` | `adsb_log.db` junto al código | dónde vive la base. La define `adsb_record.py` y `webapp/main.py` la importa de ahí |
 | `ADSB_SOURCE` | `auto` | qué fuente usar al iniciar. **Poner `iq`**: `auto` resuelve a `rtl_adsb` y nunca elige IQ |
 
-Para probar en Aeroparque:
+Para medir en Aeroparque, doble clic en **`MEDIR-EN-AEROPARQUE.bat`**, que fija
+las cuatro variables que hacen falta y frena si quedó un servidor viejo tomando
+el puerto — ese servidor seguiría midiendo desde San Isidro sin decirlo. El
+equivalente a mano:
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && cmd /c "set ADSB_GAIN=auto && set ADSB_RECEIVER=-34.5592,-58.4156 && set ADSB_ANTENNA_M=3 && ..\.venv\Scripts\python.exe main.py"
+cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && cmd /c "set ADSB_RECEIVER=aeroparque && set ADSB_GAIN=auto && set ADSB_SOURCE=iq && ..\.venv\Scripts\python.exe main.py"
 ```
 
 ---
