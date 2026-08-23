@@ -1,8 +1,17 @@
 # Estado del sistema ADS-B — para retomar en otra sesión
 
-Escrito el 2026-08-22. Es un traspaso, no documentación del proyecto: dice dónde
-quedó todo, qué está sin resolver y qué decisiones ya se tomaron para no
-rediscutirlas. El **README.md** sigue siendo la documentación de verdad.
+Es un traspaso, no documentación del proyecto: dice dónde quedó todo, qué está
+sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
+**README.md** sigue siendo la documentación de verdad.
+
+> **Este archivo se actualiza con cada cambio del repo, en el mismo commit.** El
+> proyecto se trabaja desde varias sesiones y varios usuarios de la misma
+> máquina, y las notas de una sesión no las ve la siguiente: un cambio que no
+> quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
+> sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
+
+Última actualización: 2026-08-22, con el mapa del aeropuerto y el arreglo de la
+costa.
 
 ---
 
