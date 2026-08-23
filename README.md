@@ -361,7 +361,9 @@ aproximación de un vuelo de paso.
 Es un SVG generado en el navegador, **sin tiles ni CDN**: el resto del sistema
 funciona sin internet y un mapa con fondo de OpenStreetMap lo rompería justo
 cuando más se lo necesita. Se pierde el fondo satelital; la costa del Río de la
-Plata va dibujada como referencia esquemática y está etiquetada como tal.
+Plata sale de **Natural Earth** y las pistas de **OurAirports**, con la fuente a
+la vista y los dos umbrales reales de cada pista. Dibujadas a ojo se verían
+igual de convincentes y estarían torcidas.
 
 Por defecto el mapa se encuadra al grueso del tráfico y avisa cuántas aeronaves
 quedaron fuera, con un botón para verlas: un solo avión de crucero a 72 km
@@ -369,20 +371,31 @@ obliga a abrir el encuadre tanto que las aproximaciones cercanas quedan
 ilegibles. Nada se oculta en silencio — las de fuera de cuadro siguen en la
 lista lateral y en los totales.
 
-Si no hay ninguna posición decodificada, la página **no** dibuja un mapa vacío
-ni rellena con posiciones simuladas: explica por qué está vacío.
+Si el mapa queda vacío, la página **no** dibuja un mapa vacío ni rellena con
+posiciones simuladas: explica **cuál** de las causas posibles es. Son distintas y
+no se pueden confundir — no llegó ninguna posición, llegaron y el filtro las
+rechazó a todas, o las que hay quedaron fuera de la ventana de dibujo de 3 h por
+antigüedad. En este último caso el número de lo recortado está escrito y hay un
+botón **Ver la grabación entera** que lo pide.
 
-**Se actualiza solo cada 10 s**, así que sirve para mirar mientras la antena
-graba. Tres detalles que hacen que el modo en vivo no moleste:
+**Se actualiza solo cada 5 s**, así que sirve para mirar mientras la antena
+graba. Los detalles que hacen que el modo en vivo no moleste:
 
 - El indicador de arriba dice si la captura está **corriendo o detenida**. Un
   mapa que se refresca con la grabación parada se ve idéntico a un cielo vacío;
   el punto de estado distingue los dos casos y enlaza a `/adsb` para arrancarla.
-- El refresco **se pausa mientras el mouse está sobre el mapa o la lista**:
-  redibujar destruye el nodo bajo el cursor y se pierde el resaltado a mitad de
-  gesto.
+  Y publica `lag_s`: cuán vieja es la fila más nueva. Un poll exitoso cada 5 s
+  sobre una base atrasada 12 h es la forma más convincente de mentir.
+- **El zoom y el paneo sobreviven al refresco.** El mapa se redibuja con
+  `Plotly.react` y un encuadre pegajoso, no con `newPlot`. Ya **no** hay pausa
+  por hover: la justificación de esa pausa ("redibujar destruye el nodo bajo el
+  cursor") es cierta para `newPlot` y falsa para `react` — medido, el tooltip
+  sobrevive y los `<path class="js-line">` son los mismos nodos. La pausa era lo
+  contrario del tiempo real: congelaba el mapa justo cuando alguien lo miraba.
 - Con la pestaña en segundo plano no consulta nada, y al volver pide de nuevo
   para no mostrar una foto vieja.
+- Ante un error del servidor reintenta con backoff (5 → 10 → 20 → 40 → 60 s) y
+  el cartel dice cuántos segundos faltan, contando de verdad.
 
 ### Por qué no guarda todos los mensajes
 

@@ -52,10 +52,10 @@ es peor que un cero explicado.
 
 ## Verificar ejecutando, no leyendo
 
-Los tres archivos de test tienen que pasar antes de commitear:
+Los cuatro archivos de test tienen que pasar antes de commitear:
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics && .venv\Scripts\python.exe test_adsb.py && .venv\Scripts\python.exe test_adsb_events.py && .venv\Scripts\python.exe test_adsb_position.py
+cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics && .venv\Scripts\python.exe test_adsb.py && .venv\Scripts\python.exe test_adsb_events.py && .venv\Scripts\python.exe test_adsb_position.py && .venv\Scripts\python.exe test_adsb_incremental.py
 ```
 
 Para lo de ADS-B, verificar con **replay de mensajes hex** y no esperando que
@@ -67,6 +67,10 @@ pase un avión. Hay vectores conocidos: el par CPR clásico
 `rtl_sdr.exe` o `rtl_adsb.exe`, verificar que la grabación de la webapp no esté
 corriendo, o pararla desde `/adsb`.
 
-**La base commitea cada 50 filas**, así que consultar `adsb_log.db` mientras
-graba puede mostrar datos viejos. El CSV de `output/adsb/` se vuelca fila por
-fila. Esto ya hizo perder tiempo buscando un bug que no existía.
+**La base commitea cada 1,0 s de reloj** (antes cada 50 filas, que sin cota
+temporal dejaba filas invisibles hasta **759,5 s — 12,7 min — medidos** con el
+grabador funcionando normal). Abre en WAL. El retraso real está siempre a la vista: `lag_s` en los dos mapas y
+`pending` / `seconds_since_commit` / `journal_mode` en `/api/adsb/status`. El
+cambio entra en el **próximo arranque del grabador**: una grabación ya en curso
+sigue con el comportamiento viejo. El CSV de `output/adsb/` se vuelca fila por
+fila y nunca tuvo el problema.

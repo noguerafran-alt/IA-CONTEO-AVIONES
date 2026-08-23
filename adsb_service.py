@@ -162,7 +162,13 @@ class AdsbService:
         return {
             "running": self.running,
             "description": self.description,
-            "error": self.start_error,
+            # start_error cubre la falla al ARRANCAR; last_error, la que ocurre
+            # despues, dentro del hilo lector de la fuente. Publicar solo la
+            # primera dejaba invisible el caso mas comun de todos: el dongle
+            # tomado por otro proceso, que falla recien cuando el hilo intenta
+            # abrirlo. Ahi start() ya habia devuelto running=true y la pagina
+            # mostraba el punto verde sin recibir un mensaje.
+            "error": self.start_error or getattr(source, "last_error", None),
             "waiting_for_device": bool(getattr(source, "waiting_for_device", False)),
             "started_at": self.started_at,
             "uptime_s": (now - self.started_at) if self.started_at else 0,
@@ -170,6 +176,23 @@ class AdsbService:
             "with_registration": len(recorder.with_registration) if recorder else 0,
             "written": recorder.written if recorder else 0,
             "skipped": recorder.skipped if recorder else 0,
+            # La frescura de la base, como NUMERO. Antes el unico indicio del
+            # atraso era indirecto y habia que hacer la cuenta a mano: written=294
+            # y 294 % 50 = 44 filas invisibles, que coincidian con las 44 filas de
+            # mas que tenia el CSV y con los 49 760 bytes del adsb_log.db-journal.
+            # Nadie deberia tener que hacer esa cuenta para saber cuan viejo es el
+            # mapa. `pending` son las filas escritas y todavia no confirmadas
+            # -- ningun lector las ve -- y `seconds_since_commit` es cuanto hace
+            # que ninguna se confirma. El techo de las dos es commit_interval_s.
+            "pending": recorder.pending if recorder else 0,
+            "commit_interval_s": recorder.commit_interval_s if recorder else None,
+            "seconds_since_commit": (round(recorder.seconds_since_commit(), 2)
+                                     if recorder else None),
+            # El modo REAL que devolvio el PRAGMA, no el que se pidio: SQLite no
+            # cambia el journal si otra conexion tiene la base y no avisa, asi
+            # que 'delete' aca significa que el commit por tiempo esta corriendo
+            # 5.5x mas caro de lo previsto.
+            "journal_mode": getattr(recorder, "journal_mode", None),
             "csv_dir": str(CSV_DIR),
             "db_path": str(DB_PATH),
             # Los contadores del filtro, con el cero explicito: un contador

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import signal
 import sqlite3
 import time
@@ -37,7 +38,14 @@ from adsb import Observation
 from adsb_events import PositionGate, imprimir_rechazos
 
 CSV_DIR = Path(__file__).parent / "output" / "adsb"
-DB_PATH = Path(__file__).parent / "adsb_log.db"
+# La ruta de la base sale del entorno igual que ADSB_RECEIVER, ADSB_SURFACE_REF
+# y ADSB_AIRPORT, y no solo de __file__. Sin ADSB_DB la unica forma de
+# ejercitar el sistema montado con filas que entran era escribir en el
+# adsb_log.db real -- 11 823 filas que no se pueden volver a capturar -- o
+# duplicar el arbol entero. Un sistema que no se puede probar sin tocar el dato
+# del usuario es un problema en si mismo. La lee webapp/main.py tambien: es LA
+# definicion, no una copia.
+DB_PATH = Path(os.environ.get("ADSB_DB") or (Path(__file__).parent / "adsb_log.db"))
 
 COLUMNS = [
     "utc", "epoch", "icao24", "registration", "callsign",
@@ -161,6 +169,24 @@ class Recorder:
         # thread"). Safe here because those three never touch it at once --
         # stop() joins the recording thread before close() runs.
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        # WAL, y se CHEQUEA lo que devolvio el PRAGMA. No es ceremonia: SQLite
+        # no puede cambiar el modo de journal si otra conexion tiene la base
+        # abierta, y en ese caso no falla -- devuelve el modo en el que quedo.
+        # Quedarse en 'delete' creyendo estar en WAL es exactamente el descarte
+        # silencioso que este repo no se permite, asi que el modo REAL se
+        # publica en adsb_service.status() y no se asume.
+        #
+        # WAL no baja el retraso por si solo: medido, journal=wal con commit
+        # cada 50 filas da el mismo retraso visible que journal=delete con
+        # commit cada 50 (mediana 0.26 s contra 0.25 s). Lo que hace es abaratar
+        # el commit 5.5x (2.46 -> 0.45 ms) y borrar los picos de 117.8 ms en los
+        # que el lector se quedaba bloqueado (1.04 ms en WAL). Es el habilitador
+        # del commit por tiempo de mas abajo, no un sustituto.
+        try:
+            self.journal_mode = self.conn.execute(
+                "PRAGMA journal_mode=wal").fetchone()[0]
+        except sqlite3.Error as exc:
+            self.journal_mode = f"error: {exc}"
         self.conn.executescript(SCHEMA)
         self.conn.commit()
         self.schema_migrated = migrar_esquema(self.conn, db_path)
@@ -180,6 +206,39 @@ class Recorder:
 
         self.written = 0
         self.skipped = 0
+        # Commit por TIEMPO y no cada N filas. Aca vivia TODO el retraso del
+        # mapa: el INSERT puro mide 0.003 ms y el commit 2.46 ms, y hasta que
+        # no ocurre el commit ningun lector ve nada. Medido en vivo: 44 filas
+        # escritas e invisibles, la mas vieja con 878 s (14.6 min) de espera.
+        #
+        # Y re-medido sobre las 11 823 filas de adsb_log.db, reconstruyendo los
+        # lotes de 50 por id (236 lotes completos): cada fila esperaba mediana
+        # 38.7 s, p90 186.0 s, p99 410.5 s y MAXIMO 759.5 s (12.7 min). Esos
+        # numeros excluyen los 18 lotes que cruzan un corte de grabacion (hueco
+        # > 300 s), y hay que excluirlos: contandolos el maximo da 14 902.8 s
+        # (4 h 8 min), pero ese numero NO es una fila esperando -- sale entero
+        # del hueco de 14 742.9 s entre id=3523 (2026-08-22T13:59:12Z) e
+        # id=3524 (18:04:55Z), cuatro horas con CERO filas, o sea el grabador
+        # apagado. Si el grabador se detiene, close() commitea; si se cae sin
+        # cerrar, esas filas no llegan a la base. Ninguna fila espero 4 h.
+        # (Contando todos los lotes: mediana 40.6 s, p90 223.0 s, p99 2 114.9 s.)
+        #
+        # Por tiempo y no por cantidad porque un umbral por cantidad NO TIENE
+        # COTA TEMPORAL: 759.5 s de retraso medidos con el grabador funcionando
+        # normal ya lo prueban. Y empeora cuando baja el trafico: la hora mas
+        # floja con el grabador claramente encendido (2026-08-23T02 UTC = 23:00
+        # local, 340 filas, hueco interno maximo 258 s) da 5.67 filas/min, con
+        # lo que un lote de 50 tarda 529 s -- o sea que el mapa se atrasaria mas
+        # justo cuando el cielo esta vacio y cada avion importa mas. A las 22:00
+        # local (01:00 UTC) son 527 filas = 8.78 filas/min y el lote tarda 342 s.
+        # El temporizador acota el retraso en 1 s pase lo que pase.
+        #
+        # Lo que cuesta: al pico real medido (3.8 filas/s) es a lo sumo 1
+        # commit/s = 2.46 ms/s = 0.25 % de un nucleo, y 0.45 ms/s en WAL. Un dia
+        # entero al volumen de hoy son 26.7 s de commit contra 0.4 s.
+        self.commit_interval_s = 1.0
+        self._last_commit = time.monotonic()
+        self.pending = 0
         self.aircraft: set[str] = set()
         self.with_registration: set[str] = set()
 
@@ -271,11 +330,30 @@ class Recorder:
             valores,
         )
         self.written += 1
-        if self.written % 50 == 0:
+        self.pending += 1
+        if time.monotonic() - self._last_commit >= self.commit_interval_s:
             self.conn.commit()
+            self._last_commit = time.monotonic()
+            self.pending = 0
+
+    def seconds_since_commit(self) -> float:
+        """Cuanto hace que nadie confirma. Lo publica status() para que el
+        atraso sea un numero en pantalla y no una advertencia en prosa."""
+        return time.monotonic() - self._last_commit
 
     def close(self) -> None:
         self.conn.commit()
+        self.pending = 0
+        self._last_commit = time.monotonic()
+        # TRUNCATE y no PASSIVE: en WAL el .db se queda ATRAS del -wal hasta el
+        # checkpoint (el automatico recien salta a las 1 000 paginas), y
+        # adsb_log.db esta TRACKEADA en git -- `git ls-files --error-unmatch
+        # adsb_log.db` la devuelve. Cerrar dejando cola en el -wal significa que
+        # un `git add` sube un archivo al que le falta el final.
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass                      # en journal=delete el PRAGMA no aplica
         self.conn.close()
         if self._csv_file:
             self._csv_file.close()

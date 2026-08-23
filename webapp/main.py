@@ -1,4 +1,5 @@
 """Local dashboard showing landing/takeoff events from the SQLite DB."""
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 import db
+# La ruta de la base la define adsb_record (y la puede mover ADSB_DB). Se
+# importa y no se rearma como ROOT/"adsb_log.db" en cinco lugares: dos
+# definiciones de la misma ruta es como se termina con la webapp leyendo un
+# archivo y el grabador escribiendo otro.
+from adsb_record import DB_PATH as ADSB_DB_PATH
 from adsb_service import service as adsb_service
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -190,9 +196,191 @@ async def api_save_label(split: str, stem: str, request: Request):
 # adsb_service.py) so the page can show live counts and a downloadable CSV
 # instead of a terminal window scrolling text.
 
+# --- mapas incrementales -------------------------------------------------
+# Los dos mapas pollean con un CURSOR en vez de volver a pedir todo. El numero
+# que lo justifica: /api/adsb/mapa mandaba 208 028 B cada 10 s = 74.9 MB/h, y
+# simulando 360 refrescos sobre la ultima hora real el delta equivalente tiene
+# mediana 40 B y maximo 701 B. 279 de esos 360 refrescos (78 %) no traen ni una
+# posicion nueva, y hoy cada uno de esos cuesta releer la base entera: 153 ms
+# que crecen linealmente con el historico (40x filas = 40.4x tiempo).
+
+_LECTORES: dict[str, object] = {}
+_LECTORES_LOCK = __import__("threading").Lock()
+
+# Cuanto historico viaja en la carga completa. NO recorta los agregados: la
+# mediana, el p95 y el maximo siguen siendo de toda la grabacion, y lo que la
+# ventana deja afuera viaja como numero (trazas_fuera_de_ventana).
+VENTANA_H_DEFECTO = 3.0
+
+
+def _resolver_ventana(ventana_h) -> tuple[float | None, float | None, str | None]:
+    """La ventana de dibujo en segundos, y el motivo si el valor pedido no valia.
+
+    `ventana_h=0` pide la grabacion ENTERA y es el boton de las dos paginas.
+    Cualquier otro valor que no sea finito y >= 0 se rechaza DICIENDOLO, en vez
+    de reinterpretarse: medido, `ventana_h=1e400` llegaba como inf y reventaba
+    con HTTP 500 al serializar ("Out of range float values are not JSON
+    compliant", main.py, campo ventana_h), y `nan` o `-5` caian por
+    `ventana_s > 0` = False y devolvian la grabacion entera sin avisar que
+    habian interpretado un nan. Un 500 mudo es justo lo contrario de lo que hace
+    el resto de este endpoint, que ante un cursor invalido contesta 200 y
+    explica la decision en `forzada`.
+    """
+    import math
+
+    nota = None
+    if ventana_h is None:
+        horas = VENTANA_H_DEFECTO
+    elif not math.isfinite(ventana_h) or ventana_h < 0:
+        horas = VENTANA_H_DEFECTO
+        nota = (f"ventana_h={ventana_h} no es una cantidad de horas valida "
+                f"(hace falta un numero finito >= 0); se dibuja con "
+                f"{VENTANA_H_DEFECTO} h")
+    else:
+        horas = ventana_h
+    limite = horas * 3600.0 if horas > 0 else None
+    return limite, (limite / 3600.0 if limite else None), nota
+
+
+def lector_mapa():
+    """Un LectorIncremental por proceso, compartido por los dos mapas.
+
+    Uno solo y no uno por endpoint: el PositionGate tiene estado (la ultima
+    posicion ACEPTADA de cada aeronave es la referencia de la regla de
+    continuidad), asi que dos lectores sobre la misma base gastarian el doble
+    de memoria para llegar exactamente al mismo resultado -- y si algun dia no
+    llegaran al mismo, las dos paginas contarian distinto sobre los mismos
+    datos.
+    """
+    from adsb_events import LectorIncremental
+    import aeropuerto
+
+    clave = str(ADSB_DB_PATH)
+    with _LECTORES_LOCK:
+        lector = _LECTORES.get(clave)
+        if lector is None:
+            lector = _LECTORES[clave] = LectorIncremental(
+                clave, cilindro=aeropuerto.geometria_cilindro())
+    return lector
+
+
+def _estaticos_adsb() -> dict:
+    """Receptor, costa/pistas y aeropuertos: 6 001 B que NO cambian.
+
+    Se calculan una vez por proceso. Hoy viajaban en cada refresco, 360 veces
+    por hora = 2.16 MB/h de puro desperdicio. Ahora van con la carga completa y
+    en el delta viaja solo su hash (`estatico_v`, ~10 B): si cambia, el cliente
+    pide completa. Asi un ADSB_SURFACE_REF movido a mitad de corrida se sigue
+    delatando, que es la unica razon por la que estos datos viajaban seguido.
+    """
+    global _ESTATICOS
+    if _ESTATICOS is not None:
+        return _ESTATICOS
+
+    from receiver import (ANTENA_M, RECEIVER_ES_DEFAULT, RECEIVER_LAT, RECEIVER_LON,
+                          RECEIVER_NAME, distance_km, horizonte_km, nearest_airport,
+                          surface_ref_default)
+
+    referencia = surface_ref_default()
+    codigo, km_cercano = nearest_airport(RECEIVER_LAT, RECEIVER_LON)
+    # El horizonte a un blanco EN EL SUELO es el numero que decide si se pueden
+    # ver aviones en pista, y depende de la ALTURA de la antena mas que de la
+    # cercania: 13.0 km a 10 m contra 52.2 km a 160 m.
+    horizonte_suelo = horizonte_km(0)
+    receptor = {
+        "lat": RECEIVER_LAT, "lon": RECEIVER_LON,
+        "name": RECEIVER_NAME,
+        "is_default": RECEIVER_ES_DEFAULT,
+        "antenna_m": ANTENA_M,
+        "surface_horizon_km": round(horizonte_suelo, 1),
+        "nearest_airport": codigo, "nearest_airport_km": round(km_cercano, 1),
+        # Que referencia esta REALMENTE activa, no la que por defecto estaria:
+        # si alguien exporto ADSB_SURFACE_REF, el mapa tiene que delatarlo o
+        # muestra un receptor en un lugar y decodifica desde otro.
+        "surface_ref": (list(referencia) if isinstance(referencia, tuple) else referencia),
+        "surface_ref_is_default": referencia == (RECEIVER_LAT, RECEIVER_LON),
+    }
+
+    # La costa y las pistas van por el mismo endpoint y no en el template: son
+    # datos, con fuente y fecha, no decoracion.
+    import geografia
+    geo = geografia.como_json()
+
+    aeropuertos = []
+    try:
+        from pyModeS.position._airports import AIRPORTS
+        for code, nombre in (("SADF", "San Fernando"), ("SABE", "Aeroparque"),
+                             ("SAEZ", "Ezeiza")):
+            if code in AIRPORTS:
+                lat, lon = AIRPORTS[code]
+                km = distance_km(lat, lon)
+                aeropuertos.append({
+                    "code": code, "name": nombre, "lat": lat, "lon": lon,
+                    "km": (round(km, 1) if km is not None else None),
+                    # Si la PISTA de este aeropuerto entra en el horizonte de
+                    # superficie desde donde esta la antena. Es lo que separa
+                    # "cuento sus operaciones" de "solo lo veo pasar por arriba".
+                    "surface_visible": (km is not None and km <= horizonte_suelo),
+                })
+    except Exception:
+        pass
+
+    import hashlib
+    import json as _json
+    crudo = _json.dumps([receptor, geo, aeropuertos], sort_keys=True, default=str)
+    _ESTATICOS = {"receiver": receptor, "geo": geo, "airports": aeropuertos,
+                  "estatico_v": hashlib.sha1(crudo.encode()).hexdigest()[:10]}
+    return _ESTATICOS
+
+
+_ESTATICOS = None
+
+
+def _coverage_mapa(lector) -> dict:
+    """coverage sin rejected_detail: los rechazos ya viajan en `rejected`.
+
+    Hoy la misma lista salia DOS veces en la respuesta, entera en las dos, y
+    ninguna pagina leia la segunda. Con un solo rechazo son 400 B; con la
+    grabacion de un mes que se estropeo son megabytes duplicados en cada
+    refresco.
+    """
+    cov = lector.coverage()
+    cov.pop("rejected_detail", None)
+    return cov
+
+
+def _resolver_base(lector, desde) -> tuple[bool, int, str | None]:
+    """Decide completa o delta. Lo decide el SERVIDOR, siempre.
+
+    Un solo endpoint con parametro y no dos, porque el unico que sabe si el
+    proceso se reinicio -y por lo tanto si su cursor volvio a cero- es el
+    servidor. Con dos endpoints el cliente adivina, y adivinar mal deja una
+    pantalla desincronizada que nadie nota.
+    """
+    if desde is None:
+        return True, 0, None
+    try:
+        desde = int(desde)
+    except (TypeError, ValueError):
+        return True, 0, "cursor invalido"
+    if desde < 0:
+        return True, 0, "cursor invalido"
+    if desde > lector.cursor:
+        # El servidor se reinicio (o el cliente venia de otro proceso): su
+        # cursor esta mas adelante que el nuestro y no tenemos con que
+        # completarlo sin inventar.
+        return True, desde, "el servidor se reinicio y su cursor quedo atras"
+    return False, desde, None
+
+
 @app.get("/adsb")
 def adsb_page(request: Request):
-    return templates.TemplateResponse(request, "adsb.html", {})
+    # La fuente por defecto se marca en el HTML y no en el JS: el selector
+    # manda SIEMPRE su value, asi que si la pagina abriera en "Automatico"
+    # taparia a ADSB_SOURCE y la variable no serviria para nada.
+    return templates.TemplateResponse(
+        request, "adsb.html",
+        {"fuente_default": os.environ.get("ADSB_SOURCE") or "auto"})
 
 
 @app.get("/aeropuerto/mapa")
@@ -201,57 +389,128 @@ def aeropuerto_map_page(request: Request):
 
 
 @app.get("/api/aeropuerto/mapa")
-def api_aeropuerto_map():
+def api_aeropuerto_map(desde: int | None = None, ventana_h: float | None = None):
     """El mapa de UN aeropuerto: solo las trayectorias que operaron ahi.
 
     Distinto de /api/adsb/mapa en tres cosas, y por eso es otro endpoint y no un
     parametro: esta centrado en el aeropuerto y no en la antena, manda SOLO las
-    trazas que entraron al cilindro de operaciones -no las 50 que la antena
+    trazas que entraron al cilindro de operaciones -no las 55 que la antena
     escucho de paso-, y cada traza viene con el tipo de operacion que se le
     atribuyo, que es lo que el mapa colorea.
-    """
-    import aeropuerto
-    import adsb_report
-    from adsb_events import load_db
 
-    db_path = ROOT / "adsb_log.db"
+    El mismo protocolo de cursor que el otro mapa. `airport` viaja SIEMPRE,
+    tambien en el delta, y es a proposito: un punto nuevo puede convertir un
+    sobrevuelo en aterrizaje (_clasificar mira `sube = alturas[-1] -
+    alturas[i_min]`, aeropuerto.py), asi que el delta no puede ser solo "puntos
+    nuevos". Mandando el informe entero -- son 8 operaciones, no 55 trazas -- el
+    cliente puede comparar el tipo que tenia contra el que llego y repintar la
+    traza, el <li> y las tarjetas.
+    """
+    import time as _t
+
+    import aeropuerto
+
+    ahora = _t.time()
+    db_path = ADSB_DB_PATH
     if not db_path.exists():
-        return JSONResponse({"airport": None, "tracks": [],
+        return JSONResponse({"airport": None, "tracks": [], "base": "completa",
+                             "cursor": 0, "nuevos": 0, "nuevas_posiciones": 0,
+                             "lag_s": None,
                              "empty_reason": "todavia no se grabo nada"})
 
-    observaciones, _ = load_db(str(db_path))
-    inf = aeropuerto.informe(observaciones)
-    if inf is None:
-        return JSONResponse({"airport": None, "tracks": [],
-                             "empty_reason": "no hay aeropuerto configurado"})
+    lector = lector_mapa()
+    with lector._lock:
+        completa, desde_ok, forzada = _resolver_base(lector, desde)
+        avance = lector.avanzar()
+        # avanzar() puede haber reconstruido el lector porque la base
+        # retrocedio (archivo borrado y recreado, o filas borradas). Ahi el
+        # cursor del cliente no significa nada -- apunta a ids de otra base --
+        # asi que la respuesta pasa a completa y el motivo viaja en `forzada`,
+        # el mismo campo que ya usa el reinicio del servidor.
+        if avance["rebobinado"] is not None:
+            completa, forzada = True, avance["rebobinado"]["motivo"]
+        inf = lector.informe_aeropuerto()
+        if inf is None:
+            return JSONResponse({"airport": None, "tracks": [], "base": "completa",
+                                 "cursor": lector.cursor, "nuevos": avance["filas"],
+                                 "nuevas_posiciones": avance["posiciones"],
+                                 "lag_s": None,
+                                 "empty_reason": "no hay aeropuerto configurado"})
 
-    # Se cruzan las operaciones atribuidas con las trayectorias completas: el
-    # informe dice QUE hizo cada aeronave y tracks() dice POR DONDE paso. El
-    # mapa necesita las dos cosas, y la traza se manda ENTERA y no recortada al
-    # cilindro -- ver de donde venia el avion es la mitad de lo que hace
-    # entendible una aproximacion.
-    por_icao = {o.icao24: o for o in inf.operaciones}
-    trazas = []
-    for t in adsb_report.tracks(observaciones):
-        op = por_icao.get(t["icao24"])
-        if op is None:
-            continue
-        t["operacion"] = op.tipo
-        t["confirmada"] = op.confirmada
-        t["pista"] = op.pista
-        t["min_altitude_ft"] = op.min_altitude_ft
-        t["min_distance_km"] = op.min_distance_km
-        trazas.append(t)
+        # El filtro por operaciones va ANTES de construir las trazas y no
+        # despues: antes se armaban las 59 trazas completas para tirar 51 y
+        # quedarse con 8. Se pagaban enteras -- puntos, rumbo, matricula -- para
+        # descartarlas en la linea siguiente.
+        por_icao = {o.icao24: o for o in inf.operaciones}
+        solo = set(por_icao)
+        limite, ventana_publicada, ventana_nota = _resolver_ventana(ventana_h)
+        fuera_t, fuera_p = (lector.fuera_de_ventana(limite, ahora, solo) if limite
+                            else (0, 0))
 
-    import geografia
-    return JSONResponse({
-        "airport": aeropuerto.como_json(inf),
-        "tracks": trazas,
-        "pistas": [p for p in geografia.como_json()["pistas"] if p["apt"] == inf.codigo],
-        "receiver": {"lat": __import__("receiver").RECEIVER_LAT,
-                     "lon": __import__("receiver").RECEIVER_LON,
-                     "name": __import__("receiver").RECEIVER_NAME},
-    })
+        def adornar(trazas):
+            for t in trazas:
+                op = por_icao.get(t["icao24"])
+                if op is None:
+                    continue
+                t["operacion"] = op.tipo
+                t["confirmada"] = op.confirmada
+                t["pista"] = op.pista
+                t["min_altitude_ft"] = op.min_altitude_ft
+                t["min_distance_km"] = op.min_distance_km
+            return trazas
+
+        import geografia
+        comun = {
+            "cursor": lector.cursor,
+            "airport": aeropuerto.como_json(inf),
+            "lag_s": (round(lector.lag_s(ahora), 1)
+                      if lector.lag_s(ahora) is not None else None),
+            "ventana_h": ventana_publicada,
+            # Si el valor pedido no valia, se dice cual se uso y por que. Un
+            # parametro reinterpretado en silencio es un descarte en silencio.
+            "ventana_nota": ventana_nota,
+            "trazas_fuera_de_ventana": fuera_t,
+            "puntos_fuera_de_ventana": fuera_p,
+            "servidor_ms": avance["ms"],
+            # Cuantas veces este lector tuvo que reconstruirse porque la base
+            # retrocedio, con el detalle de la ultima. Cero explicito: "nunca
+            # paso" y "no se mira" son cosas distintas.
+            "rebobinados": lector.rebobinados,
+            "rebobinado": avance["rebobinado"],
+        }
+
+        if completa:
+            trazas, ft, fp = lector.trazas(ventana_s=limite, ahora=ahora, solo=solo)
+            comun["trazas_fuera_de_ventana"] = ft
+            comun["puntos_fuera_de_ventana"] = fp
+            return JSONResponse({
+                **comun,
+                "base": "completa",
+                "forzada": forzada,
+                "desde": desde_ok,
+                "nuevos": avance["filas"], "nuevas_posiciones": avance["posiciones"],
+                # La traza se manda ENTERA y no recortada al cilindro: ver de
+                # donde venia el avion es la mitad de lo que hace entendible una
+                # aproximacion.
+                "tracks": adornar(trazas),
+                "pistas": [p for p in geografia.como_json()["pistas"]
+                           if p["apt"] == inf.codigo],
+                "receiver": {"lat": __import__("receiver").RECEIVER_LAT,
+                             "lon": __import__("receiver").RECEIVER_LON,
+                             "name": __import__("receiver").RECEIVER_NAME},
+                "reconstruido_en_ms": lector.ms_reconstruccion,
+            })
+
+        nuevos_desde = max(0, lector.cursor - desde_ok)
+        trazas = adornar(lector.delta_trazas(desde_ok, solo))
+        return JSONResponse({
+            **comun,
+            "base": "delta",
+            "desde": desde_ok,
+            "nuevos": nuevos_desde,
+            "nuevas_posiciones": sum(len(t["points"]) for t in trazas),
+            "tracks": trazas,
+        })
 
 
 @app.get("/api/aeropuerto")
@@ -265,7 +524,7 @@ def api_aeropuerto():
     import aeropuerto
     from adsb_events import load_db
 
-    db_path = ROOT / "adsb_log.db"
+    db_path = ADSB_DB_PATH
     if not db_path.exists():
         return JSONResponse({"airport": None})
     observaciones, _ = load_db(str(db_path))
@@ -290,7 +549,18 @@ async def api_adsb_start(request: Request):
         body = await request.json()
     except Exception:
         pass
-    result = adsb_service.start(mode=body.get("source", "auto"))
+    # El default sale de ADSB_SOURCE y no de "auto" fijo. "auto" nunca elige IQ
+    # -resuelve a rtl_adsb si el .exe esta, y lo dice el propio title del
+    # selector-, asi que el camino recomendado en ESTADO.md era el unico que
+    # habia que pedir a mano. Eso convertia "llegar y prender" en "llegar,
+    # prender y acordarse", y olvidarse no falla: graba igual, peor y en
+    # silencio. Peor por dos cosas medidas: rtl_adsb no mide dBFS -sin eso no
+    # se puede juzgar la ganancia, que es LA decision cuando la antena esta
+    # pegada a la pista- y no corrige errores de un bit, que son el 4,5% de las
+    # direcciones debiles (450x sobre el azar); 141 de los 143 fantasmas del
+    # historico entraron por ese camino.
+    result = adsb_service.start(
+        mode=body.get("source") or os.environ.get("ADSB_SOURCE") or "auto")
     return JSONResponse(result)
 
 
@@ -353,7 +623,7 @@ def api_adsb_analysis():
     import adsb_report
     from adsb_events import load_db
 
-    db_path = ROOT / "adsb_log.db"
+    db_path = ADSB_DB_PATH
     if not db_path.exists():
         return JSONResponse({"aircraft": [], "observations": 0, "fields": [],
                              "empty_reason": "todavia no se grabo nada"})
@@ -418,89 +688,116 @@ def adsb_map_page(request: Request):
 
 
 @app.get("/api/adsb/mapa")
-def api_adsb_map():
+def api_adsb_map(desde: int | None = None, ventana_h: float | None = None):
     """Trayectorias decodificadas, el receptor y los aeropuertos de la zona.
 
     Manda coordenadas crudas y deja proyectar al navegador: la escala del mapa
     depende de hasta donde llegaron los datos, y eso recien se sabe con todos
     los puntos juntos.
 
-    Los aeropuertos salen de la tabla de pyModeS, la misma que usa el
-    decodificador. No se dibujan pistas: sus umbrales no estan en ninguna
-    fuente que este repo ya tenga, y una pista puesta a ojo se lee igual de
-    convincente que una real.
+    Sin `desde` responde la carga completa. Con `desde=<id>` responde SOLO lo
+    que entro despues de esa fila: `nuevos` filas, `nuevas_posiciones`
+    posiciones y unicamente las aeronaves tocadas. Los ceros viajan EXPLICITOS
+    porque 279 de 360 refrescos medidos son exactamente eso, y sin el campo el
+    cliente no puede distinguir "no hay nada nuevo" de "la respuesta vino vacia
+    por un error".
     """
-    import adsb_report
-    from adsb_events import load_db
-    from receiver import (ANTENA_M, RECEIVER_ES_DEFAULT, RECEIVER_LAT, RECEIVER_LON,
-                          RECEIVER_NAME, distance_km, horizonte_km, nearest_airport,
-                          surface_ref_default)
+    import time as _t
 
-    referencia = surface_ref_default()
-    codigo, km_cercano = nearest_airport(RECEIVER_LAT, RECEIVER_LON)
-    # El horizonte a un blanco EN EL SUELO es el numero que decide si se pueden
-    # ver aviones en pista, y depende de la ALTURA de la antena mas que de la
-    # cercania: 13.0 km a 10 m contra 52.2 km a 160 m. Va al mapa como anillo
-    # para que la pregunta "desde aca veo la pista de Aeroparque?" se conteste
-    # mirando, sin hacer cuentas.
-    horizonte_suelo = horizonte_km(0)
-    receptor = {
-        "lat": RECEIVER_LAT, "lon": RECEIVER_LON,
-        "name": RECEIVER_NAME,
-        "is_default": RECEIVER_ES_DEFAULT,
-        "antenna_m": ANTENA_M,
-        "surface_horizon_km": round(horizonte_suelo, 1),
-        "nearest_airport": codigo, "nearest_airport_km": round(km_cercano, 1),
-        # Que referencia esta REALMENTE activa, no la que por defecto estaria:
-        # si alguien exporto ADSB_SURFACE_REF, el mapa tiene que delatarlo o
-        # muestra un receptor en un lugar y decodifica desde otro.
-        "surface_ref": (list(referencia) if isinstance(referencia, tuple) else referencia),
-        "surface_ref_is_default": referencia == (RECEIVER_LAT, RECEIVER_LON),
-    }
-
-    # La costa y las pistas van por el mismo endpoint y no en el template: son
-    # datos, con fuente y fecha, no decoracion. En el HTML no se pueden citar ni
-    # regenerar.
-    import geografia
-    geo = geografia.como_json()
-
-    aeropuertos = []
-    try:
-        from pyModeS.position._airports import AIRPORTS
-        for code, nombre in (("SADF", "San Fernando"), ("SABE", "Aeroparque"),
-                             ("SAEZ", "Ezeiza")):
-            if code in AIRPORTS:
-                lat, lon = AIRPORTS[code]
-                km = distance_km(lat, lon)
-                aeropuertos.append({
-                    "code": code, "name": nombre, "lat": lat, "lon": lon,
-                    "km": (round(km, 1) if km is not None else None),
-                    # Si la PISTA de este aeropuerto entra en el horizonte de
-                    # superficie desde donde esta la antena. Es lo que separa
-                    # "cuento sus operaciones" de "solo lo veo pasar por arriba".
-                    "surface_visible": (km is not None and km <= horizonte_suelo),
-                })
-    except Exception:
-        pass
-
-    db_path = ROOT / "adsb_log.db"
+    ahora = _t.time()
+    est = _estaticos_adsb()
+    db_path = ADSB_DB_PATH
     if not db_path.exists():
-        return JSONResponse({"tracks": [], "receiver": receptor, "airports": aeropuertos,
-                             "coverage": {}, "geo": geo,
+        return JSONResponse({"base": "completa", "tracks": [], "cursor": 0,
+                             "nuevos": 0, "nuevas_posiciones": 0,
+                             "receiver": est["receiver"], "airports": est["airports"],
+                             "geo": est["geo"], "estatico_v": est["estatico_v"],
+                             "coverage": {}, "rejected": [], "lag_s": None,
+                             "trazas_fuera_de_ventana": 0, "puntos_fuera_de_ventana": 0,
                              "empty_reason": "todavia no se grabo nada"})
 
-    observaciones, gate = load_db(str(db_path))
-    from adsb_events import coverage_report
-    return JSONResponse({
-        "tracks": adsb_report.tracks(observaciones),
-        "receiver": receptor,
-        "geo": geo,
-        "airports": aeropuertos,
-        "coverage": coverage_report(observaciones, gate),
-        # Las descartadas viajan APARTE de las trazas y con sus coordenadas
-        # intactas: el mapa las dibuja como cruz gris, sin unirlas a nada y
-        # fuera del encuadre automatico. Tirarlas del dibujo tambien seria
-        # descartarlas en silencio; la version honesta es mostrarlas marcadas
-        # como lo que son.
-        "rejected": [r.as_dict() for r in gate.rechazos],
-    })
+    lector = lector_mapa()
+    with lector._lock:
+        completa, desde_ok, forzada = _resolver_base(lector, desde)
+        avance = lector.avanzar()
+        # avanzar() puede haber reconstruido el lector porque la base
+        # retrocedio (archivo borrado y recreado, o filas borradas). Ahi el
+        # cursor del cliente no significa nada -- apunta a ids de otra base --
+        # asi que la respuesta pasa a completa y el motivo viaja en `forzada`,
+        # el mismo campo que ya usa el reinicio del servidor.
+        if avance["rebobinado"] is not None:
+            completa, forzada = True, avance["rebobinado"]["motivo"]
+        # ventana_h=0 pide la grabacion ENTERA. Es el boton de la pagina: la
+        # ventana tiene que ser reversible sin tocar codigo, porque las 3 h son
+        # un numero elegido para que la carga completa quede acotada y no una
+        # medicion de cuanto tiempo permanece una aeronave en alcance.
+        limite, ventana_publicada, ventana_nota = _resolver_ventana(ventana_h)
+        fuera_t, fuera_p = (lector.fuera_de_ventana(limite, ahora) if limite
+                            else (0, 0))
+        comun = {
+            "cursor": lector.cursor,
+            "estatico_v": est["estatico_v"],
+            # El unico numero que impide que la pagina mienta. Un poll exitoso
+            # cada 5 s sobre una base atrasada 905 s es la forma mas convincente
+            # de decir "en vivo" sin estarlo.
+            "lag_s": (round(lector.lag_s(ahora), 1)
+                      if lector.lag_s(ahora) is not None else None),
+            "ventana_h": ventana_publicada,
+            # Si el valor pedido no valia, se dice cual se uso y por que. Un
+            # parametro reinterpretado en silencio es un descarte en silencio.
+            "ventana_nota": ventana_nota,
+            "trazas_fuera_de_ventana": fuera_t,
+            "puntos_fuera_de_ventana": fuera_p,
+            "servidor_ms": avance["ms"],
+            # Cuantas veces este lector tuvo que reconstruirse porque la base
+            # retrocedio, con el detalle de la ultima. Cero explicito: "nunca
+            # paso" y "no se mira" son cosas distintas.
+            "rebobinados": lector.rebobinados,
+            "rebobinado": avance["rebobinado"],
+        }
+
+        if completa:
+            trazas, ft, fp = lector.trazas(ventana_s=limite, ahora=ahora)
+            comun["trazas_fuera_de_ventana"] = ft
+            comun["puntos_fuera_de_ventana"] = fp
+            return JSONResponse({
+                **comun,
+                "base": "completa",
+                "forzada": forzada,
+                "desde": desde_ok,
+                "nuevos": avance["filas"], "nuevas_posiciones": avance["posiciones"],
+                "tracks": trazas,
+                "receiver": est["receiver"], "geo": est["geo"],
+                "airports": est["airports"],
+                "coverage": _coverage_mapa(lector),
+                # Las descartadas viajan APARTE de las trazas y con sus
+                # coordenadas intactas: el mapa las dibuja como cruz gris, sin
+                # unirlas a nada y fuera del encuadre automatico. Tirarlas del
+                # dibujo tambien seria descartarlas en silencio.
+                #
+                # Y viajan UNA vez: antes iban aca y otra vez completas dentro
+                # de coverage.rejected_detail.
+                "rejected": lector.rechazos_desde(0),
+                # A la vista y no disimulado: despues de un reinicio el primer
+                # navegador que entra paga la reconstruccion del historico
+                # entero. 76 ms hoy sobre 11 423 filas, pero 3.64 s a 29 dias.
+                "reconstruido_en_ms": lector.ms_reconstruccion,
+            })
+
+        nuevos_desde = max(0, lector.cursor - desde_ok)
+        trazas = lector.delta_trazas(desde_ok)
+        return JSONResponse({
+            **comun,
+            "base": "delta",
+            "desde": desde_ok,
+            "nuevos": nuevos_desde,
+            "nuevas_posiciones": sum(len(t["points"]) for t in trazas),
+            "tracks": trazas,
+            "rejected_nuevos": lector.rechazos_desde(desde_ok),
+            # coverage viaja SOLO si cambio. Cambia exactamente cuando entro al
+            # menos una fila -- `observations` la cuenta -- asi que la condicion
+            # es exacta y no una heuristica. Cuando no viaja, el cliente se
+            # queda con el que tenia y la bandera lo dice.
+            "coverage": _coverage_mapa(lector) if nuevos_desde else None,
+            "coverage_sin_cambios": not nuevos_desde,
+        })

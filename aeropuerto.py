@@ -188,10 +188,22 @@ class Informe:
         antena.
         """
         if not self.posiciones_en_cilindro:
-            return ("Ninguna posicion decodificada cayo dentro del cilindro de "
+            # Mismo cuidado que abajo: culpar a la ubicacion solo cuando la
+            # geometria la acusa. Con la pista DENTRO del horizonte, un cilindro
+            # vacio no prueba que no se reciba -lo mas probable es que todavia
+            # no se haya grabado nada desde aca-, y afirmarlo mandaria a revisar
+            # la antena por lo que en realidad es falta de datos.
+            if self.ve_la_pista:
+                return ("Ninguna posición decodificada cayó dentro del cilindro "
+                        f"de {self.radio_km:.0f} km y {self.techo_ft:.0f} ft sobre "
+                        f"{self.codigo}. La pista está a "
+                        f"{self.distancia_receptor_km:.1f} km y entra en el "
+                        "horizonte, así que esto no dice que no se reciba: todavía "
+                        "no hay tráfico grabado que haya entrado al cilindro.")
+            return ("Ninguna posición decodificada cayó dentro del cilindro de "
                     f"{self.radio_km:.0f} km y {self.techo_ft:.0f} ft sobre "
                     f"{self.codigo}. No es que no haya habido operaciones: es que "
-                    "desde donde esta la antena no se reciben.")
+                    "desde donde está la antena no se reciben.")
         if not self.operaciones_reales and self.aproximaciones:
             return (f"Ningun aterrizaje ni despegue confirmado, y "
                     f"{self.aproximaciones} aproximaciones que NO se pudieron "
@@ -200,10 +212,31 @@ class Informe:
                     f"{UMBRAL_SUELO_FT:.0f} ft no se puede distinguir un aterrizaje "
                     "de un motor y al aire. No es que no hayan aterrizado: es que "
                     "desde aca no se ve el tramo que lo prueba.")
+        # Estas frases hablan en PRESENTE sobre "esta ubicacion", pero el minimo
+        # que citan sale del HISTORICO, y la base no guarda desde donde se
+        # recibio cada fila. El dia de la mudanza a Aeroparque la pagina se
+        # contradecia en dos lineas contiguas: arriba "los aviones en la pista
+        # si se escuchan desde aca" (geometria de AHORA, pista a 2.2 km contra
+        # 7.1 km de horizonte) y abajo "la fase final no se recibe desde esta
+        # ubicacion" (dato de ANTES, grabado a 13.3 km desde San Isidro).
+        #
+        # Cuando la geometria dice que la pista se ve, el minimo alto ya NO se
+        # puede atribuir a donde esta la antena, y la frase tiene que decir de
+        # donde sale el numero. Importa mas que un detalle de redaccion: quien
+        # acaba de mudar la antena abre esta pagina antes de grabar nada, y la
+        # version vieja le decia que la mudanza fracaso.
         if self.min_altitude_vista_ft is not None and self.min_altitude_vista_ft > 1500:
-            return (f"Lo mas bajo que se vio sobre {self.codigo} fueron "
+            if self.ve_la_pista:
+                return (f"Lo más bajo que se vio sobre {self.codigo} fueron "
+                        f"{self.min_altitude_vista_ft:.0f} ft sobre el campo, pero "
+                        f"la pista está a {self.distancia_receptor_km:.1f} km y sí "
+                        "entra en el horizonte: ese mínimo describe lo ya grabado, "
+                        "no un límite de esta ubicación. Si la antena se movió "
+                        "recién, hace falta grabar de nuevo para saber hasta dónde "
+                        "llega desde acá.")
+            return (f"Lo más bajo que se vio sobre {self.codigo} fueron "
                     f"{self.min_altitude_vista_ft:.0f} ft sobre el campo. La fase "
-                    "final no se recibe desde esta ubicacion.")
+                    "final no se recibe desde esta ubicación.")
         if not self.ve_la_pista:
             return (f"La pista de {self.codigo} esta a "
                     f"{self.distancia_receptor_km:.1f} km, mas que el horizonte de "
@@ -283,8 +316,81 @@ def _clasificar(minima_agl: float, baja: float, sube: float) -> str:
     return "sobrevuelo"
 
 
-def informe(observations: list[Observation], codigo: str | None = None) -> Informe | None:
-    """Atribuir operaciones a un aeropuerto. None si no se puede ubicar el codigo."""
+def geometria_cilindro(codigo: str | None = None) -> dict | None:
+    """El cilindro de este aeropuerto, en numeros y sin observaciones.
+
+    Existe para que LectorIncremental pueda acumular el resumen por aeronave
+    mientras lee, sin importar aeropuerto.py entero ni tener que volver a
+    recorrer las observaciones -- que es justamente lo que el lector no guarda.
+    """
+    codigo = (codigo or objetivo() or "").strip().upper()
+    if not codigo:
+        return None
+    try:
+        from pyModeS.position._airports import AIRPORTS
+        if codigo not in AIRPORTS:
+            return None
+        lat, lon = AIRPORTS[codigo]
+    except Exception:
+        return None
+    import geografia
+    return {"codigo": codigo, "lat": lat, "lon": lon,
+            "radio_km": RADIO_KM, "techo_ft": TECHO_FT,
+            "elevacion_ft": geografia.ELEVACION_FT.get(codigo, 0.0)}
+
+
+def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[dict, int]:
+    """El estado O(1) por aeronave que la clasificacion necesita.
+
+    Es la mitad de informe() que ACUMULA, separada de la que CLASIFICA. La otra
+    mitad -- LectorIncremental._absorber_cilindro -- construye exactamente este
+    mismo dict fila por fila, y las dos terminan llamando al mismo
+    _clasificar(). Se refactorizo en vez de duplicar la logica porque son los
+    conteos publicados (aterrizajes, despegues, frustradas) los que estan en
+    juego: dos implementaciones de la clasificacion pueden divergir y nadie se
+    entera hasta que las tarjetas de las dos paginas no coinciden.
+
+    No se puede seguir clasificando sobre la lista completa de observaciones
+    porque el estado residente ya no las guarda: 313 B/obs son 143 MB a 30 dias
+    y 1744 MB al ano.
+    """
+    import receiver
+
+    por_icao: dict[str, dict] = {}
+    posiciones = 0
+    for o in sorted(observations, key=lambda o: o.timestamp):
+        if o.latitude is None or o.longitude is None or o.altitude_ft is None:
+            continue
+        if o.altitude_ft > cilindro["techo_ft"]:
+            continue
+        d = receiver.distance_km(o.latitude, o.longitude,
+                                 (cilindro["lat"], cilindro["lon"]))
+        if d is None or d > cilindro["radio_km"]:
+            continue
+        posiciones += 1
+        r = por_icao.get(o.icao24)
+        if r is None:
+            r = por_icao[o.icao24] = {
+                "n": 0, "primera_alt": o.altitude_ft, "ultima_alt": o.altitude_ft,
+                "min_alt": o.altitude_ft, "min_t": o.timestamp, "min_d": d,
+                "track": None, "callsign": None}
+        r["n"] += 1
+        r["ultima_alt"] = o.altitude_ft
+        # Estricto: alturas.index(min(alturas)) se queda con el PRIMER minimo.
+        if o.altitude_ft < r["min_alt"]:
+            r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
+        if o.track_deg is not None:
+            r["track"] = o.track_deg
+        # Truthy y no .strip() truthy: es el criterio exacto de la ruta de
+        # siempre, next((o.callsign.strip() ... if o.callsign), None).
+        if o.callsign:
+            r["callsign"] = o.callsign.strip()
+    return por_icao, posiciones
+
+
+def informe_desde_resumen(por_icao: dict, posiciones: int,
+                          codigo: str | None = None) -> Informe | None:
+    """La mitad de informe() que CLASIFICA. Ver resumir_cilindro()."""
     import aircraft_db
     import receiver
 
@@ -320,39 +426,20 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     elevacion = geografia.ELEVACION_FT.get(codigo, 0.0)
     inf.elevacion_ft = elevacion
 
-    # Las posiciones de cada aeronave DENTRO del cilindro, en orden. Se guarda la
-    # observacion entera y no solo la distancia: para decidir si bajaba o subia
-    # hace falta la altitud de cada punto, no la del conjunto.
-    dentro: dict[str, list[tuple[Observation, float]]] = {}
-    for o in sorted(observations, key=lambda o: o.timestamp):
-        if o.latitude is None or o.longitude is None or o.altitude_ft is None:
-            continue
-        if o.altitude_ft > TECHO_FT:
-            continue
-        d = receiver.distance_km(o.latitude, o.longitude, (apt_lat, apt_lon))
-        if d is None or d > RADIO_KM:
-            continue
-        dentro.setdefault(o.icao24, []).append((o, d))
-
-    inf.posiciones_en_cilindro = sum(len(v) for v in dentro.values())
-    inf.aeronaves_en_cilindro = len(dentro)
-    if dentro:
+    inf.posiciones_en_cilindro = posiciones
+    inf.aeronaves_en_cilindro = len(por_icao)
+    if por_icao:
         # Sobre EL CAMPO, no sobre el mar: es la altura que dice si se vio la
         # fase final, y compararla contra un umbral en AGL exige que este en AGL.
-        inf.min_altitude_vista_ft = min(o.altitude_ft - elevacion
-                                        for v in dentro.values() for o, _ in v)
+        inf.min_altitude_vista_ft = min(r["min_alt"] for r in por_icao.values()) - elevacion
 
-    for icao24, puntos in dentro.items():
-        # Altitudes SOBRE EL CAMPO, no sobre el nivel del mar: lo que decide si
-        # una aeronave toco es su altura sobre la pista.
-        alturas = [o.altitude_ft - elevacion for o, _ in puntos]
-        # El minimo se busca por indice y no comparando el primero con el
-        # ultimo: el avion que toca y vuelve a salir tiene el minimo en el
-        # medio, y comparar los extremos lo daria como sobrevuelo.
-        i_min = alturas.index(min(alturas))
-        baja = alturas[0] - alturas[i_min]
-        sube = alturas[-1] - alturas[i_min]
-        minima = alturas[i_min]
+    for icao24, r in por_icao.items():
+        # Alturas SOBRE EL CAMPO. El minimo NO es el primero contra el ultimo:
+        # el avion que toca y vuelve a salir tiene el minimo en el medio, y
+        # comparar los extremos lo daria como sobrevuelo.
+        minima = r["min_alt"] - elevacion
+        baja = r["primera_alt"] - r["min_alt"]
+        sube = r["ultima_alt"] - r["min_alt"]
 
         tipo = _clasificar(minima, baja, sube)
         if tipo == "sobrevuelo":
@@ -363,24 +450,37 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
         elif tipo == "frustrada":
             inf.frustradas += 1
 
-        o_min, d_min = puntos[i_min]
-        # El rumbo del punto mas bajo si lo trae; si no, el ultimo conocido de
-        # los puntos del cilindro. Fuera del cilindro no se busca: el rumbo de
-        # crucero no dice nada sobre la alineacion con una pista.
-        track = next((o.track_deg for o, _ in reversed(puntos) if o.track_deg is not None), None)
-        alineada, pista = _alineada(track, pistas)
+        # El rumbo del ultimo punto del cilindro que lo trajo. Fuera del
+        # cilindro no se busca: el rumbo de crucero no dice nada sobre la
+        # alineacion con una pista.
+        alineada, pista = _alineada(r["track"], pistas)
         entry = aircraft_db.lookup(icao24) if aircraft_db.available() else None
         inf.operaciones.append(Operacion(
-            icao24=icao24, tipo=tipo, timestamp=o_min.timestamp,
-            callsign=next((o.callsign.strip() for o, _ in reversed(puntos) if o.callsign), None),
+            icao24=icao24, tipo=tipo, timestamp=r["min_t"],
+            callsign=r["callsign"],
             registration=(entry or {}).get("registration") or None,
             aircraft_type=aircraft_db.describe_type(entry) if entry else None,
-            min_altitude_ft=o_min.altitude_ft, min_distance_km=round(d_min, 2),
-            track_deg=track, pista=pista, alineada=alineada, posiciones=len(puntos),
+            min_altitude_ft=r["min_alt"], min_distance_km=round(r["min_d"], 2),
+            track_deg=r["track"], pista=pista, alineada=alineada, posiciones=r["n"],
         ))
 
     inf.operaciones.sort(key=lambda o: o.timestamp, reverse=True)
     return inf
+
+
+def informe(observations: list[Observation], codigo: str | None = None) -> Informe | None:
+    """Atribuir operaciones a un aeropuerto. None si no se puede ubicar el codigo.
+
+    Partida en dos desde que el mapa lee por delta: resumir_cilindro() acumula
+    y informe_desde_resumen() clasifica. Esta funcion es la ruta de siempre --
+    la que recibe una lista de observaciones -- y llama a las mismas dos
+    mitades, para que no existan dos implementaciones de la clasificacion.
+    """
+    cilindro = geometria_cilindro(codigo)
+    if cilindro is None:
+        return None
+    por_icao, posiciones = resumir_cilindro(observations, cilindro)
+    return informe_desde_resumen(por_icao, posiciones, cilindro["codigo"])
 
 
 def como_json(inf: Informe | None) -> dict | None:

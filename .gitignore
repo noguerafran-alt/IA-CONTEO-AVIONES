@@ -40,3 +40,11 @@ tools/
 
 # plotly.min.js se baja con webapp/bajar_plotly.py, no viaja en el repo.
 webapp/static/plotly.min.js
+
+# La base en WAL escribe dos archivos mas al lado del .db. Como adsb_log.db
+# esta trackeada, sin estos ignores un "git add ." durante una grabacion
+# subiria el -wal y el -shm, que no son datos sino estado transitorio del
+# journal -- y ademas confunden: el .db versionado se queda ATRAS del -wal
+# hasta el checkpoint.
+*.db-wal
+*.db-shm

@@ -10,8 +10,8 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-22, con el mapa del aeropuerto y el arreglo de la
-costa.
+Última actualización: 2026-08-23, con la mudanza a Aeroparque, los mapas en
+tiempo real y el arreglo del "graba pero no entra nada".
 
 ---
 
@@ -21,16 +21,47 @@ costa.
 todos lados, pero eso es el material de *video* (`data/aeroparque_full.mp4`). Es
 el error más fácil de cometer acá.
 
-**Y hay una mudanza planeada:** Fran quiere poner la antena a ~300 m de la pista
-de Aeroparque (iba a probar el 2026-08-23), y también evaluó la torre de YPF en
-Puerto Madero. Por eso **nada que dependa de la ubicación está hardcodeado**.
+**La mudanza se hace el 2026-08-23** (hoy), a `-34.551378, -58.437306`, que está
+a **1153 m del umbral 13** de Aeroparque. Quedó como preset `aeroparque` en
+`receiver.py` y se arranca con `MEDIR-EN-AEROPARQUE.bat`. También se evaluó la
+torre de YPF en Puerto Madero. Por eso **nada que dependa de la ubicación está
+hardcodeado**.
 
-Distancias medidas con haversine:
+Distancias medidas con haversine, a la **referencia** del aeropuerto:
 
 | desde | Aeroparque SABE | San Fernando SADF | Ezeiza SAEZ |
 |---|---|---|---|
-| San Isidro (actual) | 13,3 km | 7,3 km | 39,1 km |
-| Torre YPF (futuro) | 7,1 km | 26,8 km | 28,8 km |
+| San Isidro (donde estuvo) | 13,3 km | 7,3 km | 39,1 km |
+| **Aeroparque (desde hoy)** | **2,2 km** | 17,7 km | 31,4 km |
+| Torre YPF (evaluada) | 7,1 km | 26,8 km | 28,8 km |
+
+**Lo que arregla la mudanza no es el horizonte, es el ángulo.** Es la
+corrección más importante de entender acá, porque el horizonte solo *parecía*
+explicar el problema: desde San Isidro la pista de SABE quedaba a 12,26 km del
+eje contra 13,0 km de horizonte, o sea que geométricamente entraba, y sin
+embargo lo más bajo que se vio fueron 2134 ft. El límite era la obstrucción
+urbana, y eso lo gobierna el ángulo de elevación:
+
+| avión sobre la pista de SABE | desde San Isidro (12,26 km) | desde el punto nuevo (1,15 km) |
+|---|---|---|
+| en la pista | 0,02° | 0,24° |
+| 500 ft | 0,71° | **7,55°** |
+| 1000 ft | 1,42° | **14,84°** |
+| 2134 ft (lo mínimo visto) | 3,04° | 29,49° |
+
+Un edificio de 30 m tapa hasta 16,7° si está a 100 m, 5,7° a 300 m y 1,7° a 1 km.
+Por eso a 1,42° no se veía nada y a 14,84° se ve casi todo.
+
+**Lo que la mudanza NO arregla:** un avión *en la pista* se ve a 0,24°, que un
+edificio de 30 m a 1 km sigue tapando. Las posiciones en tierra —las que nunca
+se decodificaron— dependen de tener línea de vista limpia hacia el **sector
+104–117° (ESE)**, que es donde cae la pista desde ese punto. Si siguen sin
+aparecer, el sospechoso es la obstrucción, no el código.
+
+La altura de antena, en cambio, deja de importar acá: con 1 m el horizonte al
+suelo ya son 4,1 km contra 1,15 km a la pista. Es lo contrario de San Isidro,
+donde 300 m de diferencia decidían todo. Los 3 m del preset son una suposición
+de armado portátil; `ADSB_ANTENNA_M` la pisa si se mide.
 
 **El objetivo del proyecto:** saber qué aviones aterrizan y despegan de un
 aeropuerto cercano a la antena, 24/7. Aeroparque en este caso.
@@ -70,6 +101,8 @@ Todas documentadas en `.env.example`. Ninguna es secreta (no van en `.env`).
 | `ADSB_AIRPORT_CEILING_FT` | `4000` | techo del cilindro |
 | `ADSB_ANALYSIS_KM` | `50` | recorte del análisis. **No** es un filtro de corrección |
 | `ADSB_SURFACE_REF` | la del receptor | referencia CPR para posiciones en superficie |
+| `ADSB_DB` | `adsb_log.db` junto al código | dónde vive la base. La define `adsb_record.py` y `webapp/main.py` la importa de ahí |
+| `ADSB_SOURCE` | `auto` | qué fuente usar al iniciar. **Poner `iq`**: `auto` resuelve a `rtl_adsb` y nunca elige IQ |
 
 Para probar en Aeroparque:
 
@@ -109,6 +142,29 @@ veces inflado. El umbral sale del espacio de direcciones: sobre 2²⁴, el azar
 predice 0,43 direcciones repetidas entre 3777 tramas no verificables y se
 observaron 133, o sea 313× más. La trama se **retiene**, no se tira, así que
 cuando la dirección se repite entra igual. Es el mismo mecanismo que dump1090.
+
+**Buena parte de ese "ruido" son errores de UN bit en la dirección, y se pueden
+recuperar en vez de descartar.** Medido sobre 10 873 filas / 3252 direcciones:
+llamando *sólidas* a las 109 con ≥10 mensajes o con posición decodificada, de las
+3143 débiles hay **143 (4,5%) a exactamente 1 bit de distancia** de una sólida.
+El azar predice 0,01% (control con 20 000 direcciones aleatorias): **450× de
+enriquecimiento**, así que no es coincidencia. Otras 25 (0,8%) están a 2 bits y
+2975 (94,7%) a ≥3, que sí es ruido de verdad.
+
+Se ve a simple vista en los pares: `c065d3`→`e065d3` (ambas ARG1718),
+`e0914a`/`e0f14a`/`e0b14e`→`e0b14a` (todas ARG1650), `e03419`→`e03409` (ARG1477).
+Contraste con el bloque argentino `E00000–E3FFFF`, que es el único donde puede
+haber un LV- de Aerolíneas: de los 57 distintivos `ARG*`, los **39 dentro** del
+bloque tienen mediana de 73 mensajes y 17 con posición; los **18 fuera**, mediana
+de **1** mensaje y **cero** posiciones.
+
+**141 de esos 143 vinieron del camino `rtl_adsb`, que no corrige errores.**
+`adsb_iq.py` ya tiene la corrección por síndrome (`_tabla_sindrome`,
+`_corregir_un_bit`), pero el histórico es casi todo de la otra fuente (10 028
+filas contra 845). Es un argumento nuevo y medido para la decisión de usar IQ. **Lo
+que todavía NO está probado** es que el camino IQ los elimine: tiene sólo 27
+direcciones débiles, 2 de ellas a 1 bit, y con n=27 no se puede distinguir 7,4% de
+4,5%. Hace falta más grabación por IQ para cerrarlo.
 
 **El nivel de señal NO sirve para filtrar ruido.** Se probó y se descartó: el
 ADS-B con CRC válido da −15,0 dBFS de mediana y el ruido −18,3, con el **89% del
@@ -177,12 +233,100 @@ horizontales cruzando el río. `geografia.py` conserva el orden del trazo de
 Natural Earth, y las dos orillas concatenadas **tal cual** ya cierran el anillo
 —vienen en sentidos opuestos— así que invertir una lo cruza en diagonal.
 
+**No afirmar en presente sobre "esta ubicación" con datos de otra.** Encontrado
+el día de la mudanza a Aeroparque: `/aeropuerto/mapa` se contradecía en dos
+líneas contiguas. Arriba, *"la pista está a 2,2 km… los aviones en la pista sí
+se escuchan desde acá"* —geometría de **ahora**—; abajo, *"la fase final no se
+recibe desde esta ubicación"* —mínimo de 2134 ft grabado **antes**, desde San
+Isidro a 13,3 km—. La segunda le decía a quien acababa de mudar la antena que
+la mudanza había fracasado, antes de grabar un solo mensaje.
+
+La causa de fondo sigue abierta: **la base no guarda desde dónde se recibió cada
+fila**, así que las distancias de todo el histórico se recalculan desde el
+receptor actual. Medido entre San Isidro y Aeroparque, sobre las mismas 1985
+posiciones: la mediana se corre 6% (17,6 → 18,7 km) y el máximo 1%. Es chico
+porque los dos puntos están a 20 km y el tráfico está mucho más lejos, pero
+crece si algún día la antena se muda lejos.
+
+El arreglo aplicado es acotado: `advertencia` en `aeropuerto.py` sólo culpa a la
+ubicación cuando la geometría la acusa (`ve_la_pista` falso). Con la pista
+dentro del horizonte dice que el mínimo describe lo ya grabado y que hace falta
+grabar de nuevo. Vale para las dos frases: la del cilindro vacío tenía el mismo
+defecto y podía mandar a revisar la antena por lo que era falta de datos.
+
+**El dongle tomado por otro proceso se veía como "grabando".** El peor modo de
+falla que tuvo el sistema, y salió al probar el arranque de la mudanza. Si algo
+ya tiene el dongle —otra pestaña, otro servidor, un `rtl_sdr.exe` colgado—,
+`rtl_sdr` imprime `usb_open error -3 / Failed to open rtlsdr device #0`, su
+stdout cierra al instante y el generador de `escuchar()` terminaba **normal**:
+como un stream que se acabó, no como un fallo. El error quedaba sólo en la
+consola del servidor. Resultado medido: `/adsb` mostró el punto verde con
+`running: true` y `error: null` durante **65 s sin un solo mensaje**.
+
+Tres cosas tenían que cambiar, y las tres eran necesarias:
+
+1. `escuchar()` (`adsb_iq.py`) ahora **lanza** si el subproceso murió sin
+   entregar una sola muestra, con un mensaje que nombra las dos causas reales
+   en orden de probabilidad: otro proceso tiene el dongle (el dongle es
+   exclusivo), o falta el driver WinUSB de Zadig.
+2. `status()` publica `start_error` **o** `source.last_error`. Sólo la primera
+   dejaba invisible este caso, porque `start()` ya había devuelto `running:
+   true` y la falla ocurre después, en el hilo lector.
+3. En `adsb.html`, la rama de `error` va **antes** que la de `running`. Con el
+   orden viejo quedaba muerta justo en el caso peligroso, que es
+   `running: true` **con** error. Ahora el encabezado dice *"la grabación está
+   activa pero NO entra nada"*.
+
+Un tablero que dice que graba mientras no recibe nada es peor que uno que se
+cae: nadie va a ir a mirar.
+
 ## Cosas que van a confundir si nadie las avisó
 
-**La base commitea cada 50 filas.** Consultar `adsb_log.db` con sqlite mientras
-graba puede mostrar datos viejos. Me hizo perder un rato buscando un bug que no
-existía: había 22 filas escritas sin confirmar y la consulta daba 0. El CSV de
-`output/adsb/` se vuelca fila por fila y no tiene el problema.
+**La base ya NO commitea cada 50 filas: commitea cada 1,0 s de reloj.**
+Resuelto, con el número. El commit por cantidad no tenía cota temporal: medido
+en vivo, había 44 filas escritas e invisibles y la más vieja llevaba 878 s
+esperando (14,6 min). Re-medido sobre las 11 823 filas de `adsb_log.db`
+reconstruyendo los lotes de 50 por `id` (236 lotes completos): cada fila
+esperaba mediana **38,7 s**, p90 **186,0 s**, p99 **410,5 s** y máximo
+**759,5 s (12,7 min)**, excluyendo los 18 lotes que cruzan un corte de grabación
+(hueco > 300 s). **Corrección de un número que estaba mal en este archivo:** el
+"máximo 14 903 s (4 h 8 min)" que decía antes reproduce aritméticamente pero su
+premisa es falsa — sale entero del hueco de 14 742,9 s entre `id=3523`
+(2026-08-22T13:59:12Z) e `id=3524` (18:04:55Z), cuatro horas con CERO filas, o
+sea el grabador apagado. `Recorder.close()` commitea al cerrar, así que ninguna
+fila esperó 4 h. Contando también esos lotes da mediana 40,6 s, p90 223,0 s,
+p99 2 114,9 s. **Y el otro número corregido:** decía "a las 22:00, con 0,27
+filas/min, un lote de 50 tarda 11 250 s" — a las 22:00 local (01:00 UTC) hay 527
+filas = **8,78 filas/min**, o sea 342 s por lote, no 11 250. Estaba inflado 33×
+y con la unidad cambiada (los 0,27 son *posiciones por ventana de 5 s*, otra
+cosa). El argumento de fondo sigue en pie con números reales: la hora más floja
+con el grabador claramente encendido (2026-08-23T02 UTC = 23:00 local, 340
+filas, hueco interno máximo 258 s) da 5,67 filas/min y un lote de 50 tarda
+529 s. Ahora el retraso está acotado en 1 s pase lo que pase. Cuesta, al pico real medido de
+3,8 filas/s, a lo sumo 1 commit/s = 2,46 ms/s (0,45 ms/s en WAL) = 0,25 % de un
+núcleo.
+
+**La base abre en WAL, y el modo REAL se publica.** WAL no baja el retraso por
+sí solo (medido: wal + commit cada 50 da mediana 0,26 s de retraso visible
+contra 0,25 s de delete + commit cada 50); lo que hace es abaratar el commit
+5,5× y borrar los picos de 117,8 ms en que el lector quedaba bloqueado (1,04 ms
+en WAL). Es el habilitador del commit por tiempo, no un sustituto. El PRAGMA
+puede fallar en silencio —SQLite no cambia el modo si otra conexión tiene la
+base y devuelve el modo en que quedó— así que se chequea el valor devuelto y
+`/api/adsb/status` publica `journal_mode` real, junto con `pending` y
+`seconds_since_commit`. En `.gitignore` se agregaron `*.db-wal` y `*.db-shm`:
+`adsb_log.db` está **trackeada**, y en WAL el `.db` se queda atrás del `-wal`
+hasta el checkpoint, así que versionar la base mientras graba sube un archivo al
+que le falta la cola. `Recorder.close()` hace `wal_checkpoint(TRUNCATE)`.
+
+**Ojo: el cambio entra en el PRÓXIMO arranque del grabador.** Una grabación ya
+en curso sigue con el commit cada 50 filas, y los dos mapas van a mostrar un
+`lag_s` de minutos que es real y correcto, no un fallo de la mejora.
+
+**El nuevo techo de latencia es el `time.sleep(1.0)` de `AdsbService._loop`**
+(adsb_service.py:120), que mira `snapshot()` una vez por segundo. Arreglar el
+commit no lo toca. Si alguien mide 1 s de retraso residual y lo va a buscar a
+`adsb_record.py`, no lo va a encontrar.
 
 **Casi todos los rumbos del mapa dicen "calculado".** Las ~10 000 filas
 históricas son anteriores a la columna `track_deg`. Lo que se grabe de ahora en
@@ -207,22 +351,362 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `geografia.py` | costa del Río de la Plata y pistas reales, con su fuente |
 | `aeropuerto.py` | atribuir operaciones a UN aeropuerto |
 | `test_adsb_position.py` | 8 escenarios de posición y CRC |
+| `test_adsb_incremental.py` | el cursor no pierde ni repite filas, y da igual que `load_db` |
 | `webapp/bajar_plotly.py` | baja Plotly una vez |
 
-Los tres archivos de test pasan: `test_adsb.py`, `test_adsb_events.py`,
-`test_adsb_position.py`.
+Los cuatro archivos de test pasan: `test_adsb.py`, `test_adsb_events.py`,
+`test_adsb_position.py`, `test_adsb_incremental.py`.
+
+---
+
+## Los mapas leen por cursor, no releen la base entera
+
+Los dos mapas (`/adsb/mapa` y `/aeropuerto/mapa`) pasaron de "redibujar todo
+cada N segundos" a "avanzar un cursor y parchear". **La cadencia es 5 s en los
+dos** (antes 10 s y 20 s): el número sale del piso del pipeline, no de que suene
+rápido — 1 s del `time.sleep(1.0)` de `AdsbService._loop` + 1 s del commit por
+tiempo + hasta 5 s de espera del poll = 7 s de peor caso extremo a extremo. Dos
+cadencias distintas sobre la misma base solo generaban la pregunta de cuál de
+las dos pantallas estaba bien.
+
+**El contrato del endpoint.** `GET /api/adsb/mapa` y `GET /api/aeropuerto/mapa`
+aceptan `?desde=<id>` y `?ventana_h=<horas>` (`0` = la grabación entera).
+
+- Sin `desde`: `base:"completa"`, con `receiver` + `geo` + `airports`,
+  `estatico_v` (hash corto de los estáticos) y `reconstruido_en_ms`.
+- Con `desde`: `base:"delta"`, con eco de `desde`, `cursor`, `nuevos`,
+  `nuevas_posiciones`, solo las aeronaves tocadas y solo sus puntos nuevos,
+  `rejected_nuevos`, y `coverage` **solo si cambió** (cambia exactamente cuando
+  entró al menos una fila, así que la condición es exacta y no una heurística).
+- **El servidor impone completa** si `desde` es mayor que su cursor —se
+  reinició— y lo dice en `forzada`. Un solo endpoint con parámetro y no dos,
+  porque el único que sabe si se reinició es el servidor: con dos endpoints el
+  cliente adivina, y adivinar mal deja una pantalla desincronizada que nadie
+  nota.
+- `lag_s` viaja SIEMPRE, en los dos modos. Es lo único que impide que la página
+  diga "en vivo" sobre una base atrasada; el cartel sale del número, no de que
+  el fetch haya respondido.
+- `ventana_nota` viaja SIEMPRE (normalmente `null`). Dice que el `ventana_h`
+  pedido no era válido y con cuál se dibujó. Antes `ventana_h=1e400` llegaba
+  como `inf` y reventaba con **HTTP 500** al serializar ("Out of range float
+  values are not JSON compliant"), y `nan` o `-5` caían por `ventana_s > 0` =
+  False y devolvían la grabación ENTERA sin avisar. Ahora los tres contestan 200
+  con la nota, que es lo que ya hacía `forzada` para un cursor inválido.
+- `rebobinados` (contador, cero explícito) y `rebobinado` (el detalle de la
+  última, o `null`) viajan SIEMPRE. Ver la sección de abajo.
+- `trazas_fuera_de_ventana` y `puntos_fuera_de_ventana` viajan siempre, con el
+  cero explícito, y la página los escribe con un botón para pedir todo. Ninguna
+  ventana es gratis. Los agregados (observations, mediana, p95, máximo) siguen
+  siendo de TODA la grabación y eso también se dice.
+- Los estáticos (receptor 226 B + costa/pistas 5 476 B + aeropuertos 299 B) van
+  una vez por carga de página, no 360 veces por hora. En el delta viaja solo su
+  hash: si cambia, el cliente pide completa, así se sigue delatando un
+  `ADSB_SURFACE_REF` movido a mitad de corrida.
+
+**El cursor es la columna `id`, y no `epoch` ni `utc`.** `epoch` NO es único
+(10 275 valores distintos sobre 10 873 filas, 598 duplicados consecutivos): con
+`>` pierde filas, con `>=` las repite, y una posición perdida deja un agujero en
+la traza que nadie nota mirando. `utc` no tiene índice (SCAN de tabla entera:
+0,46 ms → 39,7 ms al crecer 40×, contra 0,055 → 0,061 ms de `id`). Y `id` es
+`INTEGER PRIMARY KEY AUTOINCREMENT`: monótono aunque el reloj salte hacia atrás.
+
+**`LectorIncremental` (adsb_events.py)** es una instancia por proceso con lock
+que posee el `PositionGate`, el cursor, las trazas y los agregados, y solo
+avanza. NO guarda `Observation` (313 B/obs = 143 MB a 30 días): los puntos van
+en `array('d')` de 6 doubles —id, t, lat, lon, alt, km— a 61 B/punto. Mediana y
+p95 salen de un `array('d')` ordenado con `bisect.insort`: **exactas**, no
+aproximadas — un histograma de 0,1 km ahorraría memoria pero su error de
+0,047 km movería el dígito que la página imprime con `toFixed(1)`.
+`load_db()` mantiene su firma y sigue leyendo la base entera: sus 8 llamadores
+—el CLI, `/adsb/analisis`, `aeropuerto.py`, los tests— desempaquetan una tupla
+de 2 y necesitan la lista completa. El kwarg `desde=` está en `_read_db`, que
+ahora devuelve `(observaciones, cursor)`.
+
+**`aeropuerto.informe()` se partió en dos** —`resumir_cilindro()` acumula,
+`informe_desde_resumen()` clasifica— y las dos rutas llaman al MISMO
+`_clasificar`, para que no existan dos implementaciones de los conteos
+publicados (aterrizajes, despegues, frustradas). El informe se cachea **por
+cursor** y no por tiempo: por cursor es exacto (es función pura del conjunto de
+observaciones) y acierta igual el 78 % de las veces, que es el porcentaje de
+refrescos que no trae ni una posición.
+
+### Medido, antes y después (11 423 filas, 1 832 posiciones, 59 aeronaves)
+
+| | antes | después |
+|---|---|---|
+| `/api/adsb/mapa` refresco | 84–185 ms · 208 028 B | **3,8–6,0 ms · 291 B** |
+| `/api/aeropuerto/mapa` refresco | 76–79 ms · 59 400 B | **3,2–3,7 ms · 2 811 B** |
+| carga completa (ventana 3 h) | — | 6,1 ms · 77 181 B |
+| carga completa (`ventana_h=0`) | — | 10,5 ms · 212 821 B |
+| reconstrucción tras reiniciar | 153 ms (cada refresco) | 88,8 ms (una vez) |
+
+El delta del aeropuerto es más grande que el del mapa general a propósito: lleva
+el informe entero en cada respuesta porque **la reclasificación no es opcional**
+—`_clasificar` mira `sube = alturas[-1] - alturas[i_min]`, así que UN punto
+nuevo convierte un sobrevuelo en aterrizaje— y el cambio se anuncia en pantalla,
+porque una traza que cambia de color sola se lee como que la página se
+contradice.
+
+## El zoom sobrevive al refresco (verificado en el navegador)
+
+`Plotly.react` en vez de `newPlot`, `uirevision` constante entre refrescos, `uid`
+estable en cada traza (`"ac-"+icao24` y uno fijo por traza de fondo),
+`datarevision` derivada del dato (puntos + timestamp máximo) y el encuadre
+calculado UNA vez y guardado en `ENCUADRE`. `uirevision` solo cambia cuando el
+usuario pide otro encuadre ("Ver todo" / "Volver al grueso" / la grabación
+entera): si no cambiara nunca, esos botones no harían nada.
+
+Por qué cada pieza:
+
+- **`newPlot` + `uirevision` no alcanza**: `newPlot` arranca con `Plots.purge` y
+  se lleva `_fullLayout` entero, incluido `_preGUI`, que es donde vive lo que
+  tocó el usuario. Comprobado en el navegador: con el mismo dibujo y el mismo
+  encuadre, `react` conserva el zoom, `newPlot` lo devuelve al original y
+  `_preGUI` queda vacío.
+- **El rango tiene que ser pegajoso**: con `uirevision` puesto pero el rango
+  recalculado, el zoom no se pierde limpio, se MEZCLA — `_preGUI` compara
+  `range[0]` y `range[1]` por separado, así que el usuario queda con un extremo
+  suyo y otro nuestro. No se lee como un bug, se lee como que el mapa se movió
+  solo.
+- **`uid` en todas las trazas**: `adsb_report.tracks()` ordena por cantidad de
+  puntos y 38 de 55 pares vecinos están a UNA posición de darse vuelta. Sin uid,
+  Plotly resuelve la identidad por índice. Por lo mismo NO se usan
+  `extendTraces`/`addTraces`: direccionan por índice y le pegarían los puntos de
+  una aeronave a la traza de otra, en silencio.
+- **`datarevision` derivada del dato y no un contador a mano**: con
+  `datarevision` igual y datos distintos, `react` no redibuja y NO avisa.
+- **`Plotly.purge` antes de cualquier `innerHTML` sobre `#mapa`**: antes andaba
+  de casualidad porque después venía un `newPlot`. Con `react` el div queda
+  vacío y no tira excepción — y es el ciclo real de un mapa en vivo, que arranca
+  sin posiciones.
+
+Verificado en el navegador contra la instancia del 8001, con un `WheelEvent`
+real sobre la capa de arrastre: ancho del eje X **136,743 km → 123,730 km** al
+hacer zoom, y **123,730 km después de 6 refrescos** (delta, completa y uno con
+datos nuevos de verdad), con el rango byte a byte idéntico en los seis. En
+`/aeropuerto/mapa`, 26,637 → 24,102 km y 24,102 tras 4 refrescos.
+
+**Corrección de lo que decía este archivo:** antes acá se afirmaba que "el eje Y
+no se mueve ni un decimal". Es falso, y solo parecía cierto porque el zoom con
+la rueda mueve los dos ejes de forma simétrica. Con un **paneo vertical** el eje
+Y SÍ se perdía en el refresco siguiente: medido con un arrastre real, Y quedaba
+en `[-13,487, 154,714]` y el refresco lo devolvía a `[-95,138, 73,063]` mientras
+el X sobrevivía intacto. La causa es `yaxis.scaleanchor: "x"`: el eje atado no
+tiene rango propio, Plotly lo **rehace** en cada `react` a partir del X, del
+aspecto en píxeles y del **centro que le mandamos** — o sea del `ENCUADRE`
+original, que la edición del usuario no llegaba a pisar. Aislado: pasa llamando
+solo a `dibujar()`, sin nada del resto del ciclo.
+
+El arreglo es de una línea de idea: **el encuadre que se remanda es el que el
+usuario TIENE, no el que había al principio.** Antes de cada dibujo se relee
+`gd._fullLayout.xaxis.range` / `yaxis.range` y eso pasa a ser `ENCUADRE`. Así no
+hay nada que "restaurar" y el eje atado deja de tener a dónde volver. `ENCUADRE`
+se recalcula desde el dato solo cuando vale `null`, que es el primer dibujo y lo
+que hacen los botones de reencuadre. Verificado en las dos páginas con un paneo
+diagonal + rueda: rango idéntico byte a byte tras un delta y tras una completa,
+y los botones "Ver todo" / "Ver la grabación entera" siguen descartando el zoom
+a pedido explícito.
+
+**Se eliminó la pausa por hover** de `/adsb/mapa`. El comentario que la
+justificaba era cierto para `newPlot` y falso para `react`: verificado, el nodo
+`path.js-line` bajo el cursor es el MISMO objeto después del refresco. La pausa
+era lo contrario del tiempo real — congelaba el mapa exactamente cuando alguien
+lo estaba mirando.
+
+**Las dos listas laterales se parchean nodo por nodo** en vez de rehacerse con
+`innerHTML`, con los eventos delegados en el `<ul>` y el resaltado en una
+variable de módulo. El `innerHTML` destruía el `<li>` con el mouse encima, su
+`mouseleave` nunca llegaba y las trazas quedaban apagadas para siempre (53 de 54
+medidas). Verificado: con el mouse sobre un `<li>`, 18 trazas apagadas; tras un
+refresco completo el nodo es el mismo y al salir el mouse quedan 0 apagadas. Las
+dos listas ordenan por **última posición más reciente** y no por cantidad de
+puntos, que es el orden que se da vuelta solo.
+
+---
+
+## Lo que encontró la verificación adversarial del cursor, y cómo quedó
+
+Todo esto salió de revisar el cambio del cursor incremental **contra el código y
+contra la base real**, con la grabación detenida hacía 11,9 h. Ese estado —toda
+la grabación más vieja que la ventana de dibujo de 3 h— es el que destapó casi
+todo: es el caso que nadie prueba porque hay que esperar tres horas para
+llegar a él.
+
+### 1. Las dos páginas mentían cuando la ventana de 3 h dejaba todo afuera
+
+`/adsb/mapa` imprimía **"Todavía no hay ninguna posición decodificada"** con
+1 984 posiciones decodificadas en la misma respuesta, y daba una **causa física
+inventada** ("faltan las tramas CPR par e impar") para lo que era un recorte por
+antigüedad. Tres centímetros más abajo la misma pantalla decía "quedaron fuera
+66 trazas y 1 984 puntos", y las tarjetas publicaban "17,6 km alcance típico"
+calculado justo con esas 1 984.
+
+`/aeropuerto/mapa` era peor porque **no había forma de enterarse**: decía
+"Ninguna aeronave entró al cilindro… es que desde donde está la antena no se
+reciben" mientras las tarjetas mostraban 7 SOBREVUELOS y el JSON traía
+`aeronaves_en_cilindro=15`, `posiciones_en_cilindro=54`, `salidas=8`. Los
+`trazas_fuera_de_ventana=8` y `puntos_fuera_de_ventana=506` viajaban en la
+respuesta pero el **único** lugar que los escribía estaba en `pintarLista()`
+después de su `return` temprano, y esa página **nunca mandaba `ventana_h`** ni
+tenía el botón "Ver la grabación entera".
+
+Cómo quedó:
+
+- El mapa vacío distingue las causas y las dice. En `/adsb/mapa`: "nunca se
+  decodificó una posición", "se decodificaron y el filtro las rechazó a todas"
+  (con el desglose por motivo) y "todas quedaron fuera de la ventana de N h".
+  En `/aeropuerto/mapa`: "quedaron fuera de la ventana", "entraron al cilindro
+  pero ninguna quedó con operación atribuida" y "no entró ninguna" — y esta
+  última afirma la causa de la antena **solo si `ve_la_pista` es falso**; con la
+  pista dentro del horizonte, decir "desde acá no se reciben" era inventar.
+- `/aeropuerto/mapa` ahora manda `ventana_h`, tiene el cartel `#ventana` que se
+  escribe SIEMPRE (con el cero explícito) y el botón "Ver la grabación entera".
+- La tarjeta "Aeronaves ubicadas" y la nota de la lista de `/adsb/mapa` pasaron a
+  contar **toda la grabación**, como las dos tarjetas de al lado; lo dibujado se
+  dice aparte ("1 986 posiciones · 2 dentro de la ventana"). Antes la tarjeta
+  marcaba 0 al lado de "17,6 km ALCANCE TÍPICO", y la nota decía "1 de 3 290
+  aeronaves tienen posición… las otras 3 289 no llegaron las tramas CPR",
+  atribuyéndole a la radio 66 trazas que sí estaban decodificadas.
+- La barra de estado de `/aeropuerto/mapa` decía "0 aeronaves en el cilindro"
+  con 15 adentro: ahora imprime el número del cilindro y, aparte, cuántas se
+  dibujan.
+- **Faltaba una tarjeta**: `salidas` no se contaba en ninguna, y son justo las
+  que este mapa DIBUJA (8 en la grabación de hoy). Ocho trazas de colores sin un
+  número que les correspondiera.
+
+### 2. El lector no detectaba que la base RETROCEDIÓ
+
+`avanzar()` solo hacía `WHERE id > cursor` y nunca miraba el estado real de la
+tabla. Si `adsb_log.db` se borra y se vuelve a crear con el proceso web vivo
+—que es exactamente lo que pasa si alguien resetea la grabación y después
+aprieta Iniciar, porque `adsb_service` graba desde ESTE mismo proceso— el lector
+se quedaba con el cursor viejo y **servía datos borrados para siempre**.
+Reproducido: con el cursor en 8 000 y la base recreada con 300 filas, tres polls
+seguidos daban `nuevos=0`, y hasta la carga completa contestaba 35 trazas, 777
+puntos y `observations=8000` sobre una base de 300 filas. El único síntoma era
+`lag_s` creciendo, o sea la página diciendo "grabación detenida" justo mientras
+la grabación corría. Y no había forma de reconciliar sin reiniciar el servidor.
+
+Ahora `_read_db_con_ids()` devuelve además `(max(id), count(*))` de la tabla
+entera y `_detectar_rebobinado()` corre dos pruebas **de un solo lado**:
+`max_id < cursor` (archivo recreado o truncado) y `total < observaciones +
+leídas` (DELETE en el medio, que no mueve `max(id)`). Son de un solo lado a
+propósito: los dos números se leen DESPUÉS del `SELECT`, así que una inserción
+concurrente del grabador solo los agranda y no puede disparar un falso positivo.
+Al detectarlo, el lector se **reconstruye entero** (`_reset_estado()`, un método
+y no código repetido: olvidarse un contador dejaría un lector mezclando dos
+bases, que es peor que el bug) y el endpoint fuerza `base:"completa"` con el
+motivo en `forzada`. Se publica `rebobinados` y `rebobinado`, y las dos páginas
+lo escriben en la barra de estado: un lector que se reconstruyó solo cambió de
+golpe todos los números de la pantalla.
+
+Costo medido: el refresco vacío —el 78 % de los refrescos— pasa de **0,319 ms a
+0,774 ms** sobre las 11 823 filas de hoy. Las dos agregaciones van en sentencias
+SEPARADAS porque juntas obligan a un scan de la tabla completa: sobre 1 000 000
+de filas, juntas 33,9 ms, separadas 0,039 ms el `max` (por índice) + 7,2 ms el
+`count`. Los 7,2 ms cada 5 s son 0,14 % de un núcleo y se pagan porque el
+`count` es lo único que detecta un DELETE en el medio.
+
+### 3. `ADSB_DB`: el sistema ya se puede ejercitar sin tocar el dato del usuario
+
+La ruta de la base estaba escrita a mano en seis lugares (`adsb_record.py:40` y
+cinco `ROOT / "adsb_log.db"` en `webapp/main.py`) y no había variable de
+entorno, a diferencia de `ADSB_RECEIVER`, `ADSB_SURFACE_REF` o `ADSB_AIRPORT`.
+Consecuencia concreta: la única forma de comprobar de punta a punta que al mapa
+le entran filas nuevas era **escribir en las 11 823 filas irrepetibles**, o
+duplicar el árbol entero.
+
+Ahora `adsb_record.py` define `DB_PATH = Path(os.environ.get("ADSB_DB") or …)` y
+`webapp/main.py` la **importa** en vez de rearmarla — dos definiciones de la
+misma ruta es como se termina con la webapp leyendo un archivo y el grabador
+escribiendo otro. Verificado de punta a punta contra una copia: `ADSB_DB=<copia>
+uvicorn main:app --port 8002`, carga completa con cursor 11 823, se insertan dos
+filas con `epoch` de ahora en la copia, y `?desde=11823` devuelve `base=delta`,
+`nuevos=2`, `nuevas_posiciones=2`, `cursor=11825`, `lag_s=0.0`, con la traza
+nueva y sola. Eso —que llegan filas nuevas por el camino HTTP completo— no se
+había podido verificar nunca.
+
+### 4. El contador de reintento decía siempre "0 s"
+
+`pintarEstado()` se llama desde el `catch` de `cargar()`, o sea **antes** de que
+`programar()` actualice `proximoEn`; con el valor viejo ya vencido, `faltan`
+daba 0 y el texto no se repintaba hasta el intento siguiente. Durante esperas
+reales de 20, 40 y 60 s la página decía "reintento en 0 s" fijo — el único
+número que ese cartel tiene que acertar. Ahora la espera se calcula en un solo
+lugar (`esperaMs()`, que usan `programar()` y el `catch`), `proximoEn` se fija en
+el `catch`, y el cartel se repinta cada segundo. Verificado: 4 s → 2 s → 0 s con
+un fallo, 8 s → 6 s → 4 s con dos. Y `/aeropuerto/mapa` no agregaba la clase
+`error` ni tenía `.estado.error` en su CSS: una caída total del servidor se veía
+con el mismo gris que "todo bien". Las dos cosas están.
 
 ---
 
 ## Ideas que quedaron sin hacer
 
+- **Guardar en cada fila desde dónde se recibió.** Hoy la base no lo guarda, así
+  que las distancias de todo el histórico se recalculan desde el receptor
+  actual: al mudarse, 11 823 filas grabadas en San Isidro pasan a medirse desde
+  Aeroparque. Medido, el corrimiento es chico (mediana 6%, máximo 1%) porque los
+  puntos están a 20 km, pero es un error silencioso y crece con la distancia.
+  Sería una columna `rx_lat`/`rx_lon` escrita por el grabador; lo viejo queda en
+  NULL y se puede asumir San Isidro. Sin esto, cualquier análisis que mezcle las
+  dos ubicaciones compara contra un origen que para la mitad de las filas es
+  falso. Es lo que hizo aparecer el bug de la advertencia contradictoria.
+
 - **Identificar la aerolínea por el prefijo del distintivo** (JES = JetSmart,
   ARG = Aerolíneas, GLO = Gol). Daría el operador del 100% de los aviones con
   callsign, sin depender del registro. Es el mejor camino para el 47% que no
   resuelve matrícula.
+
+  **Ya está dimensionado con datos** (2026-08-22, sobre las 171 aeronaves con
+  posición o distintivo, que es el criterio de "real"):
+
+  | | aeronaves | |
+  |---|---|---|
+  | resuelven matrícula contra OpenSky | 66 | 39% |
+  | transmiten distintivo | 164 | **96%** |
+  | distintivo **pero sin** matrícula | 101 | 59% ← lo que rescata el prefijo |
+  | ni una cosa ni la otra | 4 | 2% |
+
+  De esas 101, **90 (89%) traen un prefijo `AAA###` válido**. O sea que el prefijo
+  llevaría la identificación del operador del 39% al 92%.
+
+  Dos obstáculos encontrados al mirar la fuente, que hay que resolver antes:
+  **(1)** el snapshot de OpenSky tiene `operator_icao` para 1705 operadores, pero
+  **`ARG` está en blanco** — 56 aviones cargados y ningún nombre, justo el prefijo
+  más frecuente del aire local (77 aeronaves observadas). Sale gratis para TAM,
+  LAN, GLO, AZU, KLM, CMP, AVA, AAL, JES y SKU, pero no para el que más importa.
+  **(2)** los nombres tienen mojibake: `Gol Transportes A�reos`, `Aerov�as` — el
+  CSV se decodificó con el encoding equivocado al construir `tools/aircraft_db.sqlite`.
+
+  Y una distinción que no hay que perder al implementarlo: el distintivo identifica
+  **el vuelo y su operador**, no el avión físico. Presentar una aerolínea deducida
+  del prefijo como si fuera la identidad del airframe sería mezclar dos
+  afirmaciones con confiabilidad distinta.
 - **Corrección de fase de dump1090**, su otro mecanismo de recuperación. No se
   hizo porque ya hay paridad de tasa con `rtl_adsb`.
 - **Leer el `rssi` del `aircraft.json` de dump1090** — tres líneas en `adsb.py`,
   solo útil si se usa dump1090.
-- **Bajar el intervalo de commit o pasar a WAL** si molesta ver la base atrasada
-  mientras graba.
+- ~~**Bajar el intervalo de commit o pasar a WAL**~~ — hecho. Commit cada 1,0 s
+  de reloj y `journal_mode=wal` con el valor devuelto chequeado. Ver "Cosas que
+  van a confundir".
+- **Persistir un snapshot del estado del `LectorIncremental`.** Cuando el
+  proceso del servidor se reinicia, el cursor vuelve a 0 y el primer request
+  reconstruye toda la grabación: 88,8 ms medidos sobre 11 423 filas, pero crece
+  linealmente (40× filas = 40,4× tiempo), o sea ~3,6 s a 29 días. La respuesta
+  completa ya lleva `reconstruido_en_ms` a la vista en vez de disimularlo; el
+  snapshot es el arreglo de fondo. La ventana de retención NO ayuda acá: el gate
+  y los agregados son históricos por definición.
+- **Acotar el `array('d')` de distancias.** Es el único componente del estado
+  residente que la ventana de retención no acota: 13,4 MB al año, y la inserción
+  con `bisect.insort` pasa de 0,50 µs a 612 µs por punto en ese horizonte (2,0
+  ms de CPU por minuto a la tasa actual, aceptable; a varios años no).
+- **Medir cuánto permanece una aeronave en alcance**, que es lo que debería
+  fijar la ventana de dibujo de 3 h. Hoy las 3 h son un número elegido para que
+  la carga completa quede acotada (77 KB en vez de crecer sin techo), no una
+  medición. Va con `trazas_fuera_de_ventana` a la vista y un botón que pide la
+  grabación entera, así que es reversible sin tocar código.
+- **Los cinco pedazos de estado de interfaz de los mapas viven en tres lugares**
+  —Plotly vía `uirevision`, variables de módulo, y el DOM parcheado—. Si el
+  próximo cambio agrega un sexto y lo pone en el DOM sin pensarlo, vuelve el bug
+  del resaltado con otra cara.

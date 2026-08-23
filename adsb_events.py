@@ -36,9 +36,19 @@ Uso:
 """
 from __future__ import annotations
 
+import threading as _threading
+import time as _time
+from array import array
+from bisect import bisect_right as _bisect_right
+from bisect import insort as _insort
 from dataclasses import dataclass, field, replace
 
 from adsb import Observation
+
+try:
+    import aircraft_db as _aircraft_db
+except Exception:                            # el registro de matriculas es opcional
+    _aircraft_db = None
 from receiver import (MEDIA_CELDA_CPR_KM, MEDIA_CELDA_CPR_LAT_DEG,
                       TECHO_SIN_ALTITUD_KM, distance_km, horizonte_km,
                       limite_posicion_km, resolve_ref)
@@ -659,7 +669,12 @@ def load_db(path: str) -> tuple[list[Observation], PositionGate]:
     en pantalla para siempre. Filtrar en lectura es reversible, idempotente y
     retroactivo, y permite devolver los rechazos junto con los datos.
     """
-    return apply_position_gate(_read_db(path))
+    # Se sigue leyendo la base ENTERA aca a proposito: los 8 llamadores de
+    # load_db desempaquetan una tupla de 2 y esperan la lista completa de
+    # Observation (el CLI, /adsb/analisis, aeropuerto.py y los tests las
+    # recorren). El camino incremental que evita releerlas es
+    # LectorIncremental, que no las conserva: mantiene el estado ya reducido.
+    return apply_position_gate(_read_db(path)[0])
 
 
 def _load_csv(path: str) -> list[Observation]:
@@ -701,7 +716,35 @@ def _read_csv(path: str) -> list[Observation]:
     return rows
 
 
-def _read_db(path: str) -> list[Observation]:
+def _read_db(path: str, *, desde: int = 0) -> tuple[list[Observation], int]:
+    """Las filas con id > desde y el maximo id leido.
+
+    Devuelve una tupla y no una lista porque quien lee por tramos necesita
+    saber hasta donde llego, y derivarlo del largo de la lista solo funciona
+    mientras los ids sean consecutivos.
+    """
+    observaciones, _ids, cursor, _estado = _read_db_con_ids(path, desde=desde)
+    return observaciones, cursor
+
+
+def _read_db_con_ids(path: str, *, desde: int = 0
+                     ) -> tuple[list[Observation], list[int], int, tuple[int, int]]:
+    """Las filas con id > desde, sus ids, el maximo id leido, y (max_id, total).
+
+    El cuarto elemento es el estado de la TABLA ENTERA, no del tramo leido, y
+    esta para que LectorIncremental pueda ver si la base retrocedio. Medido de
+    punta a punta sobre las 11 823 filas de hoy, el refresco vacio -- el 78 % de
+    los refrescos -- pasa de 0.319 ms a 0.774 ms, casi todo preparacion de las
+    dos sentencias. El count es el unico de los dos que escala con la tabla
+    (7.2 ms a un millon de filas, recorriendo el indice) y se paga igual porque
+    es lo unico que detecta un DELETE en el medio, que no mueve max(id): 7.2 ms
+    cada 5 s son 0.14 % de un nucleo, contra un mapa que sirve filas borradas
+    hasta que alguien se acuerde de reiniciar el servidor.
+
+    Lo usa LectorIncremental, que necesita el id de cada punto para poder
+    contestarle a cada cliente "que hay de nuevo desde tu cursor" sin
+    guardar estado por pestana en el servidor.
+    """
     # Decision explicita sobre la columna on_ground, que se escribe y nadie
     # lee: NO se agrega a Observation. El portador de "esta en tierra" es
     # altitude_ft=0.0, que decoded_to_observation ya fija para los mensajes de
@@ -722,8 +765,41 @@ def _read_db(path: str) -> list[Observation]:
     from pathlib import Path as _Path
     conn = sqlite3.connect(_Path(path).absolute().as_uri() + "?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM adsb_log ORDER BY epoch").fetchall()
+    # ORDER BY id y no ORDER BY epoch, y con WHERE id > ?: los dos ordenes
+    # coinciden sobre los datos de hoy (0 inversiones de epoch contra id sobre
+    # 10973 filas, y en los empates SQLite recorria idx_adsb_epoch por rowid
+    # ascendente), pero epoch no sirve de cursor -- tiene 598 duplicados
+    # consecutivos, asi que `>` pierde filas y `>=` las repite. id es INTEGER
+    # PRIMARY KEY AUTOINCREMENT: unico, monotono, y sigue siendo monotono
+    # aunque el reloj del sistema salte hacia atras. La consulta incremental
+    # mide 0.055-0.061 ms y se mantiene plana mientras la tabla crece 40x,
+    # contra 39.7 ms de la misma consulta filtrando por utc, que no tiene
+    # indice. Que los dos ordenes coincidan es una propiedad de ESTOS datos y
+    # por eso la vigila test_adsb_incremental.py.
+    rows = conn.execute("SELECT * FROM adsb_log WHERE id > ? ORDER BY id",
+                        (desde,)).fetchall()
+    # DESPUES del SELECT y a proposito: si el grabador inserto algo entremedio,
+    # estos dos numeros salen mas GRANDES, nunca mas chicos. La prueba de
+    # rebobinado de LectorIncremental es de un solo lado (`max_id < cursor`,
+    # `total < esperado`), asi que una carrera con el grabador no la puede
+    # disparar por error.
+    # DOS sentencias y no "SELECT max(id), count(*)" en una: juntas obligan a
+    # SQLite a recorrer la tabla leyendo todas las columnas. Medido sobre una
+    # tabla de 1 000 000 de filas: juntas 33.9 ms, separadas 0.039 ms el max
+    # (por indice, O(1)) + 7.2 ms el count (recorre solo el indice). Sobre las
+    # 11 823 de hoy son 0.09 + 0.09 ms.
+    max_id = conn.execute("SELECT max(id) FROM adsb_log").fetchone()[0] or 0
+    total = conn.execute("SELECT count(*) FROM adsb_log").fetchone()[0] or 0
+    estado = (max_id, total)
     conn.close()
+    cursor = rows[-1]["id"] if rows else desde
+    # El id de CADA fila viaja aparte, no se reconstruye contando desde el
+    # cursor. Contar da lo mismo mientras los ids sean consecutivos, pero un
+    # solo DELETE los deja con huecos y a partir de ahi los ids reconstruidos
+    # quedarian por DEBAJO de los reales -- o sea que un cliente con el cursor
+    # al dia dejaria de recibir puntos que si son nuevos. Es exactamente la
+    # falla que no hace ruido: la traza se corta y el mapa se ve perfecto.
+    ids = [row["id"] for row in rows]
     return [
         Observation(
             timestamp=row["epoch"], icao24=row["icao24"],
@@ -747,7 +823,476 @@ def _read_db(path: str) -> list[Observation]:
             track_deg=(row["track_deg"] if "track_deg" in row.keys() else None),
         )
         for row in rows
-    ]
+    ], ids, cursor, estado
+
+
+
+# --- lectura incremental --------------------------------------------------
+# Todo lo de aca abajo existe por UN numero medido: load_db('adsb_log.db')
+# tardaba 153 ms sobre 10873 filas y crece LINEALMENTE (40x filas = 40.4x
+# tiempo), o sea 3.64 s a 29 dias de grabacion 24/7. Un mapa que pollea cada 5 s
+# no puede pagar eso, y menos cuando el 78 % de los refrescos medidos (279 de
+# 360 sobre la ultima hora real) no trae ni una posicion nueva.
+
+# Ventana de dibujo por defecto. NO recorta los agregados -- observations,
+# mediana, p95 y maximo siguen siendo de TODA la grabacion -- solo cuanta traza
+# viaja en la carga completa. Hoy hay 55 trazas en 17.2 h; a 24/7 serian ~77 por
+# dia y la respuesta completa creceria sin techo. El numero que quedo afuera
+# viaja SIEMPRE (trazas_fuera_de_ventana / puntos_fuera_de_ventana, con el cero
+# explicito) porque una ventana silenciosa es un descarte silencioso.
+VENTANA_DIBUJO_S = 3 * 3600.0
+
+# Cada punto son 6 doubles: id, t, lat, lon, alt, km. El id va guardado porque
+# es lo que permite contestar "que hay de nuevo desde el cursor N" a CADA
+# cliente por separado, sin estado por pestana en el servidor.
+CAMPOS_PUNTO = 6
+_NADA = float("nan")
+
+
+def _o_nada(valor):
+    return _NADA if valor is None else float(valor)
+
+
+def _o_none(valor):
+    return None if valor != valor else valor      # NaN es el unico != a si mismo
+
+
+class _Aeronave:
+    """El estado por aeronave que hace falta para dibujarla, ya reducido.
+
+    No guarda Observation: una lista de Observation mide 313 B/obs = 143 MB a
+    30 dias de grabacion. Los mismos puntos en array('d') miden 61 B/punto
+    medidos = 8.4 MB.
+    """
+    __slots__ = ("icao24", "puntos", "callsign", "registration", "track_deg",
+                 "ultimo_t")
+
+    def __init__(self, icao24: str):
+        self.icao24 = icao24
+        self.puntos = array("d")
+        self.callsign = None
+        self.registration = None
+        self.track_deg = None
+        self.ultimo_t = 0.0
+
+    def __len__(self) -> int:
+        return len(self.puntos) // CAMPOS_PUNTO
+
+    def punto(self, i: int) -> dict:
+        base = i * CAMPOS_PUNTO
+        p = self.puntos
+        return {"lat": p[base + 2], "lon": p[base + 3],
+                "alt": _o_none(p[base + 4]), "t": p[base + 1],
+                "km": _o_none(p[base + 5])}
+
+    def desde_id(self, desde: int) -> int:
+        """Indice del primer punto con id > desde. Busqueda binaria: los ids
+        de una aeronave son crecientes porque se alimentan en orden de cursor.
+        """
+        lo, hi = 0, len(self)
+        while lo < hi:
+            medio = (lo + hi) // 2
+            if self.puntos[medio * CAMPOS_PUNTO] <= desde:
+                lo = medio + 1
+            else:
+                hi = medio
+        return lo
+
+    def desde_tiempo(self, corte: float) -> int:
+        """Indice del primer punto con t >= corte (la ventana de dibujo)."""
+        lo, hi = 0, len(self)
+        while lo < hi:
+            medio = (lo + hi) // 2
+            if self.puntos[medio * CAMPOS_PUNTO + 1] < corte:
+                lo = medio + 1
+            else:
+                hi = medio
+        return lo
+
+
+class LectorIncremental:
+    """Un cursor sobre adsb_log que solo avanza, con el estado ya reducido.
+
+    El cursor es la columna `id` y no `epoch` ni `utc`, y la eleccion no es de
+    estilo. `epoch` NO es unico: 10275 valores distintos sobre 10873 filas, 598
+    duplicados consecutivos, asi que un cursor por epoch con `>` PIERDE filas y
+    con `>=` las REPITE -- y una posicion perdida deja un agujero en la traza
+    que nadie va a notar mirando el mapa. `utc` es unica en la practica pero no
+    tiene indice: la misma consulta filtrando por utc pasa de 0.46 ms a 39.7 ms
+    cuando la tabla crece 40x (SCAN de tabla entera), contra 0.055 -> 0.061 ms
+    filtrando por id. Y `id` es INTEGER PRIMARY KEY AUTOINCREMENT, o sea que
+    sigue siendo monotono aunque el reloj del sistema salte hacia atras.
+
+    Una instancia por proceso y por base, con lock: el PositionGate es un
+    reductor con estado (la ultima posicion ACEPTADA de cada aeronave es la
+    referencia de R2) y darle la misma fila dos veces le rebobina esa
+    referencia. Por eso avanzar() es lo unico que escribe y solo va hacia
+    adelante.
+
+    Que alimentar el gate de a pedazos de lo mismo que alimentarlo de una no es
+    una suposicion: se verifico contra load_db en lotes irregulares de 1, 3, 17,
+    50 y 113 filas, comparando contadores, rechazos, json.dumps(tracks) y
+    json.dumps(coverage_report). Lo vigila test_adsb_incremental.py, porque
+    descansa en dos propiedades de ESTOS datos -- que epoch no decrece con id, y
+    que en los empates SQLite recorria idx_adsb_epoch por rowid ascendente.
+    """
+
+    def __init__(self, path: str, ref=None, *, cilindro=None):
+        self.path = str(path)
+        self._ref = ref
+        self._lock = _threading.RLock()
+        self.cilindro = cilindro
+        # Cuantas veces se detecto que la base RETROCEDIO y hubo que
+        # reconstruir. Viaja al navegador: un lector que se reconstruyo solo
+        # cambio de golpe todos los numeros de la pantalla, y que eso pase sin
+        # decirlo es la misma clase de mentira que un recorte silencioso.
+        self.rebobinados = 0
+        self.ultimo_rebobinado: dict | None = None
+        self.ms_reconstruccion = None
+        self._reset_estado()
+
+    def _reset_estado(self) -> None:
+        """Todo el estado reducido, de cero. Lo usan __init__ y el rebobinado.
+
+        Un metodo y no codigo repetido porque olvidarse UN contador aca deja un
+        lector que mezcla la base vieja con la nueva, que es peor que el bug que
+        esto arregla: los numeros quedarian plausibles y mal.
+        """
+        self.cursor = 0
+        self.gate = PositionGate(**({"ref": self._ref} if self._ref is not None else {}))
+
+        self.aviones: dict[str, _Aeronave] = {}
+        # Los agregados de coverage_report, todos incrementales: contadores o
+        # extremos monotonos. La unica excepcion son mediana y p95, que salen
+        # de este array ordenado con bisect.insort -- EXACTAS, no aproximadas.
+        # Un histograma de 0.1 km ahorraria memoria (47 KB constantes contra
+        # 13.4 MB al ano) pero el error medido es 0.047 km en el p95 y la
+        # pagina imprime con toFixed(1): moveria el digito que se ve, en la
+        # pagina cuyo punto es que los numeros se puedan auditar.
+        self.distancias = array("d")
+        self.observaciones = 0
+        self.icaos: set[str] = set()
+        self.con_altitud = 0
+        self.min_altitud = None
+        self.en_tierra = 0
+        self.bajo_3000 = 0
+        self.ultimo_epoch = None
+        self._ids_rechazo: list[int] = []
+
+        # El resumen por aeronave que consume aeropuerto.informe(). Se acumula
+        # aca y no se recalcula sobre las observaciones porque el estado
+        # residente ya no las guarda. Es O(1) por aeronave: primera altura,
+        # minima con su punto, ultima altura, conteo, ultimo rumbo y ultimo
+        # distintivo DENTRO del cilindro.
+        self.cil_por_icao: dict[str, dict] = {}
+        self.cil_posiciones = 0
+        self._cache_informe = (None, None)      # (clave de cursor, Informe)
+
+    # -- avance -----------------------------------------------------------
+    def avanzar(self) -> dict:
+        """Lee las filas con id > cursor y las reduce. Devuelve el delta.
+
+        "Solo hacia adelante" vale mientras el ARCHIVO solo crezca, y no siempre
+        crece: si alguien borra adsb_log.db y aprieta Iniciar en /adsb, el
+        grabador corre en ESTE mismo proceso y los ids vuelven a 1 con el lector
+        vivo. Medido antes de este chequeo: con el cursor en 8000 y la base
+        recreada con 300 filas, tres polls seguidos daban nuevos=0 y hasta la
+        carga completa contestaba 35 trazas, 777 puntos y observations=8000
+        sobre una base de 300 filas. O sea el mapa sirviendo para siempre datos
+        que ya no existen en disco, y el unico sintoma visible era lag_s
+        creciendo -- la pagina diciendo "grabacion detenida" justo mientras la
+        grabacion corre.
+        """
+        with self._lock:
+            primera_vez = self.cursor == 0
+            t0 = _time.perf_counter()
+            nuevas, ids, cursor, (max_id, total) = _read_db_con_ids(
+                self.path, desde=self.cursor)
+            rebobinado = self._detectar_rebobinado(max_id, total, len(nuevas))
+            if rebobinado is not None:
+                # Reconstruir y no parchear: el gate es un reductor con estado
+                # y no hay forma de "sacarle" las filas que ya no estan.
+                self._reset_estado()
+                nuevas, ids, cursor, _ = _read_db_con_ids(self.path, desde=0)
+                primera_vez = True
+            desde = self.cursor
+            aceptadas = 0
+            tocadas: dict[str, int] = {}
+            rechazos_nuevos = 0
+            for o, fila_id in zip(nuevas, ids):
+                if self._absorber(o, fila_id):
+                    aceptadas += 1
+                    tocadas[o.icao24] = tocadas.get(o.icao24, 0) + 1
+                elif len(self.gate.rechazos) > len(self._ids_rechazo):
+                    self._ids_rechazo.append(fila_id)
+                    rechazos_nuevos += 1
+            self.cursor = cursor
+            ms = (_time.perf_counter() - t0) * 1000.0
+            if primera_vez:
+                self.ms_reconstruccion = round(ms, 1)
+            return {"desde": desde, "cursor": self.cursor, "filas": len(nuevas),
+                    "posiciones": aceptadas, "tocadas": tocadas,
+                    "rechazos_nuevos": rechazos_nuevos, "ms": round(ms, 2),
+                    "rebobinado": rebobinado}
+
+    def _detectar_rebobinado(self, max_id: int, total: int, leidas: int) -> dict | None:
+        """La base retrocedio: hay MENOS de lo que este lector ya absorbio.
+
+        Las dos pruebas son de un solo lado a proposito. `max_id < cursor`
+        agarra el caso reproducido (archivo borrado y recreado, ids desde 1).
+        `total < observaciones + leidas` agarra el otro que no mueve max_id: un
+        DELETE en el medio, que deja el cursor valido y las trazas con puntos de
+        filas que ya no estan. Como los dos numeros se leen DESPUES del SELECT,
+        una insercion concurrente del grabador solo los agranda y nunca dispara
+        un falso positivo.
+        """
+        esperado = self.observaciones + leidas
+        if max_id >= self.cursor and total >= esperado:
+            return None
+        motivo = ("la base se recreo o se trunco: su id maximo es "
+                  f"{max_id} y este lector iba por {self.cursor}"
+                  if max_id < self.cursor else
+                  f"se borraron filas: la base tiene {total} y este lector "
+                  f"ya habia absorbido {esperado}")
+        self.rebobinados += 1
+        self.ultimo_rebobinado = {
+            "motivo": motivo, "cursor_previo": self.cursor,
+            "observaciones_previas": self.observaciones,
+            "max_id": max_id, "filas_en_base": total,
+            "epoch": _time.time(),
+        }
+        return dict(self.ultimo_rebobinado)
+
+    def _absorber(self, o: Observation, fila_id: int) -> bool:
+        self.observaciones += 1
+        self.icaos.add(o.icao24)
+        if o.altitude_ft is not None:
+            self.con_altitud += 1
+            if self.min_altitud is None or o.altitude_ft < self.min_altitud:
+                self.min_altitud = o.altitude_ft
+            if o.altitude_ft < 3000:
+                self.bajo_3000 += 1
+        if o.is_on_ground:
+            self.en_tierra += 1
+        if self.ultimo_epoch is None or o.timestamp > self.ultimo_epoch:
+            self.ultimo_epoch = o.timestamp
+
+        avion = self.aviones.get(o.icao24)
+        if avion is None:
+            avion = self.aviones[o.icao24] = _Aeronave(o.icao24)
+        # El rumbo se toma de CUALQUIER observacion, tenga posicion o no: los
+        # mensajes de velocidad y los de posicion son distintos y casi nunca
+        # vienen juntos. Es el mismo criterio que adsb_report.tracks().
+        if o.track_deg is not None:
+            avion.track_deg = o.track_deg
+
+        motivo = self.gate.feed(o)
+        if motivo is not None or o.latitude is None or o.longitude is None:
+            return False
+
+        km = distance_km(o.latitude, o.longitude, self.gate.ref)
+        if km is not None:
+            _insort(self.distancias, km)
+        avion.puntos.extend((float(fila_id), o.timestamp, o.latitude, o.longitude,
+                             _o_nada(o.altitude_ft), _o_nada(km)))
+        avion.ultimo_t = o.timestamp
+        if o.callsign:
+            avion.callsign = o.callsign.strip()
+        if o.registration:
+            avion.registration = o.registration
+        self._absorber_cilindro(o)
+        return True
+
+    def _absorber_cilindro(self, o: Observation) -> None:
+        """El estado O(1) por aeronave que aeropuerto.informe() necesita."""
+        cil = self.cilindro
+        if cil is None or o.altitude_ft is None:
+            return
+        if o.altitude_ft > cil["techo_ft"]:
+            return
+        d = distance_km(o.latitude, o.longitude, (cil["lat"], cil["lon"]))
+        if d is None or d > cil["radio_km"]:
+            return
+        self.cil_posiciones += 1
+        r = self.cil_por_icao.get(o.icao24)
+        if r is None:
+            r = self.cil_por_icao[o.icao24] = {
+                "n": 0, "primera_alt": o.altitude_ft, "ultima_alt": o.altitude_ft,
+                "min_alt": o.altitude_ft, "min_t": o.timestamp, "min_d": d,
+                "track": None, "callsign": None}
+        r["n"] += 1
+        r["ultima_alt"] = o.altitude_ft
+        # Estricto y no <=: informe() usa alturas.index(min(alturas)), que
+        # devuelve el PRIMER indice del minimo. Con <= se quedaria con el
+        # ultimo empate y cambiarian el timestamp y la distancia publicados.
+        if o.altitude_ft < r["min_alt"]:
+            r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
+        if o.track_deg is not None:
+            r["track"] = o.track_deg
+        # Truthy y no .strip() truthy: es el criterio exacto de la ruta de
+        # siempre, next((o.callsign.strip() ... if o.callsign), None).
+        if o.callsign:
+            r["callsign"] = o.callsign.strip()
+
+    # -- lecturas ----------------------------------------------------------
+    def coverage(self) -> dict:
+        """Lo mismo que coverage_report(), sin tener las observaciones."""
+        d = self.distancias
+        n = len(d)
+        rechazos = self.gate.rechazos
+        return {
+            "observations": self.observaciones,
+            "aircraft": len(self.icaos),
+            "with_altitude": self.con_altitud,
+            "min_altitude_ft": self.min_altitud,
+            "on_ground_observations": self.en_tierra,
+            "below_3000ft": self.bajo_3000,
+            "can_see_runway_level": self.en_tierra > 0 or self.bajo_3000 > 0,
+            "with_position": n,
+            "max_distance_km": d[-1] if n else None,
+            "p95_distance_km": d[min(int(n * 0.95), n - 1)] if n else None,
+            "median_distance_km": d[n // 2] if n else None,
+            "min_distance_km": d[0] if n else None,
+            "positions_evaluated": self.gate.evaluadas,
+            "positions_rejected": len(rechazos),
+            "rejected_by_reason": dict(self.gate.por_motivo),
+            "rejected_max_km": (round(max(r.km for r in rechazos), 1)
+                                if rechazos else None),
+            "rejected_detail": [r.as_dict() for r in rechazos],
+            "surface_rule_exercised": bool(self.gate.superficie_evaluadas),
+            "gate_applied": True,
+        }
+
+    def _traza(self, avion: _Aeronave, desde_indice: int) -> dict:
+        rumbo, origen = avion.track_deg, "transmitido"
+        if rumbo is None:
+            rumbo, origen = self._rumbo_calculado(avion)
+        matricula = avion.registration
+        if matricula is None and _aircraft_db is not None and _aircraft_db.available():
+            matricula = (_aircraft_db.lookup(avion.icao24) or {}).get("registration") or None
+        return {
+            "icao24": avion.icao24,
+            "callsign": avion.callsign,
+            "registration": matricula,
+            "track_deg": rumbo,
+            "track_source": origen,
+            "points": [avion.punto(i) for i in range(desde_indice, len(avion))],
+        }
+
+    @staticmethod
+    def _rumbo_calculado(avion: _Aeronave):
+        """El respaldo de adsb_report._rumbo_entre, sobre los arrays."""
+        if len(avion) < 2:
+            return None, None
+        from math import atan2, cos, degrees, radians
+        b, a = avion.punto(len(avion) - 1), avion.punto(len(avion) - 2)
+        lat_media = radians((a["lat"] + b["lat"]) / 2)
+        norte = (b["lat"] - a["lat"]) * 111.32
+        este = (b["lon"] - a["lon"]) * 111.32 * cos(lat_media)
+        if (norte * norte + este * este) ** 0.5 < 0.2:
+            return None, None
+        return (degrees(atan2(este, norte)) + 360.0) % 360.0, "calculado"
+
+    def trazas(self, *, ventana_s: float | None = None, ahora: float | None = None,
+               solo: set | None = None) -> tuple[list[dict], int, int]:
+        """Las trazas enteras, recortadas a la ventana. Devuelve tambien lo que
+        quedo afuera: trazas completas descartadas y puntos recortados.
+        """
+        corte = 0.0
+        if ventana_s is not None:
+            base = ahora if ahora is not None else _time.time()
+            corte = base - ventana_s
+        salida, fuera_trazas, fuera_puntos = [], 0, 0
+        for avion in self.aviones.values():
+            total = len(avion)
+            if not total or (solo is not None and avion.icao24 not in solo):
+                continue
+            i0 = avion.desde_tiempo(corte) if corte else 0
+            fuera_puntos += i0
+            if i0 >= total:
+                fuera_trazas += 1
+                continue
+            salida.append(self._traza(avion, i0))
+        # El mismo orden que adsb_report.tracks() para que la carga completa sea
+        # comparable byte a byte con el camino de hoy. El cliente reordena por
+        # ultima posicion: ESTE orden se da vuelta solo (38 de 55 pares vecinos
+        # estan a una posicion de invertirse) y barajaria la lista lateral.
+        salida.sort(key=lambda t: len(t["points"]), reverse=True)
+        return salida, fuera_trazas, fuera_puntos
+
+    def fuera_de_ventana(self, ventana_s: float, ahora: float | None = None,
+                         solo: set | None = None) -> tuple[int, int]:
+        """Cuanto deja afuera la ventana de dibujo, sin construir las trazas.
+
+        Se publica SIEMPRE, con el cero explicito. Una ventana que recorta en
+        silencio es un descarte en silencio, que es lo unico que este repo no
+        se permite.
+        """
+        corte = (ahora if ahora is not None else _time.time()) - ventana_s
+        trazas = puntos = 0
+        for avion in self.aviones.values():
+            total = len(avion)
+            if not total or (solo is not None and avion.icao24 not in solo):
+                continue
+            i0 = avion.desde_tiempo(corte)
+            puntos += i0
+            if i0 >= total:
+                trazas += 1
+        return trazas, puntos
+
+    def informe_aeropuerto(self, codigo: str | None = None):
+        """aeropuerto.informe() sobre el resumen residente, cacheado por CURSOR.
+
+        Por cursor y no por tiempo: informe() es funcion pura del conjunto de
+        observaciones, asi que el cache por cursor es EXACTO -- no sirve un
+        numero viejo sin decir cuan viejo es, que es lo que hace el cache por
+        tiempo de adsb_service._resumen_historico. Y acierta igual: el 78 % de
+        los refrescos medidos (279 de 360) no trae ni una fila.
+
+        Incrementalizar la clasificacion aparte no vale la pena: son 1.6 ms hoy,
+        17.8 ms a 7 dias y 69.8 ms a 29 dias, o sea 2.3-2.4 % del endpoint,
+        contra el 91 % que se llevaba load_db.
+        """
+        if self.cilindro is None:
+            return None
+        clave = (self.cursor, codigo)
+        if self._cache_informe[0] == clave:
+            return self._cache_informe[1]
+        import aeropuerto
+        inf = aeropuerto.informe_desde_resumen(
+            self.cil_por_icao, self.cil_posiciones,
+            codigo or self.cilindro["codigo"])
+        self._cache_informe = (clave, inf)
+        return inf
+
+    def delta_trazas(self, desde: int, solo: set | None = None) -> list[dict]:
+        """Solo los puntos con id > desde, por aeronave tocada."""
+        salida = []
+        for avion in self.aviones.values():
+            if solo is not None and avion.icao24 not in solo:
+                continue
+            i0 = avion.desde_id(desde)
+            if i0 >= len(avion):
+                continue
+            salida.append(self._traza(avion, i0))
+        salida.sort(key=lambda t: len(t["points"]), reverse=True)
+        return salida
+
+    def rechazos_desde(self, desde: int) -> list[dict]:
+        i0 = _bisect_right(self._ids_rechazo, desde)
+        return [r.as_dict() for r in self.gate.rechazos[i0:]]
+
+    def lag_s(self, ahora: float | None = None) -> float | None:
+        """Cuan vieja es la fila mas nueva que este lector ve.
+
+        Es EL numero de la pagina. Un poll exitoso cada 5 s sobre una base
+        atrasada 905 s es la forma mas convincente de mentir, y hasta que la
+        grabacion arranque de nuevo con el commit por tiempo este numero va a
+        seguir dando minutos -- que es la verdad medida, no un error del mapa.
+        """
+        if self.ultimo_epoch is None:
+            return None
+        return max(0.0, (ahora if ahora is not None else _time.time()) - self.ultimo_epoch)
 
 
 if __name__ == "__main__":

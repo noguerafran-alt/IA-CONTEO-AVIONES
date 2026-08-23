@@ -57,6 +57,21 @@
   .estado { display: inline-flex; align-items: center; gap: 8px; color: #9aa0a6;
             background: #1a1d24; border-radius: 20px; padding: 6px 14px;
             font-size: 0.85rem; margin-bottom: 16px; }
+  /* Sin esto una caida total del servidor se veia con exactamente el mismo gris
+     que "todo bien": verificado en vivo, con el uvicorn muerto el className
+     seguia siendo "estado". El otro mapa si tenia el rojo. */
+  .estado.error { background: #2a1416; color: #f8b4b4; }
+  /* La ventana de dibujo se anuncia SIEMPRE, recorte o no, con el boton para
+     pedir la grabacion entera. Antes esta pagina no tenia ni el cartel ni el
+     boton: los 506 puntos que la ventana sacaba no se escribian en ningun lado
+     y no habia forma de pedirlos. */
+  .ventana { background: #171a20; border: 1px solid #262a33; border-radius: 8px;
+             padding: 10px 14px; margin-top: 12px; color: #9aa0a6;
+             font-size: 0.84rem; line-height: 1.5;
+             display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .ventana button { background: #262a33; color: #e6e6e6; border: 0; border-radius: 6px;
+                    padding: 6px 12px; font-size: 0.82rem; cursor: pointer; }
+  .ventana button:hover { background: #333947; }
   .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.76rem; }
 </style>
 </head>
@@ -75,7 +90,8 @@
   <div class="cards" id="tarjetas"></div>
 
   <div class="fila">
-    <div class="panel mapa-caja"><div id="mapa"></div></div>
+    <div class="panel mapa-caja"><div id="mapa"></div>
+      <div class="ventana" id="ventana" style="display:none"></div></div>
     <div class="panel lateral">
       <h2>Operaciones</h2>
       <ul class="lista" id="lista"></ul>
@@ -105,8 +121,43 @@ const ETIQUETA = {
   "en tierra": "en tierra", sobrevuelo: "sobrevuelo",
 };
 
-let IDX = {};       // icao24 -> indice del trazo, para resaltar sin redibujar
-let TRAZAS = [];
+const seg = s => s === null || s === undefined ? "–"
+               : s < 90 ? Math.round(s) + " s"
+               : s < 5400 ? Math.round(s / 60) + " min"
+               : (s / 3600).toFixed(1) + " h";
+
+// ---------------------------------------------------------------------------
+// ESTADO DEL CLIENTE. Mismo protocolo de cursor que /adsb/mapa: ver el
+// comentario largo de adsb_mapa.html. Y misma cadencia, 5 s, deliberadamente.
+// Los 20 s de antes se justificaban en "es un analisis, no un radar, y
+// recalcular la atribucion sobre toda la base no aporta" -- con el cursor esa
+// razon desaparece: informe() esta cacheado por cursor y acierta el 78 % de las
+// veces, y cuando falla cuesta 1.6 ms hoy (2.3 % del endpoint). Dos cadencias
+// distintas sobre la misma base solo generan la pregunta de cual de las dos
+// pantallas esta bien.
+// ---------------------------------------------------------------------------
+let CURSOR = null;
+const TRAZAS = new Map();       // icao24 -> traza acumulada
+const TIPOS = new Map();        // icao24 -> tipo de operacion que ya estaba dibujado
+let APT = null, PISTAS = [], RX = {};
+let LAG = null, FUERA_VENTANA = {trazas: 0, puntos: 0, ventana_h: null, nota: null};
+// null = la ventana que use el servidor; 0 = toda la grabacion. Es el mismo
+// boton que /adsb/mapa: sin el, lo que la ventana recorta no se puede ni ver.
+let ventanaH = null;
+let REBOBINADO = null;
+let RECLASIFICADAS = [];
+let ENCUADRE = null;            // {x, y} pegajoso: ver dibujar()
+let IDX = {};                   // icao24 -> indice del trazo, para resaltar sin redibujar
+let LIS = new Map();
+let resaltado = null;
+let UIREV = "apt-0";
+let ultimoRefresco = 0, ultimoCambio = 0, ultimaCompleta = 0, ocultaDesde = 0;
+let fallos = 0, proximoEn = 0, temporizador = null, relojReintento = null;
+
+const REFRESCO_MS = 5000;
+const BACKOFF_MS = [5000, 10000, 20000, 40000, 60000];
+const RECONCILIAR_MS = 600000;
+const OCULTA_MAX_MS = 60000;
 
 function circulo(cx, cy, r, pasos) {
   const xs = [], ys = [];
@@ -118,8 +169,8 @@ function circulo(cx, cy, r, pasos) {
   return [xs, ys];
 }
 
-function dibujar(datos) {
-  const apt = datos.airport, pistas = datos.pistas || [];
+function dibujar() {
+  const apt = APT, pistas = PISTAS;
   // Centrado en EL AEROPUERTO y no en la antena: la pregunta de esta pagina es
   // que pasa en esta pista, asi que el origen de coordenadas es la pista. En el
   // mapa general el origen es la antena, porque ahi la pregunta es el alcance.
@@ -138,16 +189,17 @@ function dibujar(datos) {
     ax.push.apply(ax, c[0]); ay.push.apply(ay, c[1]);
     etx.push(0); ety.push(r); ett.push(r + " km");
   }
-  trazos.push({x: ax, y: ay, mode: "lines", line: {color: "#262626", width: 1},
+  trazos.push({uid: "anillos", x: ax, y: ay, mode: "lines",
+               line: {color: "#262626", width: 1}, hoverinfo: "skip", showlegend: false});
+  trazos.push({uid: "anillos-txt", x: etx, y: ety, mode: "text", text: ett,
+               textposition: "top center", textfont: {color: "#555555", size: 9},
                hoverinfo: "skip", showlegend: false});
-  trazos.push({x: etx, y: ety, mode: "text", text: ett, textposition: "top center",
-               textfont: {color: "#555555", size: 9}, hoverinfo: "skip", showlegend: false});
 
   // El cilindro de operaciones: adentro de este circulo y por debajo del techo
   // es donde se atribuye una operacion. Dibujarlo hace auditable el conteo --
   // se ve que trazas entraron y cuales no.
   const cil = circulo(0, 0, apt.radio_km);
-  trazos.push({x: cil[0], y: cil[1], mode: "lines",
+  trazos.push({uid: "cilindro", x: cil[0], y: cil[1], mode: "lines",
                name: `cilindro ${apt.radio_km} km / ${apt.techo_ft} ft`,
                line: {color: "#34d399", width: 1.5, dash: "dot"}, opacity: 0.7,
                hovertemplate: `dentro de acá y bajo ${apt.techo_ft} ft se atribuye`
@@ -160,6 +212,7 @@ function dibujar(datos) {
     const dx = x2 - x1, dy = y2 - y1, largo = Math.hypot(dx, dy) || 1;
     const ex = dx / largo, ey = dy / largo, EXT = 10;
     trazos.push({
+      uid: "eje-" + p.nombre,
       x: [x1 - ex * EXT, x1, x2, x2 + ex * EXT],
       y: [y1 - ey * EXT, y1, y2, y2 + ey * EXT],
       mode: "lines", name: `eje ${p.nombre}`,
@@ -167,6 +220,7 @@ function dibujar(datos) {
       hoverinfo: "skip", showlegend: false,
     });
     trazos.push({
+      uid: "pista-" + p.nombre,
       x: [x1, x2], y: [y1, y2], mode: "lines", name: `pista ${p.nombre}`,
       line: {color: "#f5f5f5", width: 5},
       hovertemplate: `pista ${p.nombre} · ${p.largo_m} m · rumbo ${p.rumbo}°<extra></extra>`,
@@ -176,13 +230,19 @@ function dibujar(datos) {
   // Una traza por operacion, coloreada por tipo. Se manda la trayectoria ENTERA
   // y no el tramo de adentro del cilindro: ver de donde venia el avion es la
   // mitad de lo que hace entendible una aproximacion.
-  TRAZAS = datos.tracks || [];
+  //
+  // uid "ac-"+icao24 y no el indice: el backend ordena por cantidad de puntos y
+  // ese orden se da vuelta con UNA posicion nueva. Sin uid, Plotly resuelve la
+  // identidad por posicion en el array y le pegaria los puntos de una aeronave
+  // a la traza de otra, en silencio, dibujado como una trayectoria imposible.
+  const lista = ordenadas();
   IDX = {};
-  for (const t of TRAZAS) {
+  for (const t of lista) {
     const nombre = t.registration || t.callsign || t.icao24;
     const color = COLOR[t.operacion] || "#9aa0a6";
     IDX[t.icao24] = trazos.length;
     trazos.push({
+      uid: "ac-" + t.icao24,
       x: t.points.map(q => kmE(q.lon)), y: t.points.map(q => kmN(q.lat)),
       mode: "lines+markers", name: nombre,
       line: {color, width: t.confirmada ? 2.4 : 1.5},
@@ -201,48 +261,108 @@ function dibujar(datos) {
   // La antena, si entra en cuadro. Se dibuja para que se entienda de donde se
   // esta escuchando: media pagina de explicacion se ahorra viendo que la antena
   // esta lejos de la pista.
-  const rx = datos.receiver || {};
-  if (rx.lat !== undefined)
+  if (RX.lat !== undefined)
     trazos.push({
-      x: [kmE(rx.lon)], y: [kmN(rx.lat)], mode: "markers+text",
+      uid: "receptor",
+      x: [kmE(RX.lon)], y: [kmN(RX.lat)], mode: "markers+text",
       marker: {symbol: "triangle-up", size: 12, color: "#f87171"},
-      text: [" " + rx.name], textposition: "middle right",
+      text: [" " + RX.name], textposition: "middle right",
       textfont: {color: "#f87171", size: 10},
-      hovertemplate: `<b>${rx.name}</b><br>la antena<extra></extra>`,
+      hovertemplate: `<b>${RX.name}</b><br>la antena<extra></extra>`,
       showlegend: false,
     });
 
-  // Encuadre: el cilindro completo mas un margen, y agrandado si alguna traza se
-  // va mas lejos. Se prioriza el cilindro y no el contenido porque esta pagina
-  // habla de la pista: un avion que entro y se fue a 60 km no debe empujar la
-  // escala hasta que la pista sea un punto.
-  const R = apt.radio_km * 1.35;
-  const xs = [-R, R], ys = [-R, R];
+  // Encuadre: el cilindro completo mas un margen. Se prioriza el cilindro y no
+  // el contenido porque esta pagina habla de la pista: un avion que entro y se
+  // fue a 60 km no debe empujar la escala hasta que la pista sea un punto.
+  // Aca el encuadre pegajoso es trivial -- ya era una constante, apt.radio_km *
+  // 1.35 -- pero igual se remanda IDENTICO, que es la condicion para que
+  // uirevision conserve el zoom en vez de MEZCLARLO: _preGUI compara
+  // range[0] y range[1] por separado y un rango que cambia deja al usuario con
+  // un extremo suyo y otro nuestro.
+  // ...y identico A LO QUE EL USUARIO TIENE, no a la constante inicial: con
+  // yaxis.scaleanchor el rango de Y lo REHACE Plotly en cada react a partir del
+  // X y del centro que le mandamos, asi que un paneo vertical se perdia en el
+  // refresco siguiente aunque el horizontal sobreviviera. Medido en el mapa
+  // general con el mismo layout: Y [-13.5, 154.7] volvia a [-95.1, 73.1].
+  const gdActual = document.getElementById("mapa");
+  if (ENCUADRE && gdActual._fullLayout
+      && gdActual._fullLayout.xaxis && gdActual._fullLayout.yaxis)
+    ENCUADRE = {x: gdActual._fullLayout.xaxis.range.slice(),
+                y: gdActual._fullLayout.yaxis.range.slice()};
+  if (!ENCUADRE) {
+    const R = apt.radio_km * 1.35;
+    ENCUADRE = {x: [-R, R], y: [-R, R]};
+  }
   const ejeComun = {showgrid: false, zeroline: false, showticklabels: false,
                     ticks: "", showline: false};
-  Plotly.newPlot("mapa", trazos, {
+
+  // datarevision derivada del DATO. Con datarevision fijo y datos distintos
+  // react no redibuja y no avisa; con un contador a mano, el dia que alguien se
+  // olvide de incrementarlo la pantalla queda vieja en silencio.
+  let puntos = 0, tMax = 0, tipos = "";
+  for (const t of lista) {
+    puntos += t.points.length;
+    const u = t.points[t.points.length - 1];
+    if (u && u.t > tMax) tMax = u.t;
+    tipos += t.operacion + ",";      // una reclasificacion cambia el color
+  }
+  const firma = puntos + ":" + tMax + ":" + lista.length + ":" + tipos;
+
+  const gd = document.getElementById("mapa");
+  const cargando = gd.querySelector(".vacio");
+  if (cargando) cargando.remove();
+
+  // react y no newPlot: newPlot arranca con Plots.purge y borra _fullLayout
+  // entero, incluido _preGUI, que es donde vive el registro de lo que toco el
+  // usuario. Esta pagina ni siquiera tenia la pausa por hover del otro mapa,
+  // asi que hasta ahora le arrancaba el mapa de las manos cada 20 s.
+  Plotly.react(gd, trazos, {
     paper_bgcolor: "#05070a", plot_bgcolor: "#05070a",
     margin: {l: 4, r: 4, t: 4, b: 4},
-    xaxis: Object.assign({}, ejeComun, {range: xs}),
+    xaxis: Object.assign({}, ejeComun, {range: ENCUADRE.x.slice()}),
     // scaleanchor: sin esto el zoom deforma y una aproximacion recta se ve
     // curva, que en un mapa de pista invita a leer una maniobra inexistente.
-    yaxis: Object.assign({}, ejeComun, {range: ys, scaleanchor: "x", scaleratio: 1}),
+    yaxis: Object.assign({}, ejeComun, {range: ENCUADRE.y.slice(),
+                                        scaleanchor: "x", scaleratio: 1}),
     showlegend: true,
     legend: {x: 0, y: 1, bgcolor: "rgba(5,7,10,0.7)", bordercolor: "#262626",
              borderwidth: 1, font: {color: "#d4d4d4", size: 10}},
     hoverlabel: {bgcolor: "#1a1d24", bordercolor: "#363b46",
                  font: {color: "#e6e6e6", size: 11}},
     dragmode: "pan",
+    uirevision: UIREV,
+    datarevision: firma,
   }, {
     responsive: true, scrollZoom: true, displaylogo: false,
     modeBarButtonsToRemove: ["select2d", "lasso2d"],
     toImageButtonOptions: {filename: "mapa-" + apt.codigo, scale: 2},
   });
+  aplicarResaltado();
+}
+
+function ordenadas() {
+  // Por ultima posicion mas reciente, en el cliente. El backend ordena por
+  // cantidad de puntos y ese orden se da vuelta solo, o sea que la lista -que
+  // es max-height 62vh con overflow-y auto- se barajaria y saltaria sola cada
+  // refresco si hay mas operaciones de las que entran en cuadro.
+  return Array.from(TRAZAS.values()).filter(t => t.points.length)
+    .sort((a, b) => b.points[b.points.length - 1].t - a.points[a.points.length - 1].t);
 }
 
 function pintarTarjetas(apt) {
   document.getElementById("titulo").textContent = `${apt.nombre} (${apt.codigo})`;
   const vePista = apt.ve_la_pista;
+  const reclas = RECLASIFICADAS.length
+    ? `<div class="aviso"><strong>${RECLASIFICADAS.length}
+       operación${RECLASIFICADAS.length === 1 ? "" : "es"} cambió de tipo con las
+       posiciones nuevas:</strong> ${RECLASIFICADAS.map(r =>
+         `${r.icao24} pasó de ${ETIQUETA[r.antes] || r.antes} a
+          ${ETIQUETA[r.ahora] || r.ahora}`).join("; ")}.
+       No es que la página se contradiga: un punto nuevo alcanza para eso, porque
+       lo que separa un sobrevuelo de un aterrizaje es cuánto volvió a subir
+       <em>después</em> del punto más bajo.</div>`
+    : "";
   document.getElementById("diagnostico").innerHTML = `
     <div class="diag ${vePista ? "ok" : "no"}">
       La pista está a <b>${apt.distancia_receptor_km} km</b> de la antena, y el horizonte de
@@ -253,7 +373,8 @@ function pintarTarjetas(apt) {
       <b>${apt.min_altitude_vista_ft === null ? "–"
            : Math.round(apt.min_altitude_vista_ft).toLocaleString("es-AR") + " ft"}</b>.
     </div>
-    ${apt.advertencia ? `<div class="aviso">${apt.advertencia}</div>` : ""}`;
+    ${apt.advertencia ? `<div class="aviso">${apt.advertencia}</div>` : ""}
+    ${reclas}`;
 
   document.getElementById("tarjetas").innerHTML = `
     <div class="card real"><div class="n">${apt.aterrizajes}</div>
@@ -261,101 +382,392 @@ function pintarTarjetas(apt) {
     <div class="card real"><div class="n">${apt.despegues}</div>
       <div class="label">Despegues</div><div class="sub">arrancó abajo y se fue</div></div>
     <div class="card gris"><div class="n">${apt.aproximaciones}</div>
-      <div class="label">Sin resolver</div><div class="sub">nunca se vio bastante abajo</div></div>
+      <div class="label">Aproximaciones sin resolver</div>
+      <div class="sub">bajaba, nunca se vio bastante abajo</div></div>
+    <!-- La tarjeta de salidas faltaba, y son las que este mapa DIBUJA: con la
+         grabacion de hoy hay 8 salidas atribuidas y ninguna tarjeta las
+         contaba, asi que 8 trazas de colores no correspondian a ningun numero
+         de la pantalla. -->
+    <div class="card gris"><div class="n">${apt.salidas}</div>
+      <div class="label">Salidas sin resolver</div>
+      <div class="sub">subía, nunca se vio bastante abajo</div></div>
     <div class="card gris"><div class="n">${apt.frustradas}</div>
       <div class="label">Motor y al aire</div><div class="sub">bajó y se fue</div></div>
     <div class="card gris"><div class="n">${apt.sobrevuelos}</div>
       <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>`;
 }
 
-function pintarLista() {
+// Resaltar es apagar el resto, con restyle y no redibujando. Los listeners van
+// DELEGADOS en el <ul>, que no se rehace nunca: cuando la lista se rehacia con
+// innerHTML cada 20 s, el <li> con el mouse encima desaparecia antes de su
+// mouseleave y las trazas quedaban apagadas sin nadie que las prendiera.
+function aplicarResaltado() {
+  const indices = Object.values(IDX);
+  if (!indices.length) return;
+  const propio = resaltado === null ? undefined : IDX[resaltado];
+  Plotly.restyle("mapa",
+    {opacity: propio === undefined ? indices.map(() => 1)
+                                   : indices.map(i => i === propio ? 1 : 0.1)},
+    indices);
+  for (const [icao, li] of LIS)
+    li.classList.toggle("apagado", resaltado !== null && icao !== resaltado);
+}
+
+let listaConectada = false;
+function conectarLista() {
+  if (listaConectada) return;
+  listaConectada = true;
   const lista = document.getElementById("lista");
-  if (!TRAZAS.length) {
-    lista.innerHTML = '<li style="color:#9aa0a6">Ninguna aeronave entró al cilindro.</li>';
+  lista.addEventListener("mouseover", e => {
+    const li = e.target.closest("li");
+    if (!li || !li.dataset.icao || resaltado === li.dataset.icao) return;
+    resaltado = li.dataset.icao;
+    aplicarResaltado();
+  });
+  lista.addEventListener("mouseout", e => {
+    if (e.relatedTarget && lista.contains(e.relatedTarget)
+        && e.relatedTarget.closest("li") === e.target.closest("li")) return;
+    if (resaltado === null) return;
+    resaltado = null;
+    aplicarResaltado();
+  });
+}
+
+function pintarLista() {
+  conectarLista();
+  const lista = document.getElementById("lista");
+  const trazas = ordenadas();
+  if (!trazas.length) {
+    for (const [, li] of LIS) li.remove();
+    LIS.clear();
+    // El texto de la lista vacia dice la MISMA causa que el panel del mapa. Y
+    // la nota ya no se borra: borrarla era lo que hacia desaparecer el unico
+    // lugar de la pagina que escribia lo que la ventana habia recortado.
+    lista.innerHTML = '<li style="color:#9aa0a6">' + (FUERA_VENTANA.trazas > 0
+      ? `Las ${FUERA_VENTANA.trazas} trayectorias quedaron fuera de la ventana de
+         ${FUERA_VENTANA.ventana_h} h.`
+      : (APT && APT.aeronaves_en_cilindro > 0
+         ? "Ninguna aeronave del cilindro quedó con operación atribuida."
+         : "Ninguna aeronave entró al cilindro.")) + '</li>';
+    document.getElementById("nota-lista").innerHTML = FUERA_VENTANA.trazas > 0
+      ? `Ventana de dibujo: ${FUERA_VENTANA.ventana_h} h. Quedaron fuera
+         ${FUERA_VENTANA.trazas} trayectoria${FUERA_VENTANA.trazas === 1 ? "" : "s"} y
+         ${FUERA_VENTANA.puntos} punto${FUERA_VENTANA.puntos === 1 ? "" : "s"};
+         los conteos de arriba son de <em>toda</em> la grabación. El botón bajo el
+         mapa pide la grabación entera.`
+      : "";
     return;
   }
-  lista.innerHTML = TRAZAS.map(t => {
-    const nombre = t.registration || t.callsign || t.icao24;
-    return `<li data-icao="${t.icao24}">
-      <span class="punto" style="background:${COLOR[t.operacion] || "#9aa0a6"}"></span>
-      <span class="id">${nombre}</span>
-      <span class="meta">${Math.round(t.min_altitude_ft)} ft · ${t.min_distance_km} km</span>
-    </li>`;
-  }).join("");
+  const vacio = lista.querySelector("li:not([data-icao])");
+  if (vacio) vacio.remove();
 
-  // Resaltar es apagar el resto, con restyle y no redibujando: volver a llamar a
-  // newPlot perderia el zoom que la persona acababa de hacer para mirar justo
-  // esa aproximacion.
-  const indices = Object.values(IDX);
-  lista.querySelectorAll("li").forEach(li => {
-    const propio = IDX[li.dataset.icao];
-    li.addEventListener("mouseenter", () => {
-      if (propio === undefined) return;
-      Plotly.restyle("mapa", {opacity: indices.map(i => i === propio ? 1 : 0.1)}, indices);
-      lista.querySelectorAll("li").forEach(o => o.classList.toggle("apagado", o !== li));
-    });
-    li.addEventListener("mouseleave", () => {
-      Plotly.restyle("mapa", {opacity: indices.map(() => 1)}, indices);
-      lista.querySelectorAll("li").forEach(o => o.classList.remove("apagado"));
-    });
-  });
+  const vistos = new Set();
+  for (const t of trazas) {
+    vistos.add(t.icao24);
+    const nombre = t.registration || t.callsign || t.icao24;
+    let li = LIS.get(t.icao24);
+    if (!li) {
+      li = document.createElement("li");
+      li.dataset.icao = t.icao24;
+      li.innerHTML = '<span class="punto"></span><span class="id"></span>'
+                   + '<span class="meta"></span>';
+      LIS.set(t.icao24, li);
+    }
+    const punto = li.firstChild, id = punto.nextSibling, meta = id.nextSibling;
+    const color = COLOR[t.operacion] || "#9aa0a6";
+    if (punto.style.background !== color) punto.style.background = color;
+    if (id.textContent !== nombre) id.textContent = nombre;
+    const txt = Math.round(t.min_altitude_ft) + " ft · " + t.min_distance_km + " km";
+    if (meta.textContent !== txt) meta.textContent = txt;
+    li.title = ETIQUETA[t.operacion] || t.operacion;
+    lista.appendChild(li);          // MUEVE el nodo, no lo recrea
+  }
+  for (const [icao, li] of LIS)
+    if (!vistos.has(icao)) { li.remove(); LIS.delete(icao); }
+  if (resaltado !== null && !vistos.has(resaltado)) resaltado = null;
 
   const tipos = {};
-  for (const t of TRAZAS) tipos[t.operacion] = (tipos[t.operacion] || 0) + 1;
+  for (const t of trazas) tipos[t.operacion] = (tipos[t.operacion] || 0) + 1;
   document.getElementById("nota-lista").innerHTML =
     Object.entries(tipos).map(([k, n]) =>
       `<span class="chip" style="background:${COLOR[k] || "#9aa0a6"}22;color:${COLOR[k] || "#9aa0a6"}">`
       + `${ETIQUETA[k] || k}: ${n}</span>`).join(" ")
     + "<br><br>La trayectoria se dibuja entera y no solo el tramo de adentro del cilindro: "
     + "ver de dónde venía el avión es la mitad de lo que hace entendible una aproximación. "
-    + "El trazo grueso son las operaciones confirmadas por alineación con la pista.";
+    + "El trazo grueso son las operaciones confirmadas por alineación con la pista."
+    + (FUERA_VENTANA.ventana_h
+       ? `<br><br>Ventana de dibujo: ${FUERA_VENTANA.ventana_h} h. Quedaron fuera
+          ${FUERA_VENTANA.trazas} traza${FUERA_VENTANA.trazas === 1 ? "" : "s"} y
+          ${FUERA_VENTANA.puntos} punto${FUERA_VENTANA.puntos === 1 ? "" : "s"};
+          los conteos de arriba son de <em>toda</em> la grabación.` : "");
 }
 
-async function cargar() {
-  let datos;
-  try {
-    datos = await (await fetch("/api/aeropuerto/mapa")).json();
-  } catch (e) {
-    document.getElementById("estado").innerHTML = "<span>no se pudo consultar el servidor</span>";
+
+// La ventana de dibujo se anuncia SIEMPRE, con el cero explicito y con el boton
+// para pedir la grabacion entera -- el mismo que /adsb/mapa. Antes el numero de
+// lo recortado (8 trazas, 506 puntos con la grabacion detenida hace 11,9 h) solo
+// se escribia dentro de pintarLista(), DESPUES de su return temprano, asi que
+// justo en el caso en que habia recorte no aparecia en ningun lado.
+function pintarVentana() {
+  const caja = document.getElementById("ventana");
+  const v = FUERA_VENTANA;
+  caja.style.display = "";
+  const nota = v.nota ? `<br><em>${v.nota}.</em>` : "";
+  if (v.ventana_h === null || v.ventana_h === undefined) {
+    caja.innerHTML = `<span>Mostrando la grabación <strong>entera</strong>: ninguna
+      trayectoria quedó fuera por antigüedad.${nota}</span>
+      <button id="btn-ventana">Volver a las 3 h</button>`;
+  } else {
+    caja.innerHTML = `<span>Ventana de dibujo: <strong>${v.ventana_h} h</strong>.
+      Quedaron fuera <strong>${v.trazas}</strong> trayectoria${v.trazas === 1 ? "" : "s"}
+      completa${v.trazas === 1 ? "" : "s"} y <strong>${v.puntos}</strong>
+      punto${v.puntos === 1 ? "" : "s"} de las que sí se dibujan. Las tarjetas de arriba
+      cuentan <em>toda</em> la grabación, no la ventana.${nota}</span>
+      <button id="btn-ventana">Ver la grabación entera</button>`;
+  }
+  document.getElementById("btn-ventana").addEventListener("click", () => {
+    ventanaH = (v.ventana_h === null || v.ventana_h === undefined) ? 3 : 0;
+    // Reencuadrar es lo unico que puede descartar el zoom del usuario, y lo
+    // hace a pedido explicito de el.
+    ENCUADRE = null;
+    UIREV = "apt-" + Date.now();
+    cargar(true);
+  });
+}
+
+// El mapa vacio tiene TRES causas distintas y decir la que no es, es peor que
+// no decir nada. Antes habia una sola frase -- "Ninguna aeronave entró al
+// cilindro ... es que desde donde está la antena no se reciben" -- y con la
+// grabacion detenida hace 11,9 h se imprimia mientras las tarjetas de la misma
+// pantalla mostraban 7 SOBREVUELOS y el JSON traia aeronaves_en_cilindro=15 y
+// posiciones_en_cilindro=54.
+function mapaVacio(datos) {
+  const gd = document.getElementById("mapa");
+  if (gd._fullLayout) Plotly.purge(gd);
+  IDX = {};
+  ENCUADRE = null;
+  const apt = APT, v = FUERA_VENTANA;
+  const cola = `<br><br>Se leyeron ${datos.cursor} filas de la base; el dato más nuevo
+    es de hace ${seg(LAG)}.`;
+  let txt;
+  if (v.trazas > 0) {
+    // 1) Hay trayectorias atribuidas, pero todas son mas viejas que la ventana.
+    txt = `<strong>Ninguna trayectoria entra en la ventana de dibujo de
+      ${v.ventana_h} h.</strong><br>
+      No es falta de recepción: hay <strong>${v.trazas}</strong>
+      trayectoria${v.trazas === 1 ? "" : "s"} con <strong>${v.puntos}</strong>
+      punto${v.puntos === 1 ? "" : "s"} atribuida${v.trazas === 1 ? "" : "s"} a
+      ${apt.codigo}, y las tarjetas de arriba las cuentan. Son más viejas que
+      ${v.ventana_h} h, nada más.<br>
+      <strong>Ver la grabación entera</strong>, acá abajo, las dibuja.`;
+  } else if (apt.aeronaves_en_cilindro > 0) {
+    // 2) Entraron al cilindro pero ninguna quedo con operacion atribuida: los
+    //    sobrevuelos, por ejemplo, se cuentan y no se dibujan como operacion.
+    txt = `Entraron <strong>${apt.aeronaves_en_cilindro}</strong>
+      aeronave${apt.aeronaves_en_cilindro === 1 ? "" : "s"} al cilindro de
+      ${apt.radio_km} km y ${apt.techo_ft} ft sobre ${apt.codigo}
+      (${apt.posiciones_en_cilindro} posiciones), pero a ninguna se le pudo
+      atribuir una operación: pasaron sin subir ni bajar lo suficiente. Se cuentan
+      en las tarjetas de arriba —mirá <em>Sobrevuelos</em> y <em>Sin resolver</em>—
+      y no se dibujan acá porque este mapa dibuja operaciones.`;
+  } else {
+    // 3) Nada entro al cilindro. La causa se afirma SOLO si el diagnostico la
+    //    respalda: con la pista dentro del horizonte de superficie, "desde acá
+    //    no se reciben" seria una explicacion inventada.
+    txt = `Ninguna aeronave entró al cilindro de ${apt.radio_km} km y
+      ${apt.techo_ft} ft sobre ${apt.codigo}.<br>` + (apt.ve_la_pista
+      ? `La pista está dentro del horizonte de radio (${apt.distancia_receptor_km} km
+         contra ${apt.horizonte_superficie_km} km), así que esto no se explica por la
+         ubicación de la antena: en esta grabación no hubo operaciones recibidas.`
+      : `Desde donde está la antena la pista queda fuera del horizonte de radio
+         (${apt.distancia_receptor_km} km contra ${apt.horizonte_superficie_km} km),
+         así que no se puede saber si hubo operaciones o no.`);
+  }
+  gd.innerHTML = `<div class="vacio">${txt}${cola}</div>`;
+}
+
+// El mismo cartel de frescura que el otro mapa, y por la misma razon: "en vivo"
+// no puede salir de que el fetch haya respondido.
+function esperaMs() {
+  return fallos > 0 ? BACKOFF_MS[Math.min(fallos - 1, BACKOFF_MS.length - 1)]
+                    : REFRESCO_MS;
+}
+
+function pintarEstado(estado, n) {
+  const caja = document.getElementById("estado");
+  caja.className = "estado";
+  clearTimeout(relojReintento);
+  if (fallos > 0) {
+    caja.classList.add("error");
+    const faltan = Math.max(0, Math.round((proximoEn - Date.now()) / 1000));
+    caja.innerHTML = `<span>sin respuesta del servidor (${fallos}
+      intento${fallos === 1 ? "" : "s"}) — reintento en ${faltan} s</span>`;
+    if (faltan > 0) relojReintento = setTimeout(() => pintarEstado(null, n), 1000);
     return;
   }
+  const partes = [];
+  if (REBOBINADO)
+    partes.push(`la base se reinició (${REBOBINADO.motivo}); los conteos se `
+              + `reconstruyeron desde cero`);
+  if (!estado) partes.push("estado del receptor desconocido");
+  else if (estado.error) partes.push(`error de captura: ${estado.error}`);
+  else if (estado.waiting_for_device) partes.push("esperando el dongle");
+  else if (estado.running) partes.push("grabando");
+  else partes.push("grabación detenida — estos números no van a cambiar hasta que "
+                 + "la arranques en ADS-B en vivo");
+  // "en el cilindro" tiene que ser el numero DEL CILINDRO y no el de trazas
+  // dibujadas: decia "0 aeronaves en el cilindro" mientras las tarjetas de la
+  // misma pantalla mostraban 7 sobrevuelos y el informe traia 15 aeronaves con
+  // 54 posiciones adentro. Lo dibujado va aparte y dicho como tal.
+  const enCil = APT ? APT.aeronaves_en_cilindro : null;
+  if (enCil !== null && enCil !== undefined)
+    partes.push(`${enCil} aeronave${enCil === 1 ? "" : "s"} en el cilindro`
+              + (n === enCil ? "" : ` · ${n} dibujada${n === 1 ? "" : "s"}`));
+  else
+    partes.push(`${n} aeronave${n === 1 ? "" : "s"} dibujada${n === 1 ? "" : "s"}`);
+  partes.push(`dato de hace ${seg(LAG)}`);
+  if (estado && estado.pending)
+    partes.push(`${estado.pending} fila${estado.pending === 1 ? "" : "s"} sin confirmar`);
+  const quieto = ultimoCambio ? (Date.now() - ultimoCambio) / 1000 : null;
+  if (quieto !== null && quieto > REFRESCO_MS / 1000 * 2)
+    partes.push(`sin novedades hace ${seg(quieto)}`);
+  partes.push("actualizado " + new Date(ultimoRefresco).toLocaleTimeString("es-AR"));
+  caja.innerHTML = "<span>" + partes.join(" · ").replace(
+    "ADS-B en vivo", '<a href="/adsb">ADS-B en vivo</a>') + "</span>";
+}
+
+// ---------------------------------------------------------------------------
+// EL CICLO
+// ---------------------------------------------------------------------------
+function fusionar(datos, completa) {
+  if (completa) { TRAZAS.clear(); }
+  RECLASIFICADAS = [];
+  for (const t of (datos.tracks || [])) {
+    const prev = TRAZAS.get(t.icao24);
+    // La reclasificacion NO es opcional y no se puede deducir de los puntos:
+    // _clasificar mira sube = alturas[-1] - alturas[i_min] (aeropuerto.py), asi
+    // que UN punto nuevo convierte un sobrevuelo en aterrizaje o una
+    // aproximacion en frustrada. Por eso el delta trae el informe entero y no
+    // solo puntos, y por eso el cambio se ANUNCIA: sin decirlo, que una traza
+    // cambie de color sola se lee como que la pagina se contradice.
+    const antes = TIPOS.get(t.icao24);
+    if (antes !== undefined && antes !== t.operacion)
+      RECLASIFICADAS.push({icao24: t.icao24, antes, ahora: t.operacion});
+    TIPOS.set(t.icao24, t.operacion);
+    if (!prev || completa) { TRAZAS.set(t.icao24, t); continue; }
+    for (const p of t.points) prev.points.push(p);
+    prev.track_deg = t.track_deg;
+    prev.operacion = t.operacion;
+    prev.confirmada = t.confirmada;
+    prev.pista = t.pista;
+    prev.min_altitude_ft = t.min_altitude_ft;
+    prev.min_distance_km = t.min_distance_km;
+    if (t.callsign) prev.callsign = t.callsign;
+    if (t.registration) prev.registration = t.registration;
+  }
+  // Una aeronave puede DEJAR de tener operacion atribuida (el informe se
+  // recalcula entero). Las que ya no estan en el informe salen del mapa, y eso
+  // solo se puede saber en la carga completa; en el delta el servidor manda las
+  // tocadas y el informe entero, asi que se cruzan contra el informe.
+  if (datos.airport) {
+    const vivos = new Set((datos.airport.operaciones || []).map(o => o.icao24));
+    for (const icao of Array.from(TRAZAS.keys()))
+      if (!vivos.has(icao)) { TRAZAS.delete(icao); TIPOS.delete(icao); }
+  }
+}
+
+async function cargar(forzarCompleta) {
+  const pedirCompleta = forzarCompleta || CURSOR === null || !APT;
+  const q = new URLSearchParams();
+  if (!pedirCompleta) q.set("desde", CURSOR);
+  // La pagina NUNCA mandaba este parametro, asi que la ventana de 3 h del
+  // servidor era inescapable desde acá: con la grabacion detenida hace 11,9 h
+  // el endpoint devolvia tracks=[] y 8 trazas / 506 puntos recortados que no se
+  // podian pedir ni ver.
+  if (ventanaH !== null) q.set("ventana_h", ventanaH);
+  const url = "/api/aeropuerto/mapa" + (q.toString() ? "?" + q : "");
+  let datos, estado = null;
+  try {
+    const [rMapa, rEstado] = await Promise.all([
+      fetch(url),
+      fetch("/api/adsb/status").catch(() => null),
+    ]);
+    if (!rMapa.ok) throw new Error("HTTP " + rMapa.status);
+    datos = await rMapa.json();
+    if (rEstado && rEstado.ok) estado = await rEstado.json();
+  } catch (e) {
+    fallos += 1;
+    // Ver el comentario gemelo en adsb_mapa.html: pintarEstado() corre desde
+    // este catch, ANTES de que programar() actualice proximoEn, y con el valor
+    // viejo el cartel decia "reintento en 0 s" fijo durante esperas de 60 s.
+    proximoEn = Date.now() + esperaMs();
+    pintarEstado(null, TRAZAS.size);
+    return false;
+  }
+  const veniaDeFallar = fallos > 0;
+  fallos = 0;
+  ultimoRefresco = Date.now();
+
   if (!datos.airport) {
-    document.getElementById("mapa").innerHTML = `<div class="vacio">
+    const gd = document.getElementById("mapa");
+    if (gd._fullLayout) Plotly.purge(gd);   // ver sinPosiciones() en adsb_mapa.html
+    gd.innerHTML = `<div class="vacio">
       ${datos.empty_reason || "No hay aeropuerto configurado"}.<br>
       Se elige con <code>ADSB_AIRPORT</code> (por ejemplo <code>SABE</code>).</div>`;
     document.getElementById("estado").style.display = "none";
-    return;
+    return true;
   }
 
-  let estado = null;
-  try {
-    const r = await fetch("/api/adsb/status");
-    if (r.ok) estado = await r.json();
-  } catch (e) { /* la pagina sirve igual sin el estado del receptor */ }
-
-  pintarTarjetas(datos.airport);
-  const n = (datos.tracks || []).length;
-  document.getElementById("estado").innerHTML =
-    `<span>${estado && estado.running ? "grabando" : "grabación detenida"} · `
-    + `${n} aeronave${n === 1 ? "" : "s"} en el cilindro · `
-    + `actualizado ${new Date().toLocaleTimeString("es-AR")}</span>`;
-
-  if (!n) {
-    document.getElementById("mapa").innerHTML = `<div class="vacio">
-      Ninguna aeronave entró al cilindro de ${datos.airport.radio_km} km y
-      ${datos.airport.techo_ft} ft sobre ${datos.airport.codigo}.<br>
-      No es que no haya habido operaciones: es que desde donde está la antena no se reciben.</div>`;
-    pintarLista();
-    return;
+  LAG = datos.lag_s;
+  FUERA_VENTANA = {trazas: datos.trazas_fuera_de_ventana,
+                   puntos: datos.puntos_fuera_de_ventana,
+                   ventana_h: datos.ventana_h,
+                   nota: datos.ventana_nota || null};
+  if (datos.rebobinado) REBOBINADO = datos.rebobinado;
+  const completa = datos.base === "completa";
+  if (completa) {
+    APT = datos.airport;
+    PISTAS = datos.pistas || [];
+    RX = datos.receiver || {};
+    ultimaCompleta = Date.now();
+  } else {
+    APT = datos.airport;      // viaja SIEMPRE: el informe se reclasifica entero
   }
-  dibujar(datos);
+  fusionar(datos, completa);
+  CURSOR = datos.cursor;
+  if (datos.nuevas_posiciones > 0 || RECLASIFICADAS.length) ultimoCambio = Date.now();
+  else if (!ultimoCambio) ultimoCambio = Date.now();
+
+  pintarTarjetas(APT);
+  const n = TRAZAS.size;
+  pintarEstado(estado, n);
+  pintarVentana();
+  if (!n) { mapaVacio(datos); pintarLista(); return true; }
+  dibujar();
   pintarLista();
+  if (veniaDeFallar) return cargar(true);
+  return true;
 }
 
-cargar();
-// Cada 20 s: es un analisis, no un radar en vivo, y recalcular la atribucion
-// sobre toda la base mas seguido no aporta nada.
-setInterval(cargar, 20000);
+function programar() {
+  clearTimeout(temporizador);
+  const espera = esperaMs();
+  proximoEn = Date.now() + espera;
+  temporizador = setTimeout(tick, espera);
+}
+
+async function tick() {
+  if (!document.hidden) await cargar(Date.now() - ultimaCompleta > RECONCILIAR_MS);
+  programar();
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { ocultaDesde = Date.now(); return; }
+  const rato = ocultaDesde ? Date.now() - ocultaDesde : 0;
+  cargar(rato > OCULTA_MAX_MS).then(programar);
+});
+
+cargar(true).then(programar);
 </script>
 </body>
 </html>

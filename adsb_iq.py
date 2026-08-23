@@ -332,6 +332,7 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
     proceso = subprocess.Popen(
         [str(exe), "-f", str(FREQ_HZ), "-s", str(SAMPLE_RATE), "-g", ganancia, "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=bytes_bloque * 2)
+    leyo_algo = False
     try:
         # Se arrastra la cola del bloque anterior porque un mensaje puede caer
         # partido entre dos lecturas: sin esto se perderia uno cada tanto, de
@@ -342,6 +343,7 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
             datos = proceso.stdout.read(bytes_bloque)
             if not datos:
                 break
+            leyo_algo = True
             bloque = np.concatenate([cola, np.frombuffer(datos, dtype=np.uint8)])
             if bloque.size % 2:
                 bloque = bloque[:-1]
@@ -350,10 +352,38 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
             cola = bloque[-solapamiento:] if bloque.size > solapamiento else bloque
     finally:
         proceso.terminate()
+        error = ""
         if proceso.stderr:
             error = (proceso.stderr.read() or b"").decode("utf-8", "replace").strip()
             if error:
                 print(f"  rtl_sdr: {error}", file=sys.stderr)
+        # Si rtl_sdr murio sin entregar UNA sola muestra, esto no es "se
+        # termino el stream": es que nunca arranco, y hay que decirlo fuerte.
+        #
+        # Medido: con el dongle ya tomado por otro proceso, rtl_sdr imprime
+        # "usb_open error -3 / Failed to open rtlsdr device #0", stdout cierra
+        # al instante, el generador terminaba NORMAL y el error quedaba
+        # unicamente en la consola del servidor. Resultado: /adsb mostraba el
+        # punto verde de "grabando" con running=true y error=null durante 65 s
+        # sin un solo mensaje. Un tablero que dice que graba mientras no recibe
+        # nada es peor que uno que se cae, porque nadie va a ir a mirar.
+        #
+        # Lanzar y no solo imprimir hace que el _loop del grabador lo atrape en
+        # last_error, que es lo que status() publica y la pagina muestra.
+        if not leyo_algo:
+            pista = ""
+            if "usb_open" in error or "Failed to open" in error:
+                # Las dos causas reales, en el orden en que conviene probarlas:
+                # el dongle es EXCLUSIVO, asi que lo primero es otro proceso.
+                pista = (" El dongle esta conectado pero no se pudo abrir. Casi"
+                         " siempre es que otro proceso ya lo tiene (otra pestana"
+                         " grabando, otro servidor, un rtl_sdr.exe colgado):"
+                         " cerralo y volve a intentar. Si no hay ninguno, falta"
+                         " el driver WinUSB, que se instala con Zadig desde"
+                         " INSTALAR-ADSB.bat.")
+            raise RuntimeError(
+                f"rtl_sdr no entrego ninguna muestra.{pista}"
+                + (f" Dijo: {error}" if error else ""))
 
 
 class IqRecorder(RtlAdsbRecorder):

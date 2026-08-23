@@ -197,7 +197,11 @@ with tempfile.TemporaryDirectory() as carpeta:
                      [fila[c] if fila[c] != "" else None for c in COLUMNS])
     conn.commit()
     conn.close()
-    releidas = _read_db(str(db_path))
+    # _read_db devuelve tambien el cursor (el maximo id leido) desde que el
+    # mapa lee por delta: aca no se usa, pero el desempaque tiene que estar.
+    releidas, cursor_db = _read_db(str(db_path))
+    revisar("_read_db devuelve el cursor de la ultima fila",
+            cursor_db == len(releidas), f"dio {cursor_db} con {len(releidas)} filas")
     recuperadas = sum(1 for o in releidas if o.latitude is not None)
     revisar("_read_db devuelve la posicion", recuperadas == esperadas,
             f"grabadas {esperadas}, recuperadas {recuperadas}")

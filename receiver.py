@@ -50,9 +50,26 @@ from match_adsb import haversine_m
 # superficie de Aeroparque, San Fernando y Ezeiza, y desde un techo en San
 # Isidro no se ve ni la de Aeroparque, que queda a 13.3 km: 300 metros mas
 # lejos que el horizonte. Por eso nunca se decodifico una posicion en tierra.
+# El caso de 'aeroparque' es el opuesto al de la torre: no gana por altura sino
+# por cercania, y por eso es el unico donde la altura casi no importa. Esta a
+# 1153 m del umbral 13 y a 1154 m del punto mas cercano del eje de pista
+# (medido contra los umbrales reales de OurAirports que ya trae geografia.py).
+# Con la antena a 1 m el horizonte al suelo ya son 4.1 km, o sea 3.6 veces la
+# distancia a la pista: la conclusion "la pista se ve" no depende de acertarle
+# a la altura, que es justo lo contrario de lo que pasa en San Isidro, donde
+# 13.3 km contra 13.0 km de horizonte hacia que 300 metros decidieran todo.
+# Los 3.0 m son una suposicion de armado portatil y conviene pisarlos con la
+# altura real via ADSB_ANTENNA_M, pero para la pregunta de si se ven aviones en
+# tierra da igual: cualquier valor >=1 alcanza.
+#
+# El angulo de elevacion es el otro numero que se da vuelta. Un avion a 1000 ft
+# sobre la pista se ve a 1.31 grados desde San Isidro -lo tapa cualquier
+# edificio, y por eso el minimo visto ahi fueron 2134 ft- y a ~15 grados desde
+# aca. La obstruccion urbana deja de ser el limite.
 UBICACIONES: dict[str, tuple[float, float, float, str]] = {
     "san-isidro": (-34.4708, -58.5128, 10.0, "San Isidro"),
     "ypf": (-34.605378, -58.362517, 160.0, "Torre YPF (Puerto Madero)"),
+    "aeroparque": (-34.551378, -58.437306, 3.0, "Aeroparque (1,15 km de la pista)"),
 }
 UBICACION_DEFAULT = "san-isidro"
 

@@ -142,6 +142,10 @@
     <div class="panel mapa-panel">
       <div id="mapa"><div class="vacio">Cargando…</div></div>
       <div class="fuera" id="fuera" style="display:none"></div>
+      <!-- La ventana de dibujo se anuncia SIEMPRE, incluso cuando no recorto
+           nada: un recorte silencioso es un descarte silencioso. Ver
+           pintarVentana(). -->
+      <div class="fuera" id="ventana" style="display:none"></div>
       <div class="leyenda" id="leyenda" style="display:none">
         <span><i style="background:#34d399"></i> en tierra / &lt; 3000 ft</span>
         <span><i style="background:#fbbf24"></i> 3000 – 10 000 ft</span>
@@ -170,10 +174,6 @@
 // necesita ninguna libreria: es aritmetica de una linea.
 const R_KM = 6371.0088, RAD = Math.PI / 180;
 
-// Costa del Rio de la Plata, ESQUEMATICA y a proposito: son los pocos vertices
-// que hacen falta para reconocer la forma. Va etiquetada como tal en el dibujo
-// porque un trazo azul en un mapa se lee como dato medido si nadie aclara que
-// no lo es. No sale de los datos ADS-B ni se usa para calcular nada.
 // La costa y las pistas llegan del API (ver geografia.py): son datos con fuente
 // -Natural Earth y OurAirports- y no una linea dibujada a ojo. La esquematica de
 // 12 puntos que habia antes no se reconocia como el Rio de la Plata, que es
@@ -187,13 +187,64 @@ const colorAlt = ft => ft === null || ft === undefined ? "#6b7280"
                      :              "#60a5fa";
 
 const dist = v => v === null || v === undefined ? "–" : v.toFixed(1) + " km";
+const seg = s => s === null || s === undefined ? "–"
+               : s < 90 ? Math.round(s) + " s"
+               : s < 5400 ? Math.round(s / 60) + " min"
+               : (s / 3600).toFixed(1) + " h";
 
-function crear(tag, attrs, texto) {
-  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  if (texto !== undefined) el.textContent = texto;
-  return el;
-}
+// ---------------------------------------------------------------------------
+// ESTADO DEL CLIENTE
+//
+// El mapa dejo de pedir "todo" en cada refresco y pasa a avanzar un cursor. Lo
+// que el servidor mando alguna vez vive aca y solo se le suman los deltas: el
+// 78 % de los refrescos medidos (279 de 360 sobre una hora real) no trae ni una
+// posicion, y pedir 208 028 B para redibujar lo mismo costaba 74.9 MB/h.
+//
+// CURSOR es el id de la ultima fila de adsb_log que este navegador ya vio. Se
+// manda como ?desde= y el servidor decide si contesta delta o completa: es el
+// unico que sabe si se reinicio. Ver _resolver_base en webapp/main.py.
+// ---------------------------------------------------------------------------
+let CURSOR = null;          // null = todavia no cargamos nada
+let ESTATICO_V = null;      // hash de receptor+costa+aeropuertos
+let FIJO = null;            // {receiver, geo, airports}: llegan UNA vez
+const TRAZAS = new Map();   // icao24 -> traza acumulada
+let COVERAGE = {};
+let RECHAZADAS = [];
+let FUERA_VENTANA = {trazas: 0, puntos: 0, ventana_h: null, nota: null};
+let LAG = null, SERVIDOR_MS = null, RECONSTRUCCION = null;
+let REBOBINADO = null;      // la ultima vez que el servidor reconstruyo su lector
+
+// Estado de INTERFAZ que un refresco no puede pisar. Vive en variables de
+// modulo y no en el DOM ni en la figura, porque los dos se rehacen.
+let verTodo = false;
+let ventanaH = null;        // null = la que use el servidor; 0 = toda la grabacion
+let resaltado = null;       // icao24 con el mouse encima
+let ENCUADRE = null;        // {x: [..], y: [..]} pegajoso, ver dibujar()
+let UIREV = "adsb-0";       // ver dibujar(): solo cambia cuando el usuario reencuadra
+let MAPA_IDX = {};          // icao24 -> indice de traza, para resaltar con restyle
+let LIS = new Map();        // icao24 -> <li>, para parchear la lista sin rehacerla
+
+let ultimoRefresco = 0, ultimoCambio = 0, ultimaCompleta = 0, ocultaDesde = 0;
+let fallos = 0, proximoEn = 0, temporizador = null, relojReintento = null;
+
+// 5 s para los dos mapas. El numero sale del piso del pipeline y no de que
+// "suene rapido": 1 s del time.sleep(1.0) de AdsbService._loop + 1 s del commit
+// por tiempo + hasta 5 s de espera del poll = 7 s de peor caso extremo a
+// extremo, contra los 905 s medidos antes de todo esto. No se baja a 2 s porque
+// a 250 kt un avion recorre 0.9 km en 7 s, que en el encuadre tipico (~80 km en
+// ~900 px) son ~10 px: el tamano de la propia silueta. Y la tasa real no lo
+// pide: 3.2 posiciones/min medidas = 0.27 por ventana de 5 s.
+const REFRESCO_MS = 5000;
+// Backoff ante error. Al primer exito vuelve a 5 s Y pide completa: el cursor
+// pudo quedar muy atras y una racha de errores no puede terminar en un mapa
+// desincronizado que nadie nota.
+const BACKOFF_MS = [5000, 10000, 20000, 40000, 60000];
+// Reconciliacion completa: el cinturon contra un delta perdido en silencio. El
+// eco de `desde` ya detecta el desfase, pero una desincronizacion que nadie
+// note dejaria la pantalla mintiendo indefinidamente.
+const RECONCILIAR_MS = 600000;
+// Al volver de una pestana oculta: mas de esto y se pide completa.
+const OCULTA_MAX_MS = 60000;
 
 // Una aeronave queda fuera del encuadre por defecto si hasta su paso MAS
 // CERCANO por la antena esta lejos del grueso. Se mide por el punto mas cercano
@@ -221,10 +272,10 @@ function partirPorDistancia(trazas) {
   return dentro.length ? {dentro, fuera, umbral} : {dentro: trazas, fuera: []};
 }
 
-function dibujar(datos, trazas) {
-  const rx = datos.receiver, aptos = datos.airports || [];
-  const descartadas = datos.rejected || [];
-  GEO = datos.geo || {costa: [], pistas: []};
+function dibujar(trazas) {
+  const rx = FIJO.receiver, aptos = FIJO.airports || [];
+  const descartadas = RECHAZADAS;
+  GEO = FIJO.geo || {costa: [], pistas: []};
 
   // Proyeccion equirectangular centrada en el receptor, en KILOMETROS. Los ejes
   // son km al este y al norte, no grados: asi el zoom de Plotly se lee como
@@ -237,6 +288,13 @@ function dibujar(datos, trazas) {
   const GRIS_AGUA = "#12171c", GRIS_COSTA = "#4a5560", GRIS_ANILLO = "#262626";
   const trazos = [];
 
+  // TODAS las trazas llevan uid, incluidas las doce de fondo. Sin uid, Plotly
+  // resuelve la identidad por INDICE, y el backend reordena por cantidad de
+  // puntos con 38 de 55 pares vecinos a UNA posicion de darse vuelta: medido,
+  // apague ac0 desde la leyenda, el orden cambio y la apagada paso a ser ac2.
+  // Con uid, react hace altas, bajas, reordenamientos y puntos nuevos en una
+  // sola llamada con la identidad resuelta.
+
   // --- agua y costa ---------------------------------------------------------
   // El rio se rellena y no solo se contornea: en una foto satelital lo que hace
   // reconocible la zona es la mancha de agua, no su borde.
@@ -248,16 +306,19 @@ function dibujar(datos, trazas) {
     // diagonal, que es lo que se veia como rayas atravesando el rio.
     const anillo = ar.concat(uy);
     trazos.push({
+      uid: "agua",
       x: anillo.map(q => kmE(q[1])), y: anillo.map(q => kmN(q[0])),
       fill: "toself", fillcolor: GRIS_AGUA, mode: "lines",
       line: {width: 0}, hoverinfo: "skip", showlegend: false,
     });
-    for (const orilla of [ar, uy])
+    const uids = ["costa-ar", "costa-uy"];
+    ar && uy && [ar, uy].forEach((orilla, i) =>
       trazos.push({
+        uid: uids[i],
         x: orilla.map(q => kmE(q[1])), y: orilla.map(q => kmN(q[0])),
         mode: "lines", line: {color: GRIS_COSTA, width: 1.2},
         hoverinfo: "skip", showlegend: false,
-      });
+      }));
   }
 
   // --- anillos de distancia y horizonte de superficie ------------------------
@@ -279,15 +340,17 @@ function dibujar(datos, trazas) {
     ax.push.apply(ax, c[0]); ay.push.apply(ay, c[1]);
     etx.push(0); ety.push(r); ett.push(r + " km");
   }
-  trazos.push({x: ax, y: ay, mode: "lines", line: {color: GRIS_ANILLO, width: 1},
+  trazos.push({uid: "anillos", x: ax, y: ay, mode: "lines",
+               line: {color: GRIS_ANILLO, width: 1},
                hoverinfo: "skip", showlegend: false});
-  trazos.push({x: etx, y: ety, mode: "text", text: ett,
+  trazos.push({uid: "anillos-txt", x: etx, y: ety, mode: "text", text: ett,
                textposition: "top center", textfont: {color: "#555555", size: 9},
                hoverinfo: "skip", showlegend: false});
 
   if (rx.surface_horizon_km) {
     const h = circulo(rx.surface_horizon_km);
     trazos.push({
+      uid: "horizonte",
       x: h[0], y: h[1], mode: "lines",
       name: "horizonte en pista " + rx.surface_horizon_km + " km",
       line: {color: "#34d399", width: 1.5, dash: "dash"},
@@ -309,7 +372,7 @@ function dibujar(datos, trazas) {
     ptxt.push(rotulo, rotulo, "");
   }
   if (pxs.length)
-    trazos.push({x: pxs, y: pys, mode: "lines", name: "pistas",
+    trazos.push({uid: "pistas", x: pxs, y: pys, mode: "lines", name: "pistas",
                  line: {color: "#f5f5f5", width: 3},
                  text: ptxt, hovertemplate: "%{text}<extra></extra>"});
 
@@ -321,12 +384,12 @@ function dibujar(datos, trazas) {
   const idxTraza = {};
   // La ESTELA de cada aeronave: por donde paso. Va mas fina y sin marcadores en
   // cada punto, para que la silueta del avion sea lo que se ve y la estela
-  // acompanie, como en un radar de verdad. Antes cada punto era un circulo del
-  // mismo peso visual que el resto y el mapa se leia como una nube de puntos.
+  // acompanie, como en un radar de verdad.
   for (const t of trazas) {
     idxTraza[t.icao24] = trazos.length;
     const nombre = t.registration || t.callsign || t.icao24;
     trazos.push({
+      uid: "ac-" + t.icao24,
       x: t.points.map(q => kmE(q.lon)), y: t.points.map(q => kmN(q.lat)),
       mode: "lines", name: nombre,
       line: {color: colorAlt(t.points[t.points.length - 1].alt), width: 1.4},
@@ -366,6 +429,7 @@ function dibujar(datos, trazas) {
 
   if (conRumbo.length)
     trazos.push({
+      uid: "aviones",
       x: conRumbo.map(t => kmE(ultimo(t).lon)), y: conRumbo.map(t => kmN(ultimo(t).lat)),
       mode: "markers", name: "aeronaves",
       marker: {
@@ -379,6 +443,7 @@ function dibujar(datos, trazas) {
 
   if (sinRumbo.length)
     trazos.push({
+      uid: "sin-rumbo",
       x: sinRumbo.map(t => kmE(ultimo(t).lon)), y: sinRumbo.map(t => kmN(ultimo(t).lat)),
       mode: "markers", name: "sin rumbo conocido",
       marker: {symbol: "circle", size: 7,
@@ -392,6 +457,7 @@ function dibujar(datos, trazas) {
   // vuelve el descarte invisible. Cruz gris y sin unirla a ninguna traza.
   if (descartadas.length)
     trazos.push({
+      uid: "descartadas",
       x: descartadas.map(d => kmE(d.lon)), y: descartadas.map(d => kmN(d.lat)),
       mode: "markers", name: "descartadas",
       marker: {symbol: "x", size: 9, color: "#6b7280"},
@@ -404,6 +470,7 @@ function dibujar(datos, trazas) {
   // la diferencia entre poder contar sus operaciones y solo verlo pasar por
   // arriba, y es el dato que decide donde conviene poner la antena.
   trazos.push({
+    uid: "aeropuertos",
     x: aptos.map(a => kmE(a.lon)), y: aptos.map(a => kmN(a.lat)),
     mode: "markers+text",
     marker: {symbol: "diamond", size: 9,
@@ -417,6 +484,7 @@ function dibujar(datos, trazas) {
     showlegend: false,
   });
   trazos.push({
+    uid: "receptor",
     x: [0], y: [0], mode: "markers+text",
     marker: {symbol: "triangle-up", size: 13, color: "#f87171"},
     text: [" " + rx.name], textposition: "middle right",
@@ -426,40 +494,89 @@ function dibujar(datos, trazas) {
     showlegend: false,
   });
 
-  // --- encuadre -------------------------------------------------------------
+  // --- encuadre PEGAJOSO ----------------------------------------------------
   // Sale del contenido y no de un cuadrado centrado en la antena: con un
   // cuadrado, un solo avion lejano obliga a dibujar ese radio en las cuatro
   // direcciones y tres cuartos de la lamina quedan vacios. Las descartadas NO
   // entran en la cuenta: una posicion fantasma a 790 km escalaba el mapa entero
   // y dejaba el trafico real en un pixel.
-  const xs = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmE(q.lon))), []),
-                        aptos.map(a => kmE(a.lon)));
-  const ys = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmN(q.lat))), []),
-                        aptos.map(a => kmN(a.lat)));
-  const margen = 0.08;
-  const anchoX = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), 10);
-  const anchoY = Math.max(Math.max.apply(null, ys) - Math.min.apply(null, ys), 10);
-  const rangoX = [Math.min.apply(null, xs) - anchoX * margen,
-                  Math.max.apply(null, xs) + anchoX * margen];
-  const rangoY = [Math.min.apply(null, ys) - anchoY * margen,
-                  Math.max.apply(null, ys) + anchoY * margen];
+  //
+  // Se calcula UNA vez y despues se remanda IDENTICO. No alcanza con poner
+  // uirevision y seguir recalculando: el zoom no se pierde limpio, se MEZCLA,
+  // porque _preGUI compara xaxis.range[0] y range[1] por separado. Medido: el
+  // usuario tenia [0.476, 10], el refresco mando [0, 12] y quedo [0.476, 12];
+  // sobre la figura real, [-92.21, 60.67] se convirtio en [-35.73, 35.73]. Eso
+  // no se lee como un bug, se lee como que el mapa "se movio solo".
+  //
+  // Y "identico" significa identico A LO QUE EL USUARIO TIENE, no a lo que
+  // habia al principio: con yaxis.scaleanchor el rango de Y no es libre, y
+  // Plotly lo REHACE en cada react a partir del X y del centro que le mandamos.
+  // Medido: paneando en vertical el rango Y quedaba en [-13.5, 154.7] y el
+  // refresco siguiente lo devolvia a [-95.1, 73.1] -- el X sobrevivia y el Y no,
+  // o sea el mapa saltando solo para arriba mientras alguien lo miraba.
+  // Releyendo el encuadre vigente antes de cada dibujo no hay nada que
+  // "restaurar" y el eje atado deja de tener a donde volver.
+  const gdActual = document.getElementById("mapa");
+  if (ENCUADRE && gdActual._fullLayout
+      && gdActual._fullLayout.xaxis && gdActual._fullLayout.yaxis)
+    ENCUADRE = {x: gdActual._fullLayout.xaxis.range.slice(),
+                y: gdActual._fullLayout.yaxis.range.slice()};
+
+  if (!ENCUADRE) {
+    const xs = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmE(q.lon))), []),
+                          aptos.map(a => kmE(a.lon)));
+    const ys = [0].concat(trazas.reduce((a, t) => a.concat(t.points.map(q => kmN(q.lat))), []),
+                          aptos.map(a => kmN(a.lat)));
+    const margen = 0.08;
+    const anchoX = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), 10);
+    const anchoY = Math.max(Math.max.apply(null, ys) - Math.min.apply(null, ys), 10);
+    ENCUADRE = {
+      x: [Math.min.apply(null, xs) - anchoX * margen,
+          Math.max.apply(null, xs) + anchoX * margen],
+      y: [Math.min.apply(null, ys) - anchoY * margen,
+          Math.max.apply(null, ys) + anchoY * margen],
+    };
+  }
+
+  // datarevision DERIVADA DEL DATO y no un contador que alguien se acuerda de
+  // incrementar. Medido: con datarevision igual y datos distintos, react no
+  // redibuja y NO AVISA -- mande una figura de 30 puntos por traza y quedaron
+  // dibujados 29. Es exactamente el descarte silencioso que este repo prohibe.
+  // Con la firma bien puesta, un react sin cambios cuesta 19 ms en vez de 48, o
+  // sea que los refrescos vacios (78 %) no tocan un pixel.
+  let puntos = 0, tMax = 0;
+  for (const t of trazas) {
+    puntos += t.points.length;
+    const u = t.points[t.points.length - 1];
+    if (u && u.t > tMax) tMax = u.t;
+  }
+  const firma = puntos + ":" + tMax + ":" + trazas.length + ":" + descartadas.length;
 
   const ejeComun = {showgrid: false, zeroline: false, showticklabels: false,
                     ticks: "", showline: false};
   const disposicion = {
     paper_bgcolor: "#05070a", plot_bgcolor: "#05070a",
     margin: {l: 4, r: 4, t: 4, b: 4},
-    xaxis: Object.assign({}, ejeComun, {range: rangoX}),
+    xaxis: Object.assign({}, ejeComun, {range: ENCUADRE.x.slice()}),
     // scaleanchor mantiene la misma escala en los dos ejes. Sin esto el zoom
     // deforma el mapa y una traza recta se ve curva, que es peor que no tener
     // zoom: invita a leer una maniobra donde no hubo ninguna.
-    yaxis: Object.assign({}, ejeComun, {range: rangoY, scaleanchor: "x", scaleratio: 1}),
+    yaxis: Object.assign({}, ejeComun, {range: ENCUADRE.y.slice(),
+                                        scaleanchor: "x", scaleratio: 1}),
     showlegend: true,
     legend: {x: 0, y: 1, bgcolor: "rgba(5,7,10,0.7)", bordercolor: "#262626",
              borderwidth: 1, font: {color: "#d4d4d4", size: 10}},
     hoverlabel: {bgcolor: "#1a1d24", bordercolor: "#363b46",
                  font: {color: "#e6e6e6", size: 11}},
     dragmode: "pan",
+    // uirevision es lo que hace que el zoom y el paneo sobrevivan al refresco.
+    // Cambia SOLO cuando el usuario pide otro encuadre ("Ver todo" / "Volver al
+    // grueso" / abrir la grabacion entera): ahi si queremos descartar lo que
+    // habia tocado, y esa es la unica forma de conseguirlo -- si el valor no
+    // cambia, Plotly conserva las ediciones del usuario y el boton no haria
+    // nada. Entre refrescos de datos es constante, que es lo que importa.
+    uirevision: UIREV,
+    datarevision: firma,
   };
   const opciones = {
     responsive: true, scrollZoom: true, displaylogo: false,
@@ -469,23 +586,42 @@ function dibujar(datos, trazas) {
     toImageButtonOptions: {filename: "mapa-adsb", scale: 2},
   };
 
-  Plotly.newPlot("mapa", trazos, disposicion, opciones);
+  const gd = document.getElementById("mapa");
+  // El primer dibujo tiene que sacar el "Cargando…" a mano: react no limpia el
+  // contenedor si ya tiene hijos, y el cartel quedaria debajo de la figura.
+  const cargando = gd.querySelector(".vacio");
+  if (cargando) cargando.remove();
+
+  // react y NO newPlot. newPlot arranca con Plots.purge(gd) y se lleva
+  // _fullLayout entero, incluido _preGUI, que es donde vive el registro de lo
+  // que toco el usuario: medido, newPlot + uirevision + el MISMO rango pierde
+  // el zoom igual. Y react ademas no destruye los nodos SVG -- 3 de 3
+  // <path class="js-line"> son los mismos objetos, el tooltip sobrevive (1->1
+  // contra 1->0 con newPlot), _fullLayout._rehover sigue siendo function y un
+  // paneo a medio gesto sigue corriendo con _dragging=true. Por eso se pudo
+  // eliminar la pausa por hover, que era lo contrario del tiempo real: congelaba
+  // el mapa exactamente cuando alguien lo estaba mirando.
+  Plotly.react(gd, trazos, disposicion, opciones);
   MAPA_IDX = idxTraza;
+  aplicarResaltado();
   document.getElementById("leyenda").style.display = "";
 }
 
-// Que traza de Plotly corresponde a cada aeronave, para poder resaltarla desde
-// la lista con un restyle en vez de volver a dibujar el mapa entero.
-let MAPA_IDX = {};
+// Reencuadrar es lo unico que puede descartar el zoom del usuario, y lo hace a
+// pedido explicito de el.
+function reencuadrar() {
+  ENCUADRE = null;
+  UIREV = "adsb-" + Date.now();
+}
 
 // La tarjeta de descartadas aparece SIEMPRE, con rechazos o sin ellos: un
 // contador ausente no se distingue de un contador que nunca corrio. Y la regla
 // de superficie se lista aparte porque su cero significa otra cosa -- que
 // nunca se ejercito, porque en estos datos no hay ni una posicion en tierra.
-function pintarDescartadas(datos) {
+function pintarDescartadas() {
   const caja = document.getElementById("descartadas");
-  const c = datos.coverage || {};
-  const rech = datos.rejected || [];
+  const c = COVERAGE || {};
+  const rech = RECHAZADAS;
   if (!c.gate_applied) { caja.style.display = "none"; return; }
   caja.style.display = "";
 
@@ -534,120 +670,349 @@ function pintarDescartadas(datos) {
      ninguna traza.</span>${superficie}`;
 }
 
+// ---------------------------------------------------------------------------
+// LISTA LATERAL
+//
+// Se PARCHEA nodo por nodo. Antes se rehacia entera con innerHTML en cada
+// refresco, y eso destruia el <li> que tenia el mouse encima: el mouseleave
+// nunca llegaba y las trazas quedaban apagadas para siempre. Medido: 53 de 54
+// trazas en opacity<1 y nadie que las vuelva a prender. Y ese camino YA era
+// alcanzable hoy, porque el visibilitychange llama a cargar() sin mirar la
+// pausa por hover.
+//
+// Los listeners van DELEGADOS en el <ul>, que no se rehace nunca, y el
+// resaltado vive en una variable de modulo. Cinco pedazos de estado de interfaz
+// (zoom, verTodo, trazas apagadas desde la leyenda, resaltado y scroll de la
+// lista) viven en tres lugares -- Plotly via uirevision, variables de modulo, y
+// el DOM parcheado -- y ninguno puede pasar a depender de que el nodo sobreviva.
+// ---------------------------------------------------------------------------
+function aplicarResaltado() {
+  const indices = Object.values(MAPA_IDX);
+  if (!indices.length) return;
+  const propio = resaltado === null ? undefined : MAPA_IDX[resaltado];
+  if (propio === undefined) {
+    Plotly.restyle("mapa", {opacity: indices.map(() => 1)}, indices);
+  } else {
+    // Resaltar es apagar el resto: con trazas que se cruzan, subir una sola de
+    // opacidad no alcanza para seguirla con la vista. Es un restyle y no un
+    // redibujado.
+    Plotly.restyle("mapa", {opacity: indices.map(i => i === propio ? 1 : 0.12)}, indices);
+  }
+  for (const [icao, li] of LIS)
+    li.classList.toggle("apagado", resaltado !== null && icao !== resaltado
+                                   ? true : li.dataset.fuera === "1");
+}
+
+let listaConectada = false;
+function conectarLista() {
+  if (listaConectada) return;
+  listaConectada = true;
+  const lista = document.getElementById("lista");
+  lista.addEventListener("mouseover", e => {
+    const li = e.target.closest("li");
+    if (!li || !li.dataset.icao || li.dataset.fuera === "1") return;
+    if (resaltado === li.dataset.icao) return;
+    resaltado = li.dataset.icao;
+    aplicarResaltado();
+  });
+  lista.addEventListener("mouseout", e => {
+    // relatedTarget: moverse de un <span> a otro DENTRO del mismo <li> dispara
+    // mouseout, y apagar el resaltado ahi lo haria parpadear.
+    if (e.relatedTarget && lista.contains(e.relatedTarget)
+        && e.relatedTarget.closest("li") === e.target.closest("li")) return;
+    if (resaltado === null) return;
+    resaltado = null;
+    aplicarResaltado();
+  });
+}
+
 // La lista SIEMPRE trae todas las aeronaves, esten dibujadas o no: es el lugar
 // donde se ve que las de fuera de cuadro existen y que no se perdio nada.
-function pintarLista(trazas, ocultas = new Set()) {
+function pintarLista(trazas, ocultas) {
+  conectarLista();
   const lista = document.getElementById("lista");
-  lista.innerHTML = trazas.map(t => {
+  const vistos = new Set();
+  for (const t of trazas) {
+    vistos.add(t.icao24);
     const ultimo = t.points[t.points.length - 1];
     const nombre = t.registration || t.callsign || t.icao24;
     const fuera = ocultas.has(t.icao24);
-    return `<li data-icao="${t.icao24}"${fuera ? ' class="apagado" title="fuera del encuadre actual"' : ""}>
-      <span class="swatch" style="background:${colorAlt(ultimo.alt)}"></span>
-      <span class="id">${nombre}</span>
-      <span class="meta">${t.points.length} pos · ${dist(ultimo.km)}</span>
-    </li>`;
-  }).join("");
-
-  // Resaltar es apagar el resto: con trazas que se cruzan, subir una sola de
-  // opacidad no alcanza para seguirla con la vista.
-  lista.querySelectorAll("li").forEach(li => {
-    const icao = li.dataset.icao;
-    if (ocultas.has(icao)) return;   // no esta en el mapa: resaltar apagaria todo
-    // Resaltar es un restyle de opacidad y no un redibujado: volver a llamar a
-    // newPlot en cada mouseenter perderia el zoom que la persona acababa de
-    // hacer, que es justo lo que estaba usando para mirar esa traza.
-    const indices = Object.values(MAPA_IDX);
-    const propio = MAPA_IDX[icao];
-    li.addEventListener("mouseenter", () => {
-      if (propio === undefined) return;
-      Plotly.restyle("mapa", {opacity: indices.map(i => i === propio ? 1 : 0.12)}, indices);
-      lista.querySelectorAll("li").forEach(o => o.classList.toggle("apagado", o !== li));
-    });
-    li.addEventListener("mouseleave", () => {
-      Plotly.restyle("mapa", {opacity: indices.map(() => 1)}, indices);
-      lista.querySelectorAll("li").forEach(o => o.classList.remove("apagado"));
-    });
-  });
+    let li = LIS.get(t.icao24);
+    if (!li) {
+      li = document.createElement("li");
+      li.dataset.icao = t.icao24;
+      li.innerHTML = '<span class="swatch"></span><span class="id"></span>'
+                   + '<span class="meta"></span>';
+      LIS.set(t.icao24, li);
+    }
+    const swatch = li.firstChild, id = swatch.nextSibling, meta = id.nextSibling;
+    const color = colorAlt(ultimo.alt);
+    if (swatch.style.background !== color) swatch.style.background = color;
+    if (id.textContent !== nombre) id.textContent = nombre;
+    const txt = t.points.length + " pos · " + dist(ultimo.km);
+    if (meta.textContent !== txt) meta.textContent = txt;
+    li.dataset.fuera = fuera ? "1" : "0";
+    li.title = fuera ? "fuera del encuadre actual" : "";
+    // appendChild MUEVE el nodo, no lo recrea: el <li> bajo el cursor sigue
+    // siendo el mismo objeto y el resaltado no se pierde a mitad de gesto.
+    lista.appendChild(li);
+  }
+  for (const [icao, li] of LIS)
+    if (!vistos.has(icao)) { li.remove(); LIS.delete(icao); }
+  if (resaltado !== null && !vistos.has(resaltado)) resaltado = null;
+  aplicarResaltado();
 }
 
 // Sin posiciones el mapa no se dibuja vacio ni se rellena con nada inventado:
 // se explica por que esta vacio, que es la respuesta util.
-function sinPosiciones(datos) {
-  const c = datos.coverage || {};
-  document.getElementById("mapa").innerHTML = `<div class="vacio">
-    <p><strong>Todavía no hay ninguna posición decodificada.</strong></p>
-    <p>Se grabaron ${(c.observations || 0).toLocaleString("es-AR")} mensajes de
+function sinPosiciones() {
+  const c = COVERAGE || {};
+  const gd = document.getElementById("mapa");
+  // purge OBLIGATORIO antes del innerHTML. Antes funcionaba de casualidad
+  // porque despues venia un newPlot, que purga solo. Con react no se recupera y
+  // NO tira excepcion: medido, svg=false, paths=0, el div queda vacio y la
+  // pagina no dice nada. Y es el ciclo real de un mapa en vivo -- arranca sin
+  // posiciones y tiene que poder dibujar la primera que llegue.
+  if (gd._fullLayout) Plotly.purge(gd);
+  ENCUADRE = null;
+  MAPA_IDX = {};
+  // Tres causas distintas y la pagina tiene que decir CUAL: nunca se evaluo una
+  // posicion, se evaluaron y el filtro las rechazo a todas, o no hay ni
+  // mensajes. Un "no hay posiciones" a secas las tapa a las tres.
+  const evaluadas = c.positions_evaluated || 0, rechazadas = c.positions_rejected || 0;
+  const porque = (evaluadas > 0 && rechazadas >= evaluadas)
+    ? `Se decodificaron ${evaluadas} posiciones y el filtro las rechazó a
+       <strong>todas</strong> (${Object.entries(c.rejected_by_reason || {})
+         .map(([k, v]) => `${k}: ${v}`).join(", ") || "sin motivo declarado"}).
+       No es que no hayan llegado: es que ninguna pasó el control de coherencia.`
+    : `Se grabaron ${(c.observations || 0).toLocaleString("es-AR")} mensajes de
        ${c.aircraft || 0} aeronaves, pero ninguno alcanzó para fijar una posición.
        En vuelo hacen falta dos tramas CPR (par e impar) de la misma aeronave y
-       pyModeS no emite la primera hasta juntar ~3 consistentes.</p>
+       pyModeS no emite la primera hasta juntar ~3 consistentes.`;
+  gd.innerHTML = `<div class="vacio">
+    <p><strong>Todavía no hay ninguna posición decodificada.</strong></p>
+    <p>${porque}</p>
     <p>No hay mapa que dibujar hasta que lleguen. El conteo y la identificación
        no dependen de esto: usan altitud, velocidad e ICAO24.</p>
   </div>`;
   document.getElementById("nota-lista").textContent = "Ninguna aeronave tiene posición todavía.";
 }
 
-// Estado que tiene que sobrevivir a los refrescos. Si viviera dentro de
-// cargar(), cada actualizacion devolveria el mapa al encuadre por defecto y
-// pelearia contra el usuario que acaba de apretar "Ver todo".
-let verTodo = false;
-let interactuando = false;      // mouse sobre la lista o el mapa
-let ultimoRefresco = 0;
+// El otro motivo por el que el mapa puede quedar vacio, y NO es el de arriba:
+// hay posiciones decodificadas, pero todas son mas viejas que la ventana de
+// dibujo. Confundirlos hacia que la pagina se contradijera sola -- "todavía no
+// hay ninguna posición decodificada" arriba, "quedaron fuera 66 trazas y 1984
+// puntos" tres lineas mas abajo, y "17.6 km alcance típico" en las tarjetas,
+// calculado con esas mismas 1984.
+function fueraDeVentana(totalTrazas, totalPuntos) {
+  const gd = document.getElementById("mapa");
+  if (gd._fullLayout) Plotly.purge(gd);   // ver sinPosiciones()
+  ENCUADRE = null;
+  MAPA_IDX = {};
+  for (const [, li] of LIS) li.remove();
+  LIS.clear();
+  resaltado = null;
+  const v = FUERA_VENTANA;
+  const n = x => x.toLocaleString("es-AR");
+  gd.innerHTML = `<div class="vacio">
+    <p><strong>Ninguna de las posiciones grabadas entra en la ventana de dibujo
+       de ${v.ventana_h} h.</strong></p>
+    <p>Decodificadas hay <strong>${n(totalPuntos)}</strong> posiciones de
+       <strong>${n(totalTrazas)}</strong> aeronaves —las mismas con las que están
+       calculados el alcance típico y el máximo de acá arriba—, pero todas son más
+       viejas que ${v.ventana_h} h. El dato más nuevo de la base es de hace
+       ${seg(LAG)}.</p>
+    <p>Es un recorte por antigüedad, no una falla de recepción.
+       <strong>Ver la grabación entera</strong>, acá abajo, las dibuja.</p>
+  </div>`;
+  document.getElementById("nota-lista").innerHTML =
+    `La lista está vacía porque el mapa está vacío: las ${n(totalTrazas)} aeronaves
+     con posición quedaron fuera de la ventana de ${v.ventana_h} h.`;
+}
 
-const REFRESCO_MS = 10000;
+// ---------------------------------------------------------------------------
+// FRESCURA
+//
+// El cartel no sale de que el fetch haya respondido: sale de lag_s. Un poll
+// exitoso cada 5 s sobre una base atrasada 905 s es precisamente la forma mas
+// convincente de mentir. Y el cero explicito importa igual que el numero: "0
+// posiciones nuevas" y "no llegan datos" son dos cosas distintas y la pagina
+// tiene que poder decir cuál de las dos está pasando.
+// ---------------------------------------------------------------------------
+// La espera hasta el proximo intento, en UN solo lugar: la usan programar() y
+// el catch de cargar(), y tenerla duplicada era la mitad del bug del contador.
+function esperaMs() {
+  return fallos > 0 ? BACKOFF_MS[Math.min(fallos - 1, BACKOFF_MS.length - 1)]
+                    : REFRESCO_MS;
+}
 
 function pintarEstado(estado, puntos) {
   const caja = document.getElementById("estado");
   const txt = document.getElementById("estado-txt");
-  const hace = ultimoRefresco ? `actualizado ${new Date(ultimoRefresco)
-                  .toLocaleTimeString("es-AR", {hour: "2-digit", minute: "2-digit",
-                                                second: "2-digit"})}` : "";
+  const partes = [];
   caja.className = "estado";
-  if (!estado) { caja.classList.add("error"); txt.textContent = "sin conexión con el servidor"; return; }
+  clearTimeout(relojReintento);
+
+  if (fallos > 0) {
+    caja.classList.add("error");
+    const faltan = Math.max(0, Math.round((proximoEn - Date.now()) / 1000));
+    txt.textContent = `sin respuesta del servidor (${fallos} `
+      + `intento${fallos === 1 ? "" : "s"}) — reintento en ${faltan} s`;
+    // Repintar cada segundo mientras se espera. Sin esto el numero se congela
+    // en el del instante del fallo y una espera de 60 s se ve como un cartel
+    // quieto, que es indistinguible de la pagina colgada.
+    if (faltan > 0) relojReintento = setTimeout(() => pintarEstado(null, 0), 1000);
+    return;
+  }
+  if (!estado) {
+    caja.classList.add("error");
+    txt.textContent = "sin conexión con el servidor";
+    return;
+  }
+
   if (estado.error) {
     caja.classList.add("error");
-    txt.textContent = `error de captura: ${estado.error}`;
+    partes.push(`error de captura: ${estado.error}`);
   } else if (estado.waiting_for_device) {
     caja.classList.add("detenida");
-    txt.textContent = "esperando el dongle · " + hace;
+    partes.push("esperando el dongle");
   } else if (estado.running) {
     caja.classList.add("grabando");
-    txt.textContent = `grabando · ${puntos} posiciones · ${hace}`;
+    partes.push(`grabando · ${puntos} posiciones`);
   } else {
     // El caso que motiva todo esto: el mapa se refresca pero nada cambia
     // porque no hay nadie escuchando la radio.
     caja.classList.add("detenida");
-    txt.innerHTML = `grabación detenida — el mapa no va a cambiar hasta que la
-                     arranques en <a href="/adsb">ADS-B en vivo</a> · ${hace}`;
+    partes.push("grabación detenida — el mapa no va a cambiar hasta que la "
+              + "arranques en /adsb");
   }
+
+  if (REBOBINADO)
+    partes.push(`la base se reinició (${REBOBINADO.motivo}); el mapa se reconstruyó desde cero`);
+
+  // EL numero. Mientras la grabacion en curso siga commiteando cada 50 filas
+  // (el commit por tiempo entra recien en el proximo arranque del grabador),
+  // esto va a marcar minutos: es real y correcto, no un error del mapa.
+  partes.push(`dato de hace ${seg(LAG)}`);
+  if (estado.pending) {
+    partes.push(`${estado.pending} fila${estado.pending === 1 ? "" : "s"} escrita`
+              + `${estado.pending === 1 ? "" : "s"} sin confirmar`
+              + (estado.seconds_since_commit !== null && estado.seconds_since_commit !== undefined
+                 ? ` (hace ${seg(estado.seconds_since_commit)})` : ""));
+  }
+  if (estado.journal_mode && estado.journal_mode !== "wal")
+    partes.push(`journal ${estado.journal_mode}`);
+
+  const quieto = ultimoCambio ? (Date.now() - ultimoCambio) / 1000 : null;
+  if (quieto !== null && quieto > REFRESCO_MS / 1000 * 2)
+    partes.push(`sin novedades hace ${seg(quieto)}`);
+
+  partes.push("actualizado " + new Date(ultimoRefresco)
+    .toLocaleTimeString("es-AR", {hour: "2-digit", minute: "2-digit", second: "2-digit"}));
+
+  txt.innerHTML = partes.join(" · ").replace("/adsb", '<a href="/adsb">ADS-B en vivo</a>');
 }
 
-async function cargar() {
+// ---------------------------------------------------------------------------
+// EL CICLO
+// ---------------------------------------------------------------------------
+function aplicarDelta(d) {
+  for (const t of (d.tracks || [])) {
+    const prev = TRAZAS.get(t.icao24);
+    if (!prev) { TRAZAS.set(t.icao24, t); continue; }
+    // push y no concat: la traza acumulada puede tener miles de puntos y el
+    // delta trae 1. Reasignar el array entero en cada refresco seria pagar el
+    // historico completo justo para evitar pagarlo.
+    for (const p of t.points) prev.points.push(p);
+    prev.track_deg = t.track_deg;
+    prev.track_source = t.track_source;
+    if (t.callsign) prev.callsign = t.callsign;
+    if (t.registration) prev.registration = t.registration;
+  }
+  for (const r of (d.rejected_nuevos || [])) RECHAZADAS.push(r);
+  if (d.coverage) COVERAGE = d.coverage;
+}
+
+function aplicarCompleta(d) {
+  TRAZAS.clear();
+  for (const t of (d.tracks || [])) TRAZAS.set(t.icao24, t);
+  RECHAZADAS = d.rejected || [];
+  COVERAGE = d.coverage || {};
+  FIJO = {receiver: d.receiver || {}, geo: d.geo || {costa: [], pistas: []},
+          airports: d.airports || []};
+  ESTATICO_V = d.estatico_v;
+  RECONSTRUCCION = d.reconstruido_en_ms;
+  ultimaCompleta = Date.now();
+}
+
+async function cargar(forzarCompleta) {
+  const pedirCompleta = forzarCompleta || CURSOR === null || !FIJO;
+  const q = new URLSearchParams();
+  if (!pedirCompleta) q.set("desde", CURSOR);
+  if (ventanaH !== null) q.set("ventana_h", ventanaH);
+  const url = "/api/adsb/mapa" + (q.toString() ? "?" + q : "");
+
   let datos, estado = null;
   try {
     // En paralelo y no encadenados: son dos preguntas independientes y
-    // encadenarlas duplicaria la latencia de cada refresco.
+    // encadenarlas duplicaria la latencia de cada refresco. /api/adsb/status
+    // sigue aparte porque es la unica fuente de running, error y
+    // waiting_for_device, que no estan en la base.
     const [rMapa, rEstado] = await Promise.all([
-      fetch("/api/adsb/mapa"),
+      fetch(url),
       fetch("/api/adsb/status").catch(() => null),
     ]);
+    if (!rMapa.ok) throw new Error("HTTP " + rMapa.status);
     datos = await rMapa.json();
     if (rEstado && rEstado.ok) estado = await rEstado.json();
   } catch (e) {
+    fallos += 1;
+    // proximoEn se fija ACA y no solo en programar(): pintarEstado() corre
+    // desde este catch, o sea ANTES de que programar() lo actualice, y con el
+    // valor viejo -- ya vencido -- el contador daba "reintento en 0 s" fijo
+    // durante esperas reales de 20, 40 y 60 s. Era el unico numero que ese
+    // cartel tiene que acertar.
+    proximoEn = Date.now() + esperaMs();
     pintarEstado(null, 0);
-    return;
+    return false;
   }
+  const veniaDeFallar = fallos > 0;
+  fallos = 0;
   ultimoRefresco = Date.now();
+  LAG = datos.lag_s;
+  SERVIDOR_MS = datos.servidor_ms;
+  FUERA_VENTANA = {trazas: datos.trazas_fuera_de_ventana,
+                   puntos: datos.puntos_fuera_de_ventana,
+                   ventana_h: datos.ventana_h,
+                   nota: datos.ventana_nota || null};
+  // El servidor reconstruyo su lector porque la base retrocedio. Se anuncia:
+  // todos los numeros de la pantalla cambiaron de golpe y de una base distinta.
+  if (datos.rebobinado) REBOBINADO = datos.rebobinado;
 
-  const rx = datos.receiver || {};
-  const c = datos.coverage || {};
+  if (datos.base === "completa") aplicarCompleta(datos);
+  else if (ESTATICO_V && datos.estatico_v && datos.estatico_v !== ESTATICO_V) {
+    // Cambiaron los estaticos a mitad de corrida (un ADSB_SURFACE_REF movido,
+    // por ejemplo). No se parchea sobre datos que ya no describen lo mismo.
+    return cargar(true);
+  } else aplicarDelta(datos);
+
+  CURSOR = datos.cursor;
+  if (datos.nuevas_posiciones > 0) ultimoCambio = Date.now();
+  else if (!ultimoCambio) ultimoCambio = Date.now();
+
+  pintar(estado);
+  // Al primer exito despues de una racha de errores se pide completa: el cursor
+  // pudo quedar tan atras que el servidor ya no lo pueda completar, y una
+  // pantalla desincronizada no se nota mirandola.
+  if (veniaDeFallar) return cargar(true);
+  return true;
+}
+
+function pintar(estado) {
+  const rx = FIJO.receiver, c = COVERAGE || {};
 
   // Si alguien movio la referencia por variable de entorno, el mapa lo dice: el
   // triangulo rojo sigue dibujado donde dice RECEIVER y estaria mintiendo.
-  // La antena movida se avisa arriba de todo. Es el aviso mas importante de la
-  // pagina: todas las distancias, los anillos y el alcance informado se miden
-  // desde este punto, asi que si cambio y nadie lo dice, cada numero del mapa
-  // esta comparando contra un lugar que ya no existe.
   // El subtitulo tambien sale de la config: tenerlo a mano decia "desde San
   // Isidro" incluso con el aviso de mudanza a la vista justo debajo, o sea la
   // pagina contradiciendose a si misma en dos lineas contiguas.
@@ -673,11 +1038,30 @@ async function cargar() {
     aviso.style.display = "";
   }
 
-  const trazas = (datos.tracks || []).filter(t => t.points.length);
+  // Orden por ULTIMA POSICION mas reciente y no por cantidad de puntos, que es
+  // lo que devuelve adsb_report.tracks(). Ese orden se da vuelta solo -- 38 de
+  // 55 pares vecinos estan a una posicion de invertirse -- o sea que la lista se
+  // barajaria sola en cada refresco. Y "quien se movio recien" es ademas el
+  // criterio util en un mapa en vivo. El sorted() del backend no se toca: lo
+  // usan el CLI y los tests.
+  const trazas = Array.from(TRAZAS.values()).filter(t => t.points.length)
+    .sort((a, b) => b.points[b.points.length - 1].t - a.points[a.points.length - 1].t);
   const puntos = trazas.reduce((n, t) => n + t.points.length, 0);
 
-  document.getElementById("c-trazas").textContent = trazas.length;
-  document.getElementById("c-puntos").textContent = puntos + " posiciones";
+  // La tarjeta dice "Aeronaves ubicadas" y las dos de al lado (alcance tipico,
+  // maximo) son de TODA la grabacion: este numero tambien tiene que serlo, o la
+  // misma fila de tarjetas mezcla dos conjuntos. Antes imprimia trazas.length,
+  // ya recortado por la ventana, y con la grabacion detenida hace 11,9 h daba
+  // "0 AERONAVES UBICADAS" al lado de "17.6 km ALCANCE TÍPICO", que sale de las
+  // 1984 posiciones que ese 0 negaba. La suma es exacta y no una estimacion:
+  // fuera_de_ventana() cuenta las trazas que quedaron ENTERAS afuera, y las que
+  // conservan aunque sea un punto estan en trazas.
+  const fueraT = FUERA_VENTANA.trazas || 0, fueraP = FUERA_VENTANA.puntos || 0;
+  const totalTrazas = trazas.length + fueraT, totalPuntos = puntos + fueraP;
+  document.getElementById("c-trazas").textContent = totalTrazas;
+  document.getElementById("c-puntos").textContent = (fueraT || fueraP)
+    ? `${totalPuntos} posiciones · ${puntos} dentro de la ventana`
+    : totalPuntos + " posiciones";
   document.getElementById("c-mediana").textContent =
     c.median_distance_km ? dist(c.median_distance_km) : "–";
   document.getElementById("c-max").textContent = c.max_distance_km ? dist(c.max_distance_km) : "–";
@@ -688,20 +1072,31 @@ async function cargar() {
     document.getElementById("c-max-sub").textContent = `p95: ${dist(c.p95_distance_km)}`;
 
   pintarEstado(estado, puntos);
-  pintarDescartadas(datos);
+  pintarDescartadas();
+  pintarVentana();
 
-  if (!trazas.length) { sinPosiciones(datos); return; }
+  // DOS causas distintas y no se pueden confundir, que es literalmente la regla
+  // de CLAUDE.md sobre el cero: "nunca se decodifico una posicion" y "todas las
+  // posiciones que hay son mas viejas que la ventana de dibujo". sinPosiciones()
+  // esta escrita para la primera y da una causa fisica (faltan tramas CPR par e
+  // impar) que para la segunda es inventada.
+  if (!trazas.length) {
+    if (totalTrazas > 0 || (c.with_position || 0) > 0)
+      fueraDeVentana(totalTrazas, totalPuntos);
+    else
+      sinPosiciones();
+    return;
+  }
 
   const {dentro, fuera, umbral} = partirPorDistancia(trazas);
   const aviso = document.getElementById("fuera");
+  const visibles = verTodo ? trazas : dentro;
+  const ocultas = new Set(verTodo ? [] : fuera.map(t => t.icao24));
+  dibujar(visibles);
+  pintarLista(trazas, ocultas);
 
-  const render = () => {
-    const visibles = verTodo ? trazas : dentro;
-    const ocultas = new Set(verTodo ? [] : fuera.map(t => t.icao24));
-    dibujar(datos, visibles);
-    pintarLista(trazas, ocultas);
-
-    if (!fuera.length) { aviso.style.display = "none"; return; }
+  if (!fuera.length) { aviso.style.display = "none"; }
+  else {
     const nombres = fuera.map(t => {
       const p = t.points.reduce((a, b) => (b.km > a.km ? b : a), t.points[0]);
       const alt = p.alt ? `, ${Math.round(p.alt).toLocaleString("es-AR")} ft` : "";
@@ -720,24 +1115,31 @@ async function cargar() {
          <button id="btn-encuadre">Ver todo</button>`;
     document.getElementById("btn-encuadre").addEventListener("click", () => {
       verTodo = !verTodo;
-      render();
+      reencuadrar();
+      pintar(estado);
     });
-  };
-  render();
+  }
 
+  // "tienen posición" es de TODA la grabacion, igual que la tarjeta: con
+  // trazas.length -ya recortado por la ventana- esta frase decia "1 de 3290
+  // aeronaves tienen posición ... las otras 3289 no llegaron las tramas CPR",
+  // atribuyendo a la radio 66 trazas que si estaban decodificadas. Lo que se
+  // DIBUJA va aparte y dicho como tal.
   const total = c.aircraft || 0;
   document.getElementById("nota-lista").innerHTML =
-    `${trazas.length} de ${total} aeronaves tienen posición. Las otras
-     ${total - trazas.length} se escucharon igual, pero no llegaron las tramas CPR
+    `${totalTrazas} de ${total} aeronaves tienen posición. Las otras
+     ${total - totalTrazas} se escucharon igual, pero no llegaron las tramas CPR
      que hacen falta para ubicarlas: se ven en el
-     <a href="/adsb/analisis">análisis</a>.`;
+     <a href="/adsb/analisis">análisis</a>.`
+    + (fueraT ? ` En el mapa se dibujan <strong>${trazas.length}</strong>: las otras
+       ${fueraT} son más viejas que la ventana de ${FUERA_VENTANA.ventana_h} h y están
+       en el botón de abajo.` : "");
 
   // El punto mas lejano ACEPTADO. Antes esta frase se construia sobre el
   // fantasma de 789,5 km y decia "a esa distancia solo se escucha lo que va
   // alto": una explicacion fisica correcta en la forma y falsa en el
   // contenido, porque el dato sobre el que se apoyaba era el que hay que
-  // rechazar. Ahora dice lo que los datos aceptados realmente muestran, que es
-  // lo contrario: la antena esta lejisimos de su limite geometrico.
+  // rechazar.
   const todos = trazas.flatMap(t => t.points).filter(p => p.km !== null);
   const lejano = todos.reduce((a, b) => (b.km > a.km ? b : a), todos[0]);
   const horizLejano = lejano && lejano.alt
@@ -758,34 +1160,90 @@ async function cargar() {
      es hasta dónde se puede ver un avión <em>en la pista</em>: ${rx.surface_horizon_km} km
      desde esta altura. Los aeropuertos con el rombo lleno tienen su pista dentro de ese
      círculo; los huecos solo se ven por arriba.${lejanoTxt}
-     <br><br><strong>Rueda para acercar, arrastrá para mover, doble clic para volver al
-     encuadre.</strong> Pasando el mouse por una traza dice de qué aeronave es, a qué altitud
-     y a qué distancia; la barra de arriba a la derecha exporta el mapa como imagen.
+     <br><br><strong>Rueda para acercar, arrastrá para mover.</strong> El zoom y el paneo
+     <em>sobreviven</em> al refresco de ${REFRESCO_MS / 1000} s: el mapa se actualiza con
+     <code>Plotly.react</code> y un encuadre pegajoso, así que la vista no vuelve sola al
+     principio mientras estás mirando. El botón de casita de la barra reencuadra.
      <br><br>Está hecho con Plotly servido desde el disco, no desde un CDN: el sistema tiene
      que funcionar sin internet. No usa tiles ni un mapa base de terceros — la costa sale de
      Natural Earth y las pistas de OurAirports, con los dos umbrales reales de cada una.
-     Dibujadas a ojo se verían igual de convincentes y estarían torcidas.`;
+     Dibujadas a ojo se verían igual de convincentes y estarían torcidas.
+     ${RECONSTRUCCION !== null && RECONSTRUCCION !== undefined
+       ? `<br><br>La primera carga después de arrancar el servidor reconstruye el estado de
+          toda la grabación: tardó <strong>${RECONSTRUCCION} ms</strong>. Los refrescos
+          siguientes solo piden lo que entró desde entonces.` : ""}`;
 }
 
-// Redibujar mientras el mouse esta encima destruye el nodo bajo el cursor y se
-// pierde el resaltado a mitad de gesto. El refresco espera a que el usuario
-// suelte; los datos nuevos entran en el tick siguiente.
-for (const id of ["mapa", "lista"])
-  document.getElementById(id).addEventListener("mouseenter", () => { interactuando = true; });
-for (const id of ["mapa", "lista"])
-  document.getElementById(id).addEventListener("mouseleave", () => { interactuando = false; });
+// La ventana de dibujo NUNCA recorta en silencio: el numero de lo que quedo
+// afuera se escribe, con el cero explicito, y hay un boton que pide la
+// grabacion entera. Y se aclara que los agregados de arriba (mediana, máximo,
+// aeronaves) son de TODA la grabación y no de la ventana.
+function pintarVentana() {
+  const caja = document.getElementById("ventana");
+  const v = FUERA_VENTANA;
+  if (v.ventana_h === null || v.ventana_h === undefined) {
+    caja.style.display = "";
+    caja.innerHTML = `<span>Mostrando la grabación <strong>entera</strong>: ninguna traza
+      quedó fuera por antigüedad.</span> <button id="btn-ventana">Volver a las 3 h</button>`;
+  } else {
+    caja.style.display = "";
+    // Si el ?ventana_h= de la URL no era un numero de horas valido, se dice cual
+    // se uso: reinterpretarlo callado seria el mismo descarte en silencio.
+    const nota = v.nota ? `<br><em>${v.nota}.</em>` : "";
+    caja.innerHTML = `<span>Ventana de dibujo: <strong>${v.ventana_h} h</strong>.
+      Quedaron fuera <strong>${v.trazas}</strong>
+      traza${v.trazas === 1 ? "" : "s"} completa${v.trazas === 1 ? "" : "s"} y
+      <strong>${v.puntos}</strong> punto${v.puntos === 1 ? "" : "s"} de las que sí se
+      dibujan. Los números de arriba (aeronaves, alcance típico, máximo) son de
+      <em>toda</em> la grabación, no de la ventana.${nota}</span>
+      <button id="btn-ventana">Ver la grabación entera</button>`;
+  }
+  document.getElementById("btn-ventana").addEventListener("click", () => {
+    ventanaH = (v.ventana_h === null || v.ventana_h === undefined) ? 3 : 0;
+    reencuadrar();
+    cargar(true);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORIZADOR
+//
+// Ya no hay pausa por hover. El comentario que la justificaba -- "redibujar
+// mientras el mouse esta encima destruye el nodo bajo el cursor" -- es cierto
+// para newPlot y FALSO para react: medido, el tooltip sobrevive (1->1 contra
+// 1->0), _fullLayout._rehover sigue siendo function, los <path class="js-line">
+// son los mismos 3 nodos y un paneo a medio gesto sigue corriendo sin excepcion
+// y sin salto de rango. La pausa era lo contrario del tiempo real: congelaba el
+// mapa exactamente cuando alguien lo estaba mirando.
+// ---------------------------------------------------------------------------
+function programar() {
+  clearTimeout(temporizador);
+  const espera = esperaMs();
+  proximoEn = Date.now() + espera;
+  temporizador = setTimeout(tick, espera);
+}
+
+async function tick() {
+  if (!document.hidden) {
+    // Reconciliacion completa cada 10 min: 6/h a ~62 KB con la ventana de 3 h.
+    const toca = Date.now() - ultimaCompleta > RECONCILIAR_MS;
+    await cargar(toca);
+  }
+  programar();
+}
 
 // Con la pestana en segundo plano no se pide nada: el navegador ya frena los
 // timers, pero ademas no tiene sentido consultar un mapa que nadie mira.
-setInterval(() => {
-  if (!interactuando && !document.hidden) cargar();
-}, REFRESCO_MS);
-
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) cargar();      // al volver, mostrar lo de ahora y no lo de hace rato
+  if (document.hidden) { ocultaDesde = Date.now(); return; }
+  // Al volver: si estuvo oculta mucho, completa. El delta seguiria siendo
+  // correcto (el cursor es reanudable por diseno), pero pedir completa despues
+  // de un rato largo cuesta lo mismo y descarta cualquier desfase acumulado.
+  const rato = ocultaDesde ? Date.now() - ocultaDesde : 0;
+  cargar(rato > OCULTA_MAX_MS).then(programar);
 });
 
-cargar();
+cargar(true).then(programar);
 </script>
 </body>
 </html>

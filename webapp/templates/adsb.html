@@ -103,11 +103,11 @@
     <div class="bar">
       <span><span class="status-dot off" id="dot"></span><span id="status-text">detenido</span></span>
       <select id="source">
-        <option value="auto" title="Usa el dongle directo si encuentra tools/rtlsdr/rtl_adsb.exe; si no, busca un feed SBS-1. Nunca elige IQ crudo: para el nivel de senal hay que pedirlo a mano.">Automatico</option>
-        <option value="rtlsdr" title="Corre rtl_adsb.exe, que entrega el hex ya decodificado. No trae nivel de senal. Toma el dongle en exclusiva.">Dongle RTL-SDR directo</option>
-        <option value="iq" title="Lee las muestras crudas con rtl_sdr.exe y demodula en Python (adsb_iq.py). Es el unico que mide el nivel de senal en dBFS. Toma el dongle en exclusiva.">Dongle RTL-SDR + nivel de señal (IQ crudo)</option>
-        <option value="sbs" title="Se conecta por TCP a OTRO programa que ya esta decodificando (prueba los puertos 30003, 31004, 31014, 30103). El dongle lo tiene ese programa, no este.">Feed SBS-1 (RTL1090, dump1090...)</option>
-        <option value="json" title="Consulta el JSON de un dump1090 corriendo (por defecto 127.0.0.1:8080). Necesita dump1090 con su servidor web; el dongle lo tiene el.">dump1090 aircraft.json</option>
+        <option value="auto"{% if fuente_default == "auto" %} selected{% endif %} title="Usa el dongle directo si encuentra tools/rtlsdr/rtl_adsb.exe; si no, busca un feed SBS-1. Nunca elige IQ crudo: para el nivel de senal hay que pedirlo a mano.">Automatico</option>
+        <option value="rtlsdr"{% if fuente_default == "rtlsdr" %} selected{% endif %} title="Corre rtl_adsb.exe, que entrega el hex ya decodificado. No trae nivel de senal. Toma el dongle en exclusiva.">Dongle RTL-SDR directo</option>
+        <option value="iq"{% if fuente_default == "iq" %} selected{% endif %} title="Lee las muestras crudas con rtl_sdr.exe y demodula en Python (adsb_iq.py). Es el unico que mide el nivel de senal en dBFS. Toma el dongle en exclusiva.">Dongle RTL-SDR + nivel de señal (IQ crudo)</option>
+        <option value="sbs"{% if fuente_default == "sbs" %} selected{% endif %} title="Se conecta por TCP a OTRO programa que ya esta decodificando (prueba los puertos 30003, 31004, 31014, 30103). El dongle lo tiene ese programa, no este.">Feed SBS-1 (RTL1090, dump1090...)</option>
+        <option value="json"{% if fuente_default == "json" %} selected{% endif %} title="Consulta el JSON de un dump1090 corriendo (por defecto 127.0.0.1:8080). Necesita dump1090 con su servidor web; el dongle lo tiene el.">dump1090 aircraft.json</option>
       </select>
       <button class="primary" id="btn-start">Iniciar</button>
       <button class="danger" id="btn-stop" disabled>Detener</button>
@@ -332,7 +332,20 @@ async function refresh() {
   btnStop.disabled = !data.running;
   sourceSel.disabled = data.running;
 
-  if (data.running) {
+  // El error va ANTES de running y no después, y no es un detalle de orden:
+  // el caso peligroso es justamente running=true CON error. Pasa cuando el
+  // hilo lector no pudo abrir el dongle porque otro proceso ya lo tiene —
+  // start() ya devolvió running=true y recién después falla el hilo. Con el
+  // orden viejo esta rama quedaba muerta en ese caso y la página mostraba el
+  // punto verde de "grabando" durante minutos sin recibir un solo mensaje.
+  if (data.error) {
+    dot.className = 'status-dot off';
+    statusText.textContent = data.running
+      ? 'la grabación está activa pero NO entra nada'
+      : 'detenido';
+    statusLine.textContent = data.error;
+    statusLine.className = 'status-line error';
+  } else if (data.running) {
     dot.className = 'status-dot on';
     statusText.textContent = `grabando — ${data.description}`;
     statusLine.textContent = '';

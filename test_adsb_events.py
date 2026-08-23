@@ -419,6 +419,116 @@ print(f"       -> {cob['positions_rejected']} de {cob['positions_evaluated']} "
       f"descartadas, maximo publicado {cob['max_distance_km']:.1f} km "
       f"(descartado {cob['rejected_max_km']} km)\n")
 
+print("19. LectorIncremental: el cursor no puede perder ni repetir una fila")
+# El mapa dejo de releer la base entera en cada refresco (153 ms sobre 10 873
+# filas, y crece linealmente: 3.64 s a 29 dias) y pasa a avanzar un cursor. La
+# falla mas probable de un cursor no hace ruido: una fila perdida deja un
+# agujero en la traza y una repetida dibuja al avion dos veces en el mismo
+# lugar, y las dos se ven perfectamente bien en pantalla.
+#
+# La equivalencia completa contra load_db -contadores, rechazos, tracks,
+# coverage e informe del aeropuerto- vive en test_adsb_incremental.py, que corre
+# solo. Aca queda lo que no puede faltar en el archivo del modulo que cambio.
+import sqlite3 as _sq3
+import tempfile as _tmp
+from pathlib import Path as _P
+
+from adsb_events import LectorIncremental
+from adsb_record import COLUMNS, SCHEMA, as_row
+
+_T = 1_800_000_000.0
+_LAT, _LON = -34.47, -58.53
+
+
+def _serie():
+    filas = []
+    for i in range(30):
+        t = _T + i * 5.0
+        icao = ["e06541", "e80413"][i % 2]
+        filas.append(Observation(timestamp=t, icao24=icao, altitude_ft=8000.0 - i * 40,
+                                 latitude=_LAT + 0.10 - i * 0.001,
+                                 longitude=_LON - 0.10 + i * 0.001))
+        # Mismo epoch, sin posicion: la base real tiene 598 pares consecutivos
+        # con epoch repetido, y por eso el cursor NO puede ser epoch.
+        filas.append(Observation(timestamp=t, icao24=icao, ground_speed_kt=250.0))
+    return filas
+
+
+with _tmp.TemporaryDirectory(ignore_cleanup_errors=True) as _dir:
+    _db = _P(_dir) / "cursor.db"
+    _conn = _sq3.connect(_db)
+    _conn.executescript(SCHEMA)
+    _conn.commit()
+
+    def _escribir(obs):
+        hueco = ",".join("?" * len(COLUMNS))
+        for o in obs:
+            fila = as_row(o)
+            _conn.execute(f"INSERT INTO adsb_log ({','.join(COLUMNS)}) VALUES ({hueco})",
+                          [fila[c] if fila[c] != "" else None for c in COLUMNS])
+        _conn.commit()
+
+    _todas = _serie()
+    _lec = LectorIncremental(str(_db))
+
+    d = _lec.avanzar()
+    revisar("cursor vacio sobre base vacia: cero filas y cursor 0",
+            d["filas"] == 0 and d["cursor"] == 0, f"dio {d}")
+
+    _escribir(_todas[:20])
+    d = _lec.avanzar()
+    revisar("primera carga lee las 20 filas y deja el cursor en 20",
+            d["desde"] == 0 and d["filas"] == 20 and d["cursor"] == 20, f"dio {d}")
+
+    d = _lec.avanzar()
+    revisar("cursor al dia: delta vacio, con el cero explicito",
+            d["filas"] == 0 and d["posiciones"] == 0 and d["cursor"] == 20, f"dio {d}")
+
+    _escribir(_todas[20:])
+    d = _lec.avanzar()
+    revisar("filas nuevas entre dos consultas: solo lee las nuevas",
+            d["desde"] == 20 and d["filas"] == len(_todas) - 20, f"dio {d}")
+
+    _completo = {t["icao24"]: t["points"] for t in _lec.trazas()[0]}
+    revisar("un cursor viejo devuelve un sufijo exacto de cada traza",
+            all(p == _completo[i][len(_completo[i]) - len(p):]
+                for i, p in ((t["icao24"], t["points"])
+                             for t in _lec.delta_trazas(13))))
+    revisar("el delta desde 0 es exactamente la carga completa",
+            {t["icao24"]: t["points"] for t in _lec.delta_trazas(0)} == _completo)
+    revisar("el delta desde el ultimo id no trae nada",
+            _lec.delta_trazas(_lec.cursor) == [])
+
+    # Un cliente polleando de verdad: cada consulta manda como desde el cursor
+    # que le devolvio la anterior. La union tiene que ser la carga completa.
+    _lec2 = LectorIncremental(str(_db))
+    _union, _c = {}, 0
+    for _ in range(3):
+        _lec2.avanzar()
+        for t in _lec2.delta_trazas(_c):
+            _union.setdefault(t["icao24"], []).extend(t["points"])
+        _c = _lec2.cursor
+    revisar("la union de los deltas encadenados es la carga completa",
+            _union == {t["icao24"]: t["points"] for t in _lec2.trazas()[0]},
+            f"{sum(len(v) for v in _union.values())} puntos contra "
+            f"{sum(len(v) for v in _completo.values())}")
+    revisar("y ningun punto viene repetido",
+            all(len(v) == len({(p['t'], p['lat']) for p in v}) for v in _union.values()))
+
+    # La ventana de dibujo NUNCA recorta en silencio: el numero de lo que quedo
+    # afuera se publica, con el cero explicito cuando no descarto nada.
+    _ft, _fp = _lec.fuera_de_ventana(10 ** 9)
+    revisar("una ventana enorme no deja nada afuera, y lo dice con ceros",
+            _ft == 0 and _fp == 0, f"dio {_ft}, {_fp}")
+    _ft, _fp = _lec.fuera_de_ventana(1.0, ahora=_T + 10 ** 6)
+    revisar("una ventana chica publica cuantas trazas y puntos recorto",
+            _ft == len(_completo) and _fp == sum(len(v) for v in _completo.values()),
+            f"dio {_ft}, {_fp}")
+    print(f"       -> {sum(len(v) for v in _completo.values())} puntos, "
+          f"cursor {_lec.cursor}, union de deltas identica a la completa")
+    _conn.close()
+print()
+
 print("=" * 55)
 print("TODO CORRECTO" if not fallos else f"FALLAS: {fallos}")
 raise SystemExit(1 if fallos else 0)
