@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Mapa del aeropuerto — Runway Video Analytics</title>
+<!-- Plotly desde /static y no de un CDN: el sistema tiene que funcionar sin
+     internet. Se baja una vez con "python webapp/bajar_plotly.py". -->
+<script src="/static/plotly.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 20px; }
+  a { color: #60a5fa; }
+
+  .cards { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 14px 22px; min-width: 130px; }
+  .card .n { font-size: 1.9rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .label { color: #9aa0a6; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .sub { color: #4b5563; font-size: 0.76rem; margin-top: 2px; }
+  /* Verde solo lo que se puede afirmar. Lo que no se pudo resolver va en gris:
+     se muestra porque esconderlo ocultaria cuanto le falta a la ubicacion de la
+     antena, pero no compite con lo confirmado. */
+  .card.real .n { color: #34d399; }
+  .card.gris .n { color: #9aa0a6; }
+
+  .panel { background: #1a1d24; border-radius: 12px; padding: 18px; margin-bottom: 20px; }
+  .diag { border-left: 3px solid #4b5563; border-radius: 6px; padding: 11px 15px;
+          font-size: 0.87rem; line-height: 1.55; background: #171a20; color: #c9ced6;
+          margin-bottom: 14px; }
+  .diag.ok { border-left-color: #34d399; }
+  .diag.no { border-left-color: #9aa0a6; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.55;
+           margin-bottom: 14px; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 12px 0 0; }
+
+  .fila { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+  .mapa-caja { flex: 1 1 620px; min-width: 320px; }
+  /* Plotly se ajusta al contenedor, asi que el contenedor necesita alto propio:
+     sin esto colapsa y scaleanchor compensa estirando un eje, dejando el mapa
+     como una franja. */
+  #mapa { width: 100%; height: min(74vh, 720px); min-height: 400px; }
+  .lateral { flex: 0 1 320px; min-width: 260px; }
+
+  .lista { list-style: none; margin: 0; padding: 0; max-height: 62vh; overflow-y: auto; }
+  .lista li { padding: 8px 10px; border-radius: 8px; display: flex; gap: 8px;
+              align-items: center; font-size: 0.88rem; cursor: pointer; }
+  .lista li:hover { background: #262a33; }
+  .lista li.apagado { opacity: 0.35; }
+  .lista .id { font-weight: 600; }
+  .lista .meta { color: #9aa0a6; font-size: 0.78rem; margin-left: auto;
+                 font-variant-numeric: tabular-nums; }
+  .punto { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .vacio { color: #9aa0a6; padding: 40px 20px; text-align: center; line-height: 1.6; }
+  .estado { display: inline-flex; align-items: center; gap: 8px; color: #9aa0a6;
+            background: #1a1d24; border-radius: 20px; padding: 6px 14px;
+            font-size: 0.85rem; margin-bottom: 16px; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.76rem; }
+</style>
+</head>
+<body>
+  <h1 id="titulo">Mapa del aeropuerto</h1>
+  <div class="subtitle">
+    Solo las aeronaves que operaron acá ·
+    <a href="/adsb/mapa">mapa de todo</a> ·
+    <a href="/adsb/analisis">análisis</a> ·
+    <a href="/adsb">ADS-B en vivo</a> ·
+    <a href="/">dashboard</a>
+  </div>
+
+  <div class="estado" id="estado"><span>cargando…</span></div>
+  <div id="diagnostico"></div>
+  <div class="cards" id="tarjetas"></div>
+
+  <div class="fila">
+    <div class="panel mapa-caja"><div id="mapa"></div></div>
+    <div class="panel lateral">
+      <h2>Operaciones</h2>
+      <ul class="lista" id="lista"></ul>
+      <p class="nota" id="nota-lista"></p>
+    </div>
+  </div>
+
+<script>
+const RAD = Math.PI / 180, R_KM = 6371.0088;
+
+// Un color por TIPO de operacion, no por altitud. En el mapa general el color
+// codifica altitud porque la pregunta es "por donde anduvo"; aca la pregunta es
+// "que hizo en esta pista", y mezclar las dos escalas obligaria a mirar la
+// leyenda para cada traza.
+const COLOR = {
+  aterrizaje:   "#34d399",   // lo unico que se puede afirmar que aterrizo
+  despegue:     "#60a5fa",
+  frustrada:    "#fbbf24",   // bajo y se volvio a ir
+  aproximacion: "#9aa0a6",   // bajaba, pero nunca se la vio lo bastante abajo
+  salida:       "#9aa0a6",
+  "en tierra":  "#a78bfa",
+  sobrevuelo:   "#4b5563",
+};
+const ETIQUETA = {
+  aterrizaje: "aterrizaje", despegue: "despegue", frustrada: "motor y al aire",
+  aproximacion: "aproximación sin resolver", salida: "salida sin resolver",
+  "en tierra": "en tierra", sobrevuelo: "sobrevuelo",
+};
+
+let IDX = {};       // icao24 -> indice del trazo, para resaltar sin redibujar
+let TRAZAS = [];
+
+function circulo(cx, cy, r, pasos) {
+  const xs = [], ys = [];
+  for (let i = 0; i <= (pasos || 180); i++) {
+    const a = i / (pasos || 180) * 2 * Math.PI;
+    xs.push(cx + r * Math.cos(a)); ys.push(cy + r * Math.sin(a));
+  }
+  xs.push(null); ys.push(null);
+  return [xs, ys];
+}
+
+function dibujar(datos) {
+  const apt = datos.airport, pistas = datos.pistas || [];
+  // Centrado en EL AEROPUERTO y no en la antena: la pregunta de esta pagina es
+  // que pasa en esta pista, asi que el origen de coordenadas es la pista. En el
+  // mapa general el origen es la antena, porque ahi la pregunta es el alcance.
+  const cos0 = Math.cos(apt.lat * RAD);
+  const kmE = lon => (lon - apt.lon) * RAD * R_KM * cos0;
+  const kmN = lat => (lat - apt.lat) * RAD * R_KM;
+
+  const trazos = [];
+
+  // Anillos cada 2 km desde la pista: a esta escala los de 10/20/40 del mapa
+  // general no dicen nada, y lo que importa es a que distancia de la cabecera
+  // estaba la aeronave.
+  const ax = [], ay = [], etx = [], ety = [], ett = [];
+  for (const r of [2, 4, 6, 8, 10]) {
+    const c = circulo(0, 0, r);
+    ax.push.apply(ax, c[0]); ay.push.apply(ay, c[1]);
+    etx.push(0); ety.push(r); ett.push(r + " km");
+  }
+  trazos.push({x: ax, y: ay, mode: "lines", line: {color: "#262626", width: 1},
+               hoverinfo: "skip", showlegend: false});
+  trazos.push({x: etx, y: ety, mode: "text", text: ett, textposition: "top center",
+               textfont: {color: "#555555", size: 9}, hoverinfo: "skip", showlegend: false});
+
+  // El cilindro de operaciones: adentro de este circulo y por debajo del techo
+  // es donde se atribuye una operacion. Dibujarlo hace auditable el conteo --
+  // se ve que trazas entraron y cuales no.
+  const cil = circulo(0, 0, apt.radio_km);
+  trazos.push({x: cil[0], y: cil[1], mode: "lines",
+               name: `cilindro ${apt.radio_km} km / ${apt.techo_ft} ft`,
+               line: {color: "#34d399", width: 1.5, dash: "dot"}, opacity: 0.7,
+               hovertemplate: `dentro de acá y bajo ${apt.techo_ft} ft se atribuye`
+                            + ` una operación<extra></extra>`});
+
+  // La pista, con su eje extendido. El eje es lo que hace legible una
+  // aproximacion: un avion alineado viene sobre esa linea.
+  for (const p of pistas) {
+    const x1 = kmE(p.le[1]), y1 = kmN(p.le[0]), x2 = kmE(p.he[1]), y2 = kmN(p.he[0]);
+    const dx = x2 - x1, dy = y2 - y1, largo = Math.hypot(dx, dy) || 1;
+    const ex = dx / largo, ey = dy / largo, EXT = 10;
+    trazos.push({
+      x: [x1 - ex * EXT, x1, x2, x2 + ex * EXT],
+      y: [y1 - ey * EXT, y1, y2, y2 + ey * EXT],
+      mode: "lines", name: `eje ${p.nombre}`,
+      line: {color: "#3f4650", width: 1, dash: "longdash"},
+      hoverinfo: "skip", showlegend: false,
+    });
+    trazos.push({
+      x: [x1, x2], y: [y1, y2], mode: "lines", name: `pista ${p.nombre}`,
+      line: {color: "#f5f5f5", width: 5},
+      hovertemplate: `pista ${p.nombre} · ${p.largo_m} m · rumbo ${p.rumbo}°<extra></extra>`,
+    });
+  }
+
+  // Una traza por operacion, coloreada por tipo. Se manda la trayectoria ENTERA
+  // y no el tramo de adentro del cilindro: ver de donde venia el avion es la
+  // mitad de lo que hace entendible una aproximacion.
+  TRAZAS = datos.tracks || [];
+  IDX = {};
+  for (const t of TRAZAS) {
+    const nombre = t.registration || t.callsign || t.icao24;
+    const color = COLOR[t.operacion] || "#9aa0a6";
+    IDX[t.icao24] = trazos.length;
+    trazos.push({
+      x: t.points.map(q => kmE(q.lon)), y: t.points.map(q => kmN(q.lat)),
+      mode: "lines+markers", name: nombre,
+      line: {color, width: t.confirmada ? 2.4 : 1.5},
+      marker: {size: 4, color},
+      opacity: t.confirmada ? 1 : 0.75,
+      customdata: t.points.map(q => [q.alt, q.km]),
+      hovertemplate: `<b>${nombre}</b> — ${ETIQUETA[t.operacion] || t.operacion}`
+                   + (t.pista ? ` (pista ${t.pista})` : "")
+                   + `<br>%{customdata[0]:,.0f} ft`
+                   + `<br>más bajo: ${Math.round(t.min_altitude_ft)} ft a ${t.min_distance_km} km`
+                   + `<extra></extra>`,
+      showlegend: false,
+    });
+  }
+
+  // La antena, si entra en cuadro. Se dibuja para que se entienda de donde se
+  // esta escuchando: media pagina de explicacion se ahorra viendo que la antena
+  // esta lejos de la pista.
+  const rx = datos.receiver || {};
+  if (rx.lat !== undefined)
+    trazos.push({
+      x: [kmE(rx.lon)], y: [kmN(rx.lat)], mode: "markers+text",
+      marker: {symbol: "triangle-up", size: 12, color: "#f87171"},
+      text: [" " + rx.name], textposition: "middle right",
+      textfont: {color: "#f87171", size: 10},
+      hovertemplate: `<b>${rx.name}</b><br>la antena<extra></extra>`,
+      showlegend: false,
+    });
+
+  // Encuadre: el cilindro completo mas un margen, y agrandado si alguna traza se
+  // va mas lejos. Se prioriza el cilindro y no el contenido porque esta pagina
+  // habla de la pista: un avion que entro y se fue a 60 km no debe empujar la
+  // escala hasta que la pista sea un punto.
+  const R = apt.radio_km * 1.35;
+  const xs = [-R, R], ys = [-R, R];
+  const ejeComun = {showgrid: false, zeroline: false, showticklabels: false,
+                    ticks: "", showline: false};
+  Plotly.newPlot("mapa", trazos, {
+    paper_bgcolor: "#05070a", plot_bgcolor: "#05070a",
+    margin: {l: 4, r: 4, t: 4, b: 4},
+    xaxis: Object.assign({}, ejeComun, {range: xs}),
+    // scaleanchor: sin esto el zoom deforma y una aproximacion recta se ve
+    // curva, que en un mapa de pista invita a leer una maniobra inexistente.
+    yaxis: Object.assign({}, ejeComun, {range: ys, scaleanchor: "x", scaleratio: 1}),
+    showlegend: true,
+    legend: {x: 0, y: 1, bgcolor: "rgba(5,7,10,0.7)", bordercolor: "#262626",
+             borderwidth: 1, font: {color: "#d4d4d4", size: 10}},
+    hoverlabel: {bgcolor: "#1a1d24", bordercolor: "#363b46",
+                 font: {color: "#e6e6e6", size: 11}},
+    dragmode: "pan",
+  }, {
+    responsive: true, scrollZoom: true, displaylogo: false,
+    modeBarButtonsToRemove: ["select2d", "lasso2d"],
+    toImageButtonOptions: {filename: "mapa-" + apt.codigo, scale: 2},
+  });
+}
+
+function pintarTarjetas(apt) {
+  document.getElementById("titulo").textContent = `${apt.nombre} (${apt.codigo})`;
+  const vePista = apt.ve_la_pista;
+  document.getElementById("diagnostico").innerHTML = `
+    <div class="diag ${vePista ? "ok" : "no"}">
+      La pista está a <b>${apt.distancia_receptor_km} km</b> de la antena, y el horizonte de
+      radio a un avión <em>en la pista</em> es <b>${apt.horizonte_superficie_km} km</b>:
+      ${vePista ? "los aviones en la pista <b>sí</b> se escuchan desde acá."
+                : "los aviones en la pista <b>no</b> se escuchan desde acá."}
+      Lo más bajo que se vio sobre el campo:
+      <b>${apt.min_altitude_vista_ft === null ? "–"
+           : Math.round(apt.min_altitude_vista_ft).toLocaleString("es-AR") + " ft"}</b>.
+    </div>
+    ${apt.advertencia ? `<div class="aviso">${apt.advertencia}</div>` : ""}`;
+
+  document.getElementById("tarjetas").innerHTML = `
+    <div class="card real"><div class="n">${apt.aterrizajes}</div>
+      <div class="label">Aterrizajes</div><div class="sub">bajó y no volvió a subir</div></div>
+    <div class="card real"><div class="n">${apt.despegues}</div>
+      <div class="label">Despegues</div><div class="sub">arrancó abajo y se fue</div></div>
+    <div class="card gris"><div class="n">${apt.aproximaciones}</div>
+      <div class="label">Sin resolver</div><div class="sub">nunca se vio bastante abajo</div></div>
+    <div class="card gris"><div class="n">${apt.frustradas}</div>
+      <div class="label">Motor y al aire</div><div class="sub">bajó y se fue</div></div>
+    <div class="card gris"><div class="n">${apt.sobrevuelos}</div>
+      <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>`;
+}
+
+function pintarLista() {
+  const lista = document.getElementById("lista");
+  if (!TRAZAS.length) {
+    lista.innerHTML = '<li style="color:#9aa0a6">Ninguna aeronave entró al cilindro.</li>';
+    return;
+  }
+  lista.innerHTML = TRAZAS.map(t => {
+    const nombre = t.registration || t.callsign || t.icao24;
+    return `<li data-icao="${t.icao24}">
+      <span class="punto" style="background:${COLOR[t.operacion] || "#9aa0a6"}"></span>
+      <span class="id">${nombre}</span>
+      <span class="meta">${Math.round(t.min_altitude_ft)} ft · ${t.min_distance_km} km</span>
+    </li>`;
+  }).join("");
+
+  // Resaltar es apagar el resto, con restyle y no redibujando: volver a llamar a
+  // newPlot perderia el zoom que la persona acababa de hacer para mirar justo
+  // esa aproximacion.
+  const indices = Object.values(IDX);
+  lista.querySelectorAll("li").forEach(li => {
+    const propio = IDX[li.dataset.icao];
+    li.addEventListener("mouseenter", () => {
+      if (propio === undefined) return;
+      Plotly.restyle("mapa", {opacity: indices.map(i => i === propio ? 1 : 0.1)}, indices);
+      lista.querySelectorAll("li").forEach(o => o.classList.toggle("apagado", o !== li));
+    });
+    li.addEventListener("mouseleave", () => {
+      Plotly.restyle("mapa", {opacity: indices.map(() => 1)}, indices);
+      lista.querySelectorAll("li").forEach(o => o.classList.remove("apagado"));
+    });
+  });
+
+  const tipos = {};
+  for (const t of TRAZAS) tipos[t.operacion] = (tipos[t.operacion] || 0) + 1;
+  document.getElementById("nota-lista").innerHTML =
+    Object.entries(tipos).map(([k, n]) =>
+      `<span class="chip" style="background:${COLOR[k] || "#9aa0a6"}22;color:${COLOR[k] || "#9aa0a6"}">`
+      + `${ETIQUETA[k] || k}: ${n}</span>`).join(" ")
+    + "<br><br>La trayectoria se dibuja entera y no solo el tramo de adentro del cilindro: "
+    + "ver de dónde venía el avión es la mitad de lo que hace entendible una aproximación. "
+    + "El trazo grueso son las operaciones confirmadas por alineación con la pista.";
+}
+
+async function cargar() {
+  let datos;
+  try {
+    datos = await (await fetch("/api/aeropuerto/mapa")).json();
+  } catch (e) {
+    document.getElementById("estado").innerHTML = "<span>no se pudo consultar el servidor</span>";
+    return;
+  }
+  if (!datos.airport) {
+    document.getElementById("mapa").innerHTML = `<div class="vacio">
+      ${datos.empty_reason || "No hay aeropuerto configurado"}.<br>
+      Se elige con <code>ADSB_AIRPORT</code> (por ejemplo <code>SABE</code>).</div>`;
+    document.getElementById("estado").style.display = "none";
+    return;
+  }
+
+  let estado = null;
+  try {
+    const r = await fetch("/api/adsb/status");
+    if (r.ok) estado = await r.json();
+  } catch (e) { /* la pagina sirve igual sin el estado del receptor */ }
+
+  pintarTarjetas(datos.airport);
+  const n = (datos.tracks || []).length;
+  document.getElementById("estado").innerHTML =
+    `<span>${estado && estado.running ? "grabando" : "grabación detenida"} · `
+    + `${n} aeronave${n === 1 ? "" : "s"} en el cilindro · `
+    + `actualizado ${new Date().toLocaleTimeString("es-AR")}</span>`;
+
+  if (!n) {
+    document.getElementById("mapa").innerHTML = `<div class="vacio">
+      Ninguna aeronave entró al cilindro de ${datos.airport.radio_km} km y
+      ${datos.airport.techo_ft} ft sobre ${datos.airport.codigo}.<br>
+      No es que no haya habido operaciones: es que desde donde está la antena no se reciben.</div>`;
+    pintarLista();
+    return;
+  }
+  dibujar(datos);
+  pintarLista();
+}
+
+cargar();
+// Cada 20 s: es un analisis, no un radar en vivo, y recalcular la atribucion
+// sobre toda la base mas seguido no aporta nada.
+setInterval(cargar, 20000);
+</script>
+</body>
+</html>

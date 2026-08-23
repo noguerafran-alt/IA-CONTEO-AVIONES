@@ -42,6 +42,7 @@ Cuatro páginas, en `http://127.0.0.1:8000`:
 | `/adsb` | en vivo: registro completo por aeronave, señal, resumen histórico |
 | `/adsb/analisis` | todo lo grabado: cobertura por campo, alcance, descartes, apartado del aeropuerto |
 | `/adsb/mapa` | mapa Plotly con aviones rotados al rumbo, costa y pistas reales |
+| `/aeropuerto/mapa` | **mapa de un solo aeropuerto**: centrado en la pista, solo lo que operó ahí |
 
 La grabación se arranca y se para desde `/adsb`. **El dongle es exclusivo**: un
 solo proceso puede tomarlo.
@@ -156,6 +157,16 @@ recién asignados. Se ve el **vuelo** (ARG1403) casi siempre; el **avión físic
 (LV-FVN) solo si está en el registro. Son dos problemas distintos.
 
 ---
+
+## Un bug ya arreglado que vale recordar
+
+**No ordenar una costa por latitud.** Parece inofensivo y la destruye: una costa
+no es monótona en latitud (bahías, el delta, la vuelta de Punta del Este), así que
+ordenar hace que el trazo salte de un lado al otro. Medido: la orilla uruguaya
+pasaba de 394 km a **1346 km** de largo, 3,4×, y en el mapa se veía como rayas
+horizontales cruzando el río. `geografia.py` conserva el orden del trazo de
+Natural Earth, y las dos orillas concatenadas **tal cual** ya cierran el anillo
+—vienen en sentidos opuestos— así que invertir una lo cruza en diagonal.
 
 ## Cosas que van a confundir si nadie las avisó
 

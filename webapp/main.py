@@ -195,6 +195,65 @@ def adsb_page(request: Request):
     return templates.TemplateResponse(request, "adsb.html", {})
 
 
+@app.get("/aeropuerto/mapa")
+def aeropuerto_map_page(request: Request):
+    return templates.TemplateResponse(request, "aeropuerto_mapa.html", {})
+
+
+@app.get("/api/aeropuerto/mapa")
+def api_aeropuerto_map():
+    """El mapa de UN aeropuerto: solo las trayectorias que operaron ahi.
+
+    Distinto de /api/adsb/mapa en tres cosas, y por eso es otro endpoint y no un
+    parametro: esta centrado en el aeropuerto y no en la antena, manda SOLO las
+    trazas que entraron al cilindro de operaciones -no las 50 que la antena
+    escucho de paso-, y cada traza viene con el tipo de operacion que se le
+    atribuyo, que es lo que el mapa colorea.
+    """
+    import aeropuerto
+    import adsb_report
+    from adsb_events import load_db
+
+    db_path = ROOT / "adsb_log.db"
+    if not db_path.exists():
+        return JSONResponse({"airport": None, "tracks": [],
+                             "empty_reason": "todavia no se grabo nada"})
+
+    observaciones, _ = load_db(str(db_path))
+    inf = aeropuerto.informe(observaciones)
+    if inf is None:
+        return JSONResponse({"airport": None, "tracks": [],
+                             "empty_reason": "no hay aeropuerto configurado"})
+
+    # Se cruzan las operaciones atribuidas con las trayectorias completas: el
+    # informe dice QUE hizo cada aeronave y tracks() dice POR DONDE paso. El
+    # mapa necesita las dos cosas, y la traza se manda ENTERA y no recortada al
+    # cilindro -- ver de donde venia el avion es la mitad de lo que hace
+    # entendible una aproximacion.
+    por_icao = {o.icao24: o for o in inf.operaciones}
+    trazas = []
+    for t in adsb_report.tracks(observaciones):
+        op = por_icao.get(t["icao24"])
+        if op is None:
+            continue
+        t["operacion"] = op.tipo
+        t["confirmada"] = op.confirmada
+        t["pista"] = op.pista
+        t["min_altitude_ft"] = op.min_altitude_ft
+        t["min_distance_km"] = op.min_distance_km
+        trazas.append(t)
+
+    import geografia
+    return JSONResponse({
+        "airport": aeropuerto.como_json(inf),
+        "tracks": trazas,
+        "pistas": [p for p in geografia.como_json()["pistas"] if p["apt"] == inf.codigo],
+        "receiver": {"lat": __import__("receiver").RECEIVER_LAT,
+                     "lon": __import__("receiver").RECEIVER_LON,
+                     "name": __import__("receiver").RECEIVER_NAME},
+    })
+
+
 @app.get("/api/aeropuerto")
 def api_aeropuerto():
     """Solo los conteos del aeropuerto objetivo, para el dashboard.

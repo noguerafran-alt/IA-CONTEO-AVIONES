@@ -119,7 +119,7 @@
   <h1>Dónde estuvo lo que la antena escuchó</h1>
   <div class="subtitle">
     Trayectorias decodificadas desde <span id="sub-receptor">la antena</span> ·
-    <a href="/adsb/analisis">análisis</a> · <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
+    <a href="/aeropuerto/mapa">mapa del aeropuerto</a> · <a href="/adsb/analisis">análisis</a> · <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
   </div>
 
   <div class="estado" id="estado"><span class="punto"></span><span id="estado-txt">–</span></div>
@@ -242,7 +242,11 @@ function dibujar(datos, trazas) {
   // reconocible la zona es la mancha de agua, no su borde.
   if ((GEO.costa || []).length >= 2) {
     const ar = GEO.costa[0], uy = GEO.costa[1];
-    const anillo = ar.concat(uy.slice().reverse());
+    // Concatenadas TAL CUAL, sin invertir ninguna: vienen en sentidos opuestos
+    // -la argentina baja por la orilla oeste, la uruguaya vuelve por la este- asi
+    // que juntas ya forman un anillo cerrado. Invertir una cruzaba el poligono en
+    // diagonal, que es lo que se veia como rayas atravesando el rio.
+    const anillo = ar.concat(uy);
     trazos.push({
       x: anillo.map(q => kmE(q[1])), y: anillo.map(q => kmN(q[0])),
       fill: "toself", fillcolor: GRIS_AGUA, mode: "lines",
