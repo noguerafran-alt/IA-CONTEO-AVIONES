@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con la identidad inferida del distintivo.
+Última actualización: 2026-08-23, con la interpolación de matrículas probada y descartada.
 
 ---
 
@@ -210,6 +210,31 @@ de país lo caza**), y `a88552` decía `N680XP` y era `N6480G` (los dos EEUU →
 chequeo NO lo caza**, por eso las `N-` se excluyen). Quedan 4/4 en el patrón
 `LV`, con **n=4**: se informa como *probable*, nunca como confirmada, y en la
 interfaz va con punteado y el origen en el tooltip.
+
+**Interpolar la matrícula desde la dirección: PROBADA Y DESCARTADA.** No por
+mala, sino porque el balance no cierra — y conviene no reintentarla.
+
+El hallazgo es real y fuerte: en el bloque argentino `e0…` la dirección crece con
+la matrícula de forma **100% monótona** (1122 subidas contra 3 bajadas sobre 1126
+pares del registro), con pendiente exactamente 1,0 por tramos. Prueba de
+exclusión sobre los 1128 casos conocidos: de los 661 predecibles —los que tienen
+sus dos vecinos en un tramo contiguo— **659 aciertos exactos, 99,7%**. Esa
+validación es de otro orden que el n=4 del distintivo.
+
+**Por qué se descarta igual.** Recupera solo **6 matrículas de 236 faltantes**, y
+`e8…` (Chile), `e4…` (Brasil) y `e1…` dan **cero** — su asignación no es
+contigua. De esas 6, `e0b14e` es un **alias conocido** de `e0b14a` (ARG1650, a un
+bit): la interpolación le pondría "LV-KEN" con total confianza, una matrícula real
+de un avión que nunca estuvo ahí. Otras tres tienen 2–3 mensajes y son dudosas.
+Quedan 1 o 2 recuperaciones sólidas, bajo el 1% de lo faltante.
+
+El problema de fondo, que ninguna mejora del algoritmo resuelve: **predice bien la
+matrícula de una dirección que existe, pero no sabe si la dirección existe.** A una
+dirección corrupta le pone matrícula igual, y fabricar matrículas creíbles envenena
+la confianza en las 206 que sí vienen del registro y son duras.
+
+Si alguien la reintenta: el número que hay que mirar no es el 99,7% de acierto,
+es que solo 6 direcciones caen en tramos predecibles y una de esas seis es ruido.
 
 **Un vuelo puede aparecer bajo varias direcciones y hay que fusionarlo.** Medido:
 de 190 distintivos, **18 aparecen bajo más de una dirección**, con 33 secundarias.
