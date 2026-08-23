@@ -69,6 +69,9 @@
   .chip.tierra   { background: #3f2d12; color: #fcd34d; }
   .chip.otro     { background: #262a33; color: #9aa0a6; }
 
+  .senal { font-size: 0.87rem; line-height: 1.55; }
+  .senal.ok { border-left: 3px solid #34d399; }
+  .senal.alerta { border-left: 3px solid #fbbf24; color: #e5c07b; }
   .hist-grid { display: flex; gap: 28px; flex-wrap: wrap; }
   .hist-grid > div { display: flex; flex-direction: column; }
   .hist-grid b { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
@@ -114,6 +117,7 @@
     <div class="downloads" id="downloads"></div>
   </div>
 
+  <div id="senal"></div>
   <div class="descartes" id="descartes"></div>
 
   <h2>Lo grabado hasta ahora</h2>
@@ -243,6 +247,32 @@ function chipFase(fase) {
 // Los numeros salen de la MISMA regla que la pagina de analisis (una direccion
 // se cree si se repitio o si trajo un campo de DF17), asi que las dos paginas
 // no pueden dar totales distintos para lo mismo.
+// La ganancia se juzga con datos, no de memoria. De lejos conviene el maximo;
+// pegado a la pista hay que bajarla, porque el receptor recorta y eso se siente
+// como "recibo menos" justo cuando deberia recibir mejor.
+function renderSenal(sn) {
+  const caja = document.getElementById('senal');
+  if (!sn || !sn.mide) {
+    caja.innerHTML = sn && sn.mide === false
+      ? '<span class="muted">Esta fuente no mide el nivel de señal. '
+        + 'Elegí <b>IQ crudo</b> arriba para medirlo.</span>' : '';
+    return;
+  }
+  const alerta = sn.bajar_ganancia;
+  caja.className = 'panel senal ' + (alerta ? 'alerta' : 'ok');
+  caja.innerHTML = `
+    <b>Señal:</b> mediana ${sn.mediana_dbfs} dBFS, la más fuerte ${sn.max_dbfs},
+    sobre ${sn.mensajes} mensajes · ganancia ${sn.ganancia}
+    ${alerta
+      ? `<br><b>Bajá la ganancia:</b> ${sn.saturados_pct}% de los mensajes están por encima de
+         ${sn.umbral_dbfs} dBFS, o sea contra el techo del receptor. Saturar hace perder
+         mensajes, y se siente como recibir menos justo cuando deberías recibir mejor.
+         Probá <code>ADSB_GAIN=30</code>, o <code>ADSB_GAIN=auto</code>, y mirá si este
+         porcentaje baja.`
+      : `<br><span class="muted">${sn.saturados_pct}% por encima de ${sn.umbral_dbfs} dBFS:
+         la ganancia está bien para esta distancia.</span>`}`;
+}
+
 function renderHistorico(h) {
   const caja = document.getElementById('historico');
   if (!h || !h.observations) {
@@ -295,6 +325,7 @@ async function refresh() {
   document.getElementById('c-registros').textContent = data.written;
   renderLive(vivas);
   renderHistorico(data.historico);
+  renderSenal(data.senal);
   renderDescartes(data);
 
   btnStart.disabled = data.running;

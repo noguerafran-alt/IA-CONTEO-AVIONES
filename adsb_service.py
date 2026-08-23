@@ -222,6 +222,7 @@ class AdsbService:
             # de todo lo grabado hasta ahora. Ver _registro_acumulado.
             "aircraft": self._registro_acumulado(now, ref),
             "historico": self._resumen_historico(),
+            "senal": self._salud_de_senal(),
         }
 
     def _registro_acumulado(self, now: float, ref) -> list[dict]:
@@ -270,6 +271,45 @@ class AdsbService:
                 "seconds_ago": round(now - r.last_seen, 1),
             })
         return filas
+
+    def _salud_de_senal(self) -> dict:
+        """Si la ganancia esta bien puesta, medido y no supuesto.
+
+        Es el numero que hace falta al mover la antena cerca de una pista. De
+        lejos conviene ganancia maxima porque cada dB alcanza un avion mas
+        lejano; pegado a la pista es al revés y el receptor recorta, que se
+        siente como "recibo menos" justo cuando deberia recibir mejor. Sin esta
+        medicion eso cuesta un dia de pruebas confundido.
+        """
+        source = self._source
+        if source is None:
+            return {}
+        try:
+            import adsb_iq
+            umbral = adsb_iq.UMBRAL_SATURACION_DBFS
+            niveles = [o.signal_dbfs for o in source.snapshot()
+                       if o.signal_dbfs is not None]
+        except Exception:
+            return {}
+        if not niveles:
+            # Distinto de "todo bien": esta fuente no mide senal.
+            return {"mide": False}
+        niveles.sort()
+        saturados = sum(1 for n in niveles if n >= umbral)
+        return {
+            "mide": True,
+            "ganancia": getattr(source, "ganancia", None),
+            "mensajes": len(niveles),
+            "mediana_dbfs": round(niveles[len(niveles) // 2], 1),
+            "max_dbfs": round(niveles[-1], 1),
+            "min_dbfs": round(niveles[0], 1),
+            "saturados": saturados,
+            "saturados_pct": round(saturados / len(niveles) * 100, 1),
+            "umbral_dbfs": umbral,
+            # Con mas del 5% de los mensajes contra el techo ya conviene bajar:
+            # no es que se pierda todo, es que se empieza a perder y no se nota.
+            "bajar_ganancia": saturados / len(niveles) > 0.05,
+        }
 
     def _resumen_historico(self) -> dict:
         """Lo grabado en toda la historia, cacheado unos segundos.

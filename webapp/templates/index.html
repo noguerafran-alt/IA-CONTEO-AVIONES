@@ -48,6 +48,19 @@
   .legend { color: #9aa0a6; font-size: 0.85rem; margin: 0 0 12px; }
   .muted { color: #4b5563; }
   .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+  .panel { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 28px; }
+  .apt-nums { display: flex; gap: 26px; flex-wrap: wrap; }
+  .apt-nums > div { display: flex; flex-direction: column; }
+  .apt-nums b { font-size: 1.7rem; font-variant-numeric: tabular-nums; color: #34d399; }
+  /* Los conteos que NO son operaciones confirmadas van en gris: se muestran
+     porque esconderlos seria ocultar cuanto no se pudo resolver, pero no
+     compiten visualmente con los que si se pueden afirmar. */
+  .apt-nums .gris b { color: #9aa0a6; }
+  .apt-nums span { color: #9aa0a6; font-size: 0.78rem; text-transform: uppercase;
+                   letter-spacing: 0.03em; }
+  .apt-aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+               padding: 11px 15px; color: #e5c07b; font-size: 0.86rem; line-height: 1.5;
+               margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -59,6 +72,13 @@
     <a href="/adsb/analisis" style="color:#60a5fa">análisis ADS-B</a> ·
     <a href="/adsb/mapa" style="color:#60a5fa">mapa ADS-B</a>
   </div>
+
+  <!-- El apartado del aeropuerto objetivo en la portada. Va arriba de la tabla
+       de eventos de camara porque contesta la pregunta del proyecto -que aviones
+       aterrizan y despegan de Aeroparque- mientras la tabla de abajo contesta
+       "que vio la camara", que es el medio y no el fin. -->
+  <div class="panel" id="apartado-apt" style="display:none"></div>
+
 
   <div class="cards">
     <div class="card landing"><div class="n">{{ counts.landing }}</div><div class="label">Landings</div></div>
@@ -183,6 +203,40 @@
       player.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   });
+</script>
+<script>
+// Solo el resumen: el detalle de cada operacion vive en /adsb/analisis. La
+// portada tiene que cargar rapido y contestar una cosa.
+(async () => {
+  let d;
+  try { d = (await (await fetch("/api/aeropuerto")).json()).airport; } catch (e) { return; }
+  if (!d) return;
+  const caja = document.getElementById("apartado-apt");
+  caja.style.display = "";
+  const alt = v => v === null || v === undefined ? "–" : Math.round(v).toLocaleString("es-AR");
+  // El aviso va PRIMERO. Leidos antes que el, los conteos se toman como
+  // medicion cuando pueden ser un artefacto de donde esta la antena.
+  const aviso = d.advertencia
+    ? `<div class="apt-aviso">${d.advertencia}</div>` : "";
+  caja.innerHTML = `
+    <h2 style="margin-bottom:12px">${d.nombre} (${d.codigo})</h2>
+    ${aviso}
+    <div class="apt-nums">
+      <div><b>${d.aterrizajes}</b><span>aterrizajes reales</span></div>
+      <div><b>${d.despegues}</b><span>despegues</span></div>
+      <div class="gris"><b>${d.aproximaciones}</b><span>aproximaciones sin resolver</span></div>
+      <div class="gris"><b>${d.frustradas}</b><span>motor y al aire</span></div>
+      <div class="gris"><b>${d.sobrevuelos}</b><span>sobrevuelos</span></div>
+    </div>
+    <p style="color:#9aa0a6;font-size:0.85rem;line-height:1.5;margin:12px 0 0">
+      Un aterrizaje se cuenta solo si la aeronave bajó de ${alt(d.umbral_suelo_ft)} ft sobre el
+      campo <em>y no volvió a subir</em>: eso es lo que separa un aterrizaje de un motor y al
+      aire, que baja igual. Lo más bajo visto sobre el campo:
+      <b>${alt(d.min_altitude_vista_ft)} ft</b>.
+      <a href="/adsb/analisis" style="color:#60a5fa">ver el detalle</a> ·
+      <a href="/adsb/mapa" style="color:#60a5fa">mapa</a>
+    </p>`;
+})();
 </script>
 </body>
 </html>

@@ -65,6 +65,21 @@ TOLERANCIA_RUMBO_DEG = 30.0
 # barometrica -que oscila decenas de pies- sin exigir un descenso completo.
 CAMBIO_MINIMO_FT = 300.0
 
+# Por debajo de cuantos pies SOBRE EL CAMPO se considera que la aeronave llego
+# al suelo. 300 ft no es el suelo, es el ultimo tramo donde ya no queda otra
+# cosa que hacer que aterrizar o irse al aire: un avion a 300 ft sobre la pista
+# alineado con ella esta comprometido con la maniobra. Se usa ese margen y no
+# cero porque la altitud ADS-B es barometrica y la ultima posicion recibida
+# antes del toque casi nunca es exactamente cero.
+UMBRAL_SUELO_FT = 300.0
+
+# Cuanto tiene que volver a subir DESPUES de haber bajado al umbral para que no
+# cuente como aterrizaje. Es la diferencia entre un aterrizaje y un motor y al
+# aire: los dos bajan igual, y lo unico que los separa es que uno se va. 800 ft
+# esta por encima de cualquier rebote o error barometrico y por debajo de
+# cualquier frustrada real, que gana miles de pies.
+REASCENSO_FT = 800.0
+
 
 # Aeroparque por defecto porque es el aeropuerto que este proyecto existe para
 # contar. Se cambia con ADSB_AIRPORT, y ADSB_AIRPORT=NINGUNO apaga la seccion.
@@ -97,13 +112,14 @@ class Operacion:
     def confirmada(self) -> bool:
         """Si se puede afirmar que opero aca, y no solo que paso cerca y bajo.
 
-        Alineada con una pista Y por debajo de 2000 ft. Las dos condiciones
-        juntas porque cada una sola deja pasar casos obvios: un avion alineado a
-        3500 ft todavia puede estar cruzando, y uno a 1000 ft sin alineacion
-        puede venir de otro aeropuerto cercano.
+        Un aterrizaje o despegue -no una aproximacion sin resolver ni una
+        frustrada- Y alineada con una pista. La alineacion hace falta porque
+        bajar al suelo dentro del cilindro no alcanza: a 8 km de Aeroparque
+        tambien esta el circuito de aviacion general, y un avion bajo pero
+        cruzado a la pista no esta operando en ella.
         """
-        return self.alineada and (self.min_altitude_ft is not None
-                                  and self.min_altitude_ft <= 2000.0)
+        return (self.tipo in ("aterrizaje", "despegue")
+                and self.alineada)
 
 
 @dataclass
@@ -123,15 +139,40 @@ class Informe:
     min_altitude_vista_ft: float | None = None
     posiciones_en_cilindro: int = 0
     aeronaves_en_cilindro: int = 0
+    elevacion_ft: float = 0.0
     sobrevuelos: int = 0           # entraron al cilindro sin subir ni bajar
+    # Aproximaciones que NO se pudieron resolver: venian bajando pero nunca se
+    # las vio lo bastante abajo para saber si llegaron. Se cuentan aparte de los
+    # aterrizajes a proposito -son el caso mas comun con la antena lejos- y su
+    # numero es la medida de cuanto le falta a la ubicacion actual.
+    aproximaciones_sin_resolver: int = 0
+    frustradas: int = 0            # bajaron al final y se volvieron a ir
+
+    def _cuantas(self, tipo: str) -> int:
+        return sum(1 for o in self.operaciones if o.tipo == tipo)
+
+    @property
+    def aterrizajes(self) -> int:
+        """Aterrizajes REALES: bajaron al suelo y no se volvieron a ir."""
+        return self._cuantas("aterrizaje")
+
+    @property
+    def despegues(self) -> int:
+        return self._cuantas("despegue")
+
+    @property
+    def operaciones_reales(self) -> int:
+        """Lo unico que se puede afirmar que paso en esta pista."""
+        return self.aterrizajes + self.despegues
 
     @property
     def aproximaciones(self) -> int:
-        return sum(1 for o in self.operaciones if o.tipo == "aproximacion")
+        """Bajaban, pero nunca se las vio lo bastante abajo. NO son aterrizajes."""
+        return self._cuantas("aproximacion")
 
     @property
     def salidas(self) -> int:
-        return sum(1 for o in self.operaciones if o.tipo == "salida")
+        return self._cuantas("salida")
 
     @property
     def confirmadas(self) -> int:
@@ -151,11 +192,18 @@ class Informe:
                     f"{self.radio_km:.0f} km y {self.techo_ft:.0f} ft sobre "
                     f"{self.codigo}. No es que no haya habido operaciones: es que "
                     "desde donde esta la antena no se reciben.")
+        if not self.operaciones_reales and self.aproximaciones:
+            return (f"Ningun aterrizaje ni despegue confirmado, y "
+                    f"{self.aproximaciones} aproximaciones que NO se pudieron "
+                    f"resolver: lo mas bajo que se vio sobre {self.codigo} fueron "
+                    f"{self.min_altitude_vista_ft:.0f} ft sobre el campo, y hasta "
+                    f"{UMBRAL_SUELO_FT:.0f} ft no se puede distinguir un aterrizaje "
+                    "de un motor y al aire. No es que no hayan aterrizado: es que "
+                    "desde aca no se ve el tramo que lo prueba.")
         if self.min_altitude_vista_ft is not None and self.min_altitude_vista_ft > 1500:
             return (f"Lo mas bajo que se vio sobre {self.codigo} fueron "
-                    f"{self.min_altitude_vista_ft:.0f} ft. La fase final no se "
-                    "recibe desde esta ubicacion, asi que estas son aproximaciones "
-                    "y salidas detectadas, no aterrizajes y despegues confirmados.")
+                    f"{self.min_altitude_vista_ft:.0f} ft sobre el campo. La fase "
+                    "final no se recibe desde esta ubicacion.")
         if not self.ve_la_pista:
             return (f"La pista de {self.codigo} esta a "
                     f"{self.distancia_receptor_km:.1f} km, mas que el horizonte de "
@@ -203,6 +251,38 @@ def _alineada(track: float | None, pistas: list[tuple[str, float]]) -> tuple[boo
     return (mejor_dif <= TOLERANCIA_RUMBO_DEG), (mejor if mejor_dif <= TOLERANCIA_RUMBO_DEG else None)
 
 
+def _clasificar(minima_agl: float, baja: float, sube: float) -> str:
+    """Que hizo la aeronave dentro del cilindro, con nombre propio.
+
+    La distincion que importa es aterrizaje contra intento de aterrizaje, y no
+    se puede hacer mirando solo cuanto bajo: un motor y al aire baja IGUAL que
+    un aterrizaje, hasta los mismos pies, y lo unico que los separa es que
+    despues se va. Por eso se mira el reascenso posterior al punto mas bajo.
+
+    Y hay un tercer caso que es el mas comun cuando la antena esta lejos: la
+    aeronave venia bajando pero nunca se la vio lo bastante abajo para saber si
+    llego. Eso NO es un aterrizaje y tampoco una frustrada: es una aproximacion
+    sin resolver, y se cuenta aparte. Meterla entre los aterrizajes seria
+    inventar operaciones que quizas no ocurrieron; descartarla en silencio seria
+    esconder que la antena no alcanza a verlas.
+    """
+    llego_al_suelo = minima_agl <= UMBRAL_SUELO_FT
+    if llego_al_suelo:
+        if sube >= REASCENSO_FT and baja >= CAMBIO_MINIMO_FT:
+            return "frustrada"       # bajo hasta el final y se volvio a ir
+        if baja >= CAMBIO_MINIMO_FT and sube < REASCENSO_FT:
+            return "aterrizaje"      # bajo y se quedo
+        if sube >= CAMBIO_MINIMO_FT and baja < CAMBIO_MINIMO_FT:
+            return "despegue"        # arranco abajo y se fue
+        return "en tierra"           # aparecio y quedo abajo, sin subir ni bajar
+    # Nunca se la vio lo bastante abajo: no se puede afirmar que aterrizo.
+    if baja >= CAMBIO_MINIMO_FT and baja >= sube:
+        return "aproximacion"
+    if sube >= CAMBIO_MINIMO_FT:
+        return "salida"
+    return "sobrevuelo"
+
+
 def informe(observations: list[Observation], codigo: str | None = None) -> Informe | None:
     """Atribuir operaciones a un aeropuerto. None si no se puede ubicar el codigo."""
     import aircraft_db
@@ -232,6 +312,13 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     )
 
     pistas = _rumbos_de_pista(codigo)
+    # La altitud ADS-B es barometrica sobre el nivel del mar; para saber si una
+    # aeronave toco hace falta su altura sobre LA PISTA. En Aeroparque son 16 ft
+    # y da casi igual, pero en Ezeiza son 64 y en un aeropuerto de altura la
+    # diferencia decide si un aterrizaje se cuenta o no.
+    import geografia
+    elevacion = geografia.ELEVACION_FT.get(codigo, 0.0)
+    inf.elevacion_ft = elevacion
 
     # Las posiciones de cada aeronave DENTRO del cilindro, en orden. Se guarda la
     # observacion entera y no solo la distancia: para decidir si bajaba o subia
@@ -250,21 +337,31 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     inf.posiciones_en_cilindro = sum(len(v) for v in dentro.values())
     inf.aeronaves_en_cilindro = len(dentro)
     if dentro:
-        inf.min_altitude_vista_ft = min(o.altitude_ft for v in dentro.values() for o, _ in v)
+        # Sobre EL CAMPO, no sobre el mar: es la altura que dice si se vio la
+        # fase final, y compararla contra un umbral en AGL exige que este en AGL.
+        inf.min_altitude_vista_ft = min(o.altitude_ft - elevacion
+                                        for v in dentro.values() for o, _ in v)
 
     for icao24, puntos in dentro.items():
-        alturas = [o.altitude_ft for o, _ in puntos]
-        # Aproximacion o salida segun DONDE cae el punto mas bajo: si esta al
-        # final, venia bajando; si esta al principio, se estaba yendo. Comparar
-        # solo el primero con el ultimo se equivoca con el avion que toca y
-        # vuelve a salir, que tiene el minimo en el medio.
+        # Altitudes SOBRE EL CAMPO, no sobre el nivel del mar: lo que decide si
+        # una aeronave toco es su altura sobre la pista.
+        alturas = [o.altitude_ft - elevacion for o, _ in puntos]
+        # El minimo se busca por indice y no comparando el primero con el
+        # ultimo: el avion que toca y vuelve a salir tiene el minimo en el
+        # medio, y comparar los extremos lo daria como sobrevuelo.
         i_min = alturas.index(min(alturas))
         baja = alturas[0] - alturas[i_min]
         sube = alturas[-1] - alturas[i_min]
-        if max(baja, sube) < CAMBIO_MINIMO_FT:
+        minima = alturas[i_min]
+
+        tipo = _clasificar(minima, baja, sube)
+        if tipo == "sobrevuelo":
             inf.sobrevuelos += 1
             continue
-        tipo = "aproximacion" if baja >= sube else "salida"
+        if tipo == "aproximacion":
+            inf.aproximaciones_sin_resolver += 1
+        elif tipo == "frustrada":
+            inf.frustradas += 1
 
         o_min, d_min = puntos[i_min]
         # El rumbo del punto mas bajo si lo trae; si no, el ultimo conocido de
@@ -295,8 +392,13 @@ def como_json(inf: Informe | None) -> dict | None:
         "distancia_receptor_km": inf.distancia_receptor_km,
         "horizonte_superficie_km": inf.horizonte_superficie_km,
         "ve_la_pista": inf.ve_la_pista,
+        "aterrizajes": inf.aterrizajes, "despegues": inf.despegues,
+        "operaciones_reales": inf.operaciones_reales,
         "aproximaciones": inf.aproximaciones, "salidas": inf.salidas,
+        "frustradas": inf.frustradas,
         "confirmadas": inf.confirmadas, "sobrevuelos": inf.sobrevuelos,
+        "elevacion_ft": inf.elevacion_ft,
+        "umbral_suelo_ft": UMBRAL_SUELO_FT,
         "min_altitude_vista_ft": inf.min_altitude_vista_ft,
         "posiciones_en_cilindro": inf.posiciones_en_cilindro,
         "aeronaves_en_cilindro": inf.aeronaves_en_cilindro,
@@ -336,11 +438,15 @@ if __name__ == "__main__":
     print(f"cilindro: {inf.radio_km:.0f} km de radio, {inf.techo_ft:.0f} ft de techo")
     print(f"  {inf.posiciones_en_cilindro} posiciones de {inf.aeronaves_en_cilindro} aeronaves")
     print(f"  altitud minima vista adentro: "
-          f"{inf.min_altitude_vista_ft if inf.min_altitude_vista_ft is not None else '-'} ft")
+          f"{inf.min_altitude_vista_ft if inf.min_altitude_vista_ft is not None else '-'} ft "
+          f"SOBRE EL CAMPO (elevacion {inf.elevacion_ft:.0f} ft)")
     print()
-    print(f"aproximaciones {inf.aproximaciones} | salidas {inf.salidas} | "
-          f"confirmadas por alineacion y altitud {inf.confirmadas} | "
-          f"sobrevuelos descartados {inf.sobrevuelos}")
+    print(f"ATERRIZAJES REALES {inf.aterrizajes} | despegues {inf.despegues} | "
+          f"confirmados por alineacion {inf.confirmadas}")
+    print(f"  sin resolver: {inf.aproximaciones} aproximaciones que bajaban pero "
+          f"nunca se vieron bajo {UMBRAL_SUELO_FT:.0f} ft sobre el campo")
+    print(f"  frustradas (motor y al aire) {inf.frustradas} | "
+          f"salidas sin resolver {inf.salidas} | sobrevuelos {inf.sobrevuelos}")
     if inf.advertencia:
         print(f"\n  OJO: {inf.advertencia}")
     if inf.operaciones:

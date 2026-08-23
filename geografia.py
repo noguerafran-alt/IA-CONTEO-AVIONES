@@ -121,11 +121,23 @@ COSTA_UY: list[tuple[float, float]] = [
 # Una entrada por pista, con los dos umbrales. El largo y el rumbo verdadero
 # vienen del mismo registro y se conservan para poder mostrarlos.
 PISTAS: list[dict] = [
-    {"apt": "SABE", "nombre": "13/31", "le": (-34.553902, -58.425098), "he": (-34.564499, -58.406101), "largo_m": 2350, "rumbo": 124.0},
-    {"apt": "SADF", "nombre": "5/23", "le": (-34.459801, -58.597099), "he": (-34.447399, -58.582802), "largo_m": 1801, "rumbo": 44.0},
-    {"apt": "SAEZ", "nombre": "11/29", "le": (-34.819099, -58.553501), "he": (-34.825401, -58.5182), "largo_m": 3300, "rumbo": 102.3},
-    {"apt": "SAEZ", "nombre": "17/35", "le": (-34.8083, -58.533901), "he": (-34.835201, -58.524601), "largo_m": 3105, "rumbo": 164.0},
+    {"apt": "SABE", "nombre": "13/31", "le": (-34.553902, -58.425098), "he": (-34.564499, -58.406101), "largo_m": 2350, "rumbo": 124.0, "elev_ft": 16},
+    {"apt": "SADF", "nombre": "5/23", "le": (-34.459801, -58.597099), "he": (-34.447399, -58.582802), "largo_m": 1801, "rumbo": 44.0, "elev_ft": 10},
+    {"apt": "SAEZ", "nombre": "11/29", "le": (-34.819099, -58.553501), "he": (-34.825401, -58.5182), "largo_m": 3300, "rumbo": 102.3, "elev_ft": 64},
+    {"apt": "SAEZ", "nombre": "17/35", "le": (-34.8083, -58.533901), "he": (-34.835201, -58.524601), "largo_m": 3105, "rumbo": 164.0, "elev_ft": 64},
 ]
+
+
+# Elevacion media del campo, en pies. Hace falta para saber que altitud
+# significa "en el suelo": la altitud ADS-B es barometrica sobre el nivel del
+# mar, no sobre la pista. En Aeroparque son 18 ft y da casi igual, pero en
+# Ezeiza son 64 y en un aeropuerto de altura la diferencia decide si un
+# aterrizaje se cuenta o no.
+ELEVACION_FT: dict[str, float] = {
+    "SABE": 16,
+    "SADF": 10,
+    "SAEZ": 64,
+}
 
 
 def como_json() -> dict:
@@ -135,7 +147,8 @@ def como_json() -> dict:
         "pistas": [
             {"apt": p["apt"], "nombre": p["nombre"],
              "le": list(p["le"]), "he": list(p["he"]),
-             "largo_m": p["largo_m"], "rumbo": p["rumbo"]}
+             "largo_m": p["largo_m"], "rumbo": p["rumbo"],
+             "elev_ft": p.get("elev_ft", 0)}
             for p in PISTAS
         ],
     }

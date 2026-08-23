@@ -195,6 +195,30 @@ def adsb_page(request: Request):
     return templates.TemplateResponse(request, "adsb.html", {})
 
 
+@app.get("/api/aeropuerto")
+def api_aeropuerto():
+    """Solo los conteos del aeropuerto objetivo, para el dashboard.
+
+    Endpoint aparte y no un campo de /api/adsb/analisis porque el dashboard no
+    necesita las 300 aeronaves ni la cobertura por campo: pedir todo eso para
+    mostrar cuatro numeros haria que la portada cargue como la pagina completa.
+    """
+    import aeropuerto
+    from adsb_events import load_db
+
+    db_path = ROOT / "adsb_log.db"
+    if not db_path.exists():
+        return JSONResponse({"airport": None})
+    observaciones, _ = load_db(str(db_path))
+    inf = aeropuerto.informe(observaciones)
+    datos = aeropuerto.como_json(inf)
+    if datos:
+        # La lista completa de operaciones no viaja: el dashboard muestra el
+        # resumen y el detalle esta en /adsb/analisis.
+        datos.pop("operaciones", None)
+    return JSONResponse({"airport": datos})
+
+
 @app.get("/api/adsb/status")
 def api_adsb_status():
     return JSONResponse(adsb_service.status())

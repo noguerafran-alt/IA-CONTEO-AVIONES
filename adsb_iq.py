@@ -59,6 +59,7 @@ Uso:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -86,6 +87,28 @@ DF_VERIFICABLES_POR_DIRECCION = frozenset((0, 4, 5, 11, 16, 20, 21))
 # dump1090 escala x360 -> round(sqrt(128^2+128^2)*360) = 65167, que entra justo
 # en uint16. Es el 0 dBFS de la escala.
 MAX_MAG = int(round((128 ** 2 + 128 ** 2) ** 0.5 * 360))
+
+# Ganancia del receptor en dB, o "auto". El default de 49.6 es el maximo del
+# R820T y es lo correcto CUANDO LA ANTENA ESTA LEJOS: cada dB cuenta para
+# alcanzar un avion a 70 km. Pegado a una pista es exactamente al revés y hay
+# que bajarla, porque el problema deja de ser oir poco y pasa a ser saturar.
+#
+# Medido a 13 km de Aeroparque con ganancia 49.6: picos de ruido a -3.9 dBFS,
+# con 0 dBFS siendo saturacion. O sea que a esa distancia ya se esta a 4 dB del
+# techo. A 300 m de la pista un avion llega unos 30 dB mas fuerte (la potencia
+# cae con el cuadrado de la distancia, y 13 km / 0.3 km son 43 veces, o sea
+# 33 dB), asi que con 49.6 se satura y se pierden mensajes: demasiada senal
+# decodifica PEOR que poca, que es contraintuitivo y cuesta un dia de pruebas
+# si nadie lo aviso.
+#
+# Con ADSB_GAIN=auto el dongle decide, que suele ser conservador y funciona
+# bien de cerca. Para medirlo en serio: mirar la columna de senal en /adsb y
+# bajar hasta que casi ningun mensaje pase de -6 dBFS.
+GANANCIA_DEFAULT = (os.environ.get("ADSB_GAIN") or "49.6").strip()
+
+# Por encima de este nivel un mensaje esta tan fuerte que probablemente el
+# receptor este recortando. Sirve para avisar que hay que bajar la ganancia.
+UMBRAL_SATURACION_DBFS = -6.0
 
 
 def _tabla_magnitud() -> np.ndarray:
@@ -298,12 +321,13 @@ def modular(hexa: str, amplitud: float = 1.0, ruido: float = 0.0,
     return iq
 
 
-def escuchar(exe: Path = DEFAULT_EXE, ganancia: str = "49.6",
+def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
              segundos_por_bloque: float = 0.5):
     """Generador de mensajes demodulados en vivo desde rtl_sdr.exe."""
     exe = Path(exe).resolve()
     if not exe.exists():
         raise FileNotFoundError(f"no se encontro {exe}")
+    ganancia = ganancia or GANANCIA_DEFAULT
     bytes_bloque = int(SAMPLE_RATE * segundos_por_bloque) * 2
     proceso = subprocess.Popen(
         [str(exe), "-f", str(FREQ_HZ), "-s", str(SAMPLE_RATE), "-g", ganancia, "-"],
@@ -345,7 +369,7 @@ class IqRecorder(RtlAdsbRecorder):
     Tener dos copias de la compuerta de aceptacion seria la peor duplicacion
     posible: dos reglas sobre que datos entran, capaces de divergir en silencio.
     """
-    ganancia: str = "49.6"
+    ganancia: str = GANANCIA_DEFAULT
     segundos_por_bloque: float = 0.5
 
     def start(self) -> "IqRecorder":
@@ -384,7 +408,8 @@ if __name__ == "__main__":
     parser.add_argument("--escuchar", action="store_true", help="demodular en vivo")
     parser.add_argument("--probar", action="store_true", help="autoverificacion sin antena")
     parser.add_argument("--exe", type=Path, default=DEFAULT_EXE)
-    parser.add_argument("--ganancia", default="49.6")
+    parser.add_argument("--ganancia", default=GANANCIA_DEFAULT,
+                        help="dB, o 'auto'. Bajala si estas cerca de la pista.")
     args = parser.parse_args()
 
     if args.probar:
