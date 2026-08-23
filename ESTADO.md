@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con la interpolación de matrículas probada y descartada.
+Última actualización: 2026-08-23, con el registro COMPLETO de OpenSky importado.
 
 ---
 
@@ -210,6 +210,31 @@ de país lo caza**), y `a88552` decía `N680XP` y era `N6480G` (los dos EEUU →
 chequeo NO lo caza**, por eso las `N-` se excluyen). Quedan 4/4 en el patrón
 `LV`, con **n=4**: se informa como *probable*, nunca como confirmada, y en la
 interfaz va con punteado y el origen en el tooltip.
+
+**El registro que importa es el export COMPLETO de OpenSky, no el de
+`data-samples`.** Son dos datasets distintos y la diferencia es grande. Medido
+sobre tráfico real de esta antena:
+
+| tráfico | con `data-samples` | con el completo |
+|---|---|---|
+| ≥10 mensajes | 61% | **89%** |
+| ≥50 mensajes | 60% | **90%** |
+| operaciones de Aeroparque | 1 de 8 | **6 de 8** |
+
+Los que faltaban eran los aviones matriculados hace poco —bloques `e8 06 1x–3x`
+de JetSMART, `0c…` de Copa— que ningún snapshot viejo tiene. Chequeo de regresión
+sobre las 331 aeronaves creíbles: **+39 ganadas, 1 perdida** (`3935e2`, francesa,
+2 mensajes). Y el modelo mejora: "Airbus A321-271NX" en vez de "737NG 8SH/W".
+
+Se importa con `python aircraft_db.py --desde <csv>`. **El archivo se baja a mano**
+de <https://opensky-network.org/datasets/metadata/> porque pide sesión; no se
+puede automatizar sin credenciales. Tres cosas rompían el importador viejo y están
+resueltas: el encabezado viene entre **comillas simples** (sin sacarlas, todas las
+columnas salen vacías y no hay un solo error que lo delate), los nombres están en
+**camelCase**, y el campo `notes` **pasa los 131 072 bytes** que el módulo `csv`
+permite por defecto. Y **hay que parar el servidor antes**: mantiene la base
+abierta y en Windows el archivo no se puede reemplazar en uso — el error ahora
+dice eso y avisa que el `.tmp` quedó listo para no reimportar.
 
 **Interpolar la matrícula desde la dirección: PROBADA Y DESCARTADA.** No por
 mala, sino porque el balance no cierra — y conviene no reintentarla.
