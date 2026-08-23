@@ -72,6 +72,10 @@
   .ventana button { background: #262a33; color: #e6e6e6; border: 0; border-radius: 6px;
                     padding: 6px 12px; font-size: 0.82rem; cursor: pointer; }
   .ventana button:hover { background: #333947; }
+  /* Lo inferido se distingue de lo leido del registro. No se esconde -- es el
+     dato que llena el 47% que el registro no tiene -- pero tampoco se disfraza
+     de dato duro: lleva punteado abajo y el origen en el tooltip. */
+  .inferido { border-bottom: 1px dotted #6b7280; cursor: help; }
   .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.76rem; }
 </style>
 </head>

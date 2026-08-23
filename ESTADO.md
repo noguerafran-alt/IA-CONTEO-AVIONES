@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con la ganancia de campo medida (20, no `auto`).
+Última actualización: 2026-08-23, con la identidad inferida del distintivo.
 
 ---
 
@@ -195,6 +195,35 @@ saturación total, y saturar hace *perder* mensajes. `MEDIR-EN-AEROPARQUE.bat`
 fija **20** por eso. Si entran pocas aeronaves y la saturación figura en 0%,
 subirla — el panel de señal de `/adsb` es el instrumento.
 
+**La aerolínea sale del distintivo; la matrícula casi nunca.** `JES3104` es un
+número de vuelo, no un avión, y ese vínculo no viaja por radio. Pero los tres
+primeros caracteres **sí** son el designador ICAO del operador, y eso recupera
+mucho: medido, **133 operadores por distintivo contra 17 por registro** — casi
+ocho veces más. La tabla se deriva del propio registro de OpenSky
+(`operator_icao`, 41 403 filas, 1458 designadores), no de una lista a mano.
+
+La matrícula desde el distintivo solo aplica a **aviación general**, que la usa
+*como* distintivo (`LVHCQ` → `LV-HCQ`). Validado contra los casos con verdad
+conocida: **6 casos, 4 aciertos**. Los 2 fallos definieron las reglas: `a01de4`
+decía `LVKCV` y era `N1064B` (bloque `a0`=EEUU vs `LV`=Argentina → **el chequeo
+de país lo caza**), y `a88552` decía `N680XP` y era `N6480G` (los dos EEUU → **el
+chequeo NO lo caza**, por eso las `N-` se excluyen). Quedan 4/4 en el patrón
+`LV`, con **n=4**: se informa como *probable*, nunca como confirmada, y en la
+interfaz va con punteado y el origen en el tooltip.
+
+**Un vuelo puede aparecer bajo varias direcciones y hay que fusionarlo.** Medido:
+de 190 distintivos, **18 aparecen bajo más de una dirección**, con 33 secundarias.
+Ocho están a **un bit** de la fuerte (`e0b198` y `e8b198`), pero el resto a 9–15
+bits, así que la distancia de bits solo explica 8 de 33. Lo que vale para todas es
+el desbalance: la secundaria tiene **1–5 mensajes** y la real **130–238**. Por eso
+se resuelve por dominancia (factor 3), no por bits.
+
+**La identidad se resuelve sobre el historial completo, no sobre el cilindro.**
+El distintivo viaja en el 3% de los mensajes y casi nunca cae justo dentro del
+cilindro de operaciones: resolviéndola solo con lo de adentro, las 8 operaciones
+de Aeroparque salían con `VUELO -` y `MATRICULA -` aunque el distintivo se
+conociera perfectamente. Ahora salen JAT734, JES3104, TAM8141, SKU536…
+
 **Más ganancia no es mejor.** Lejos cada dB alcanza un avión más lejano; pegado a
 la pista el receptor satura y se pierden mensajes. Medido: con ganancia 30 desde
 San Isidro la mediana cae a −33,5 dBFS y entra **una** aeronave en 70 s, contra
@@ -363,6 +392,7 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `receiver.py` | dónde está la antena, horizonte de radio, distancias |
 | `geografia.py` | costa del Río de la Plata y pistas reales, con su fuente |
 | `aeropuerto.py` | atribuir operaciones a UN aeropuerto |
+| `identidad.py` | todo lo que se puede saber de cada vuelo, con su procedencia |
 | `test_adsb_position.py` | 8 escenarios de posición y CRC |
 | `test_adsb_incremental.py` | el cursor no pierde ni repite filas, y da igual que `load_db` |
 | `webapp/bajar_plotly.py` | baja Plotly una vez |

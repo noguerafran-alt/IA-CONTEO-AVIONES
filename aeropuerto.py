@@ -101,6 +101,16 @@ class Operacion:
     callsign: str | None = None
     registration: str | None = None
     aircraft_type: str | None = None
+    # De donde salio cada dato de identidad. No es adorno: "LV-KEJ (registro)" y
+    # "LV-KDI (probable, del distintivo)" son afirmaciones de fuerza muy distinta,
+    # y mostrarlas iguales hace que la buena pierda credibilidad con la dudosa.
+    registration_source: str | None = None
+    # El operador es lo que MAS gana con la inferencia: 133 por distintivo contra
+    # 17 por registro. Para contar operaciones por aerolinea alcanza, aunque no
+    # diga que avion fisico es.
+    operator: str | None = None
+    operator_source: str | None = None
+    operator_code: str | None = None
     min_altitude_ft: float | None = None
     min_distance_km: float | None = None
     track_deg: float | None = None
@@ -389,7 +399,8 @@ def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[d
 
 
 def informe_desde_resumen(por_icao: dict, posiciones: int,
-                          codigo: str | None = None) -> Informe | None:
+                          codigo: str | None = None,
+                          identidades: dict | None = None) -> Informe | None:
     """La mitad de informe() que CLASIFICA. Ver resumir_cilindro()."""
     import aircraft_db
     import receiver
@@ -416,6 +427,17 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
         horizonte_superficie_km=round(horizonte, 1),
         ve_la_pista=(dist_receptor is not None and dist_receptor <= horizonte),
     )
+
+    # La identidad se resuelve sobre el historial COMPLETO de cada aeronave y no
+    # sobre el resumen del cilindro. Es la diferencia entre saber el vuelo y no
+    # saberlo: el distintivo viaja en el 3% de los mensajes y casi nunca cae
+    # justo dentro del cilindro, asi que resolviendo solo con lo de adentro la
+    # columna VUELO salia vacia incluso para aviones cuyo distintivo se conocia
+    # perfectamente. Quien llama pasa las identidades ya resueltas; si no las
+    # pasa, se cae al resumen del cilindro, que es peor pero no miente.
+    import identidad
+    if identidades is None:
+        identidades = identidad.resolver_desde_resumen(por_icao)
 
     pistas = _rumbos_de_pista(codigo)
     # La altitud ADS-B es barometrica sobre el nivel del mar; para saber si una
@@ -454,12 +476,24 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
         # cilindro no se busca: el rumbo de crucero no dice nada sobre la
         # alineacion con una pista.
         alineada, pista = _alineada(r["track"], pistas)
-        entry = aircraft_db.lookup(icao24) if aircraft_db.available() else None
+        # La identidad sale de identidad.py y no de un lookup pelado al registro:
+        # ese lookup deja sin operador al 47% del trafico real de esta antena
+        # -las direcciones que OpenSky no tiene- y el distintivo, que el avion SI
+        # transmite, lo resuelve. Medido: 133 operadores por distintivo contra 17
+        # por registro.
+        ident = identidades.get(icao24)
         inf.operaciones.append(Operacion(
             icao24=icao24, tipo=tipo, timestamp=r["min_t"],
-            callsign=r["callsign"],
-            registration=(entry or {}).get("registration") or None,
-            aircraft_type=aircraft_db.describe_type(entry) if entry else None,
+            # El distintivo del historial completo, con el del cilindro como
+            # respaldo: r["callsign"] solo tiene lo que llego DENTRO del
+            # cilindro, y el distintivo viaja en el 3% de los mensajes.
+            callsign=((ident.callsign if ident else None) or r["callsign"]),
+            registration=(ident.registration if ident else None),
+            registration_source=(ident.registration_source if ident else None),
+            aircraft_type=(ident.aircraft_type if ident else None),
+            operator=(ident.operator if ident else None),
+            operator_source=(ident.operator_source if ident else None),
+            operator_code=(ident.operator_code if ident else None),
             min_altitude_ft=r["min_alt"], min_distance_km=round(r["min_d"], 2),
             track_deg=r["track"], pista=pista, alineada=alineada, posiciones=r["n"],
         ))
@@ -480,7 +514,9 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     if cilindro is None:
         return None
     por_icao, posiciones = resumir_cilindro(observations, cilindro)
-    return informe_desde_resumen(por_icao, posiciones, cilindro["codigo"])
+    import identidad
+    return informe_desde_resumen(por_icao, posiciones, cilindro["codigo"],
+                                 identidad.resolver(observations))
 
 
 def como_json(inf: Informe | None) -> dict | None:
@@ -507,6 +543,9 @@ def como_json(inf: Informe | None) -> dict | None:
             {"icao24": o.icao24, "tipo": o.tipo, "timestamp": o.timestamp,
              "callsign": o.callsign, "registration": o.registration,
              "aircraft_type": o.aircraft_type,
+             "registration_source": o.registration_source,
+             "operator": o.operator, "operator_source": o.operator_source,
+             "operator_code": o.operator_code,
              "min_altitude_ft": o.min_altitude_ft, "min_distance_km": o.min_distance_km,
              "track_deg": o.track_deg, "pista": o.pista, "alineada": o.alineada,
              "confirmada": o.confirmada, "posiciones": o.posiciones}

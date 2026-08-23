@@ -1259,9 +1259,17 @@ class LectorIncremental:
         if self._cache_informe[0] == clave:
             return self._cache_informe[1]
         import aeropuerto
+        # Las identidades salen de self.aviones -el acumulador GLOBAL, que ve
+        # todos los mensajes- y no de cil_por_icao, que solo tiene lo de adentro
+        # del cilindro. El distintivo viaja en el 3% de los mensajes y casi nunca
+        # cae justo ahi.
+        import identidad
+        identidades = identidad.resolver_desde_resumen(
+            {a.icao24: {"n": len(a.puntos) // 6 or 1, "callsign": a.callsign}
+             for a in self.aviones.values()})
         inf = aeropuerto.informe_desde_resumen(
             self.cil_por_icao, self.cil_posiciones,
-            codigo or self.cilindro["codigo"])
+            codigo or self.cilindro["codigo"], identidades)
         self._cache_informe = (clave, inf)
         return inf
 

@@ -51,6 +51,10 @@
           font-size: 0.87rem; line-height: 1.55; background: #171a20; color: #c9ced6; }
   .diag.ok { border-left-color: #34d399; }
   .diag.no { border-left-color: #9aa0a6; }
+  /* Lo inferido se distingue de lo leido del registro. No se esconde -- es el
+     dato que llena el 47% que el registro no tiene -- pero tampoco se disfraza
+     de dato duro: lleva punteado abajo y el origen en el tooltip. */
+  .inferido { border-bottom: 1px dotted #6b7280; cursor: help; }
   .conf { color: #34d399; font-weight: 600; }
   .card.ruido .n { color: #9aa0a6; }
   .barra { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle;
@@ -232,8 +236,17 @@ function pintarAeropuerto(apt) {
     <tr>
       <td><span class="chip ${o.tipo === "aproximacion" ? "aterrizo" : "despego"}">${o.tipo}</span></td>
       <td class="ident">${o.callsign || '<span class="muted">–</span>'}</td>
-      <td class="matri">${o.registration || '<span class="muted">–</span>'}</td>
+      <td class="matri">${o.registration
+          ? (o.registration_source && o.registration_source.startsWith("distintivo")
+             ? `<span class="inferido" title="probable: el distintivo parece ser la matrícula, y el país del ICAO24 concuerda. No confirmada por el registro.">${o.registration} ?</span>`
+             : o.registration)
+          : '<span class="muted">–</span>'}</td>
       <td>${o.aircraft_type || '<span class="muted">–</span>'}</td>
+      <td>${o.operator
+          ? (o.operator_source === "distintivo"
+             ? `<span class="inferido" title="inferido del distintivo de vuelo${o.operator_code ? " (" + o.operator_code + ")" : ""}, no leído del registro">${o.operator}</span>`
+             : o.operator)
+          : '<span class="muted">–</span>'}</td>
       <td class="num mono">${alt(o.min_altitude_ft)}</td>
       <td class="num mono">${o.min_distance_km} km</td>
       <td class="num mono">${o.track_deg === null || o.track_deg === undefined
@@ -271,7 +284,7 @@ function pintarAeropuerto(apt) {
       umbrales reales, no de la designación.
     </p>
     ${filas ? `<div class="table-wrap" style="margin-top:14px"><table>
-      <thead><tr><th>Tipo</th><th>Vuelo</th><th>Matrícula</th><th>Avión</th>
+      <thead><tr><th>Tipo</th><th>Vuelo</th><th>Matrícula</th><th>Avión</th><th>Operador</th>
         <th class="num">Alt. mín</th><th class="num">Dist.</th><th class="num">Rumbo</th>
         <th>Pista</th><th>Estado</th><th>Cuándo</th></tr></thead>
       <tbody>${filas}</tbody></table></div>`
