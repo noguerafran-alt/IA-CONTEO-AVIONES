@@ -290,6 +290,11 @@ def api_adsb_analysis():
         # sabe si la antena recibio poco, si se recorto el radio, o si se
         # filtro ruido.
         "receiver_name": __import__("receiver").RECEIVER_NAME,
+        # El apartado de UN aeropuerto. Se calcula sobre las mismas
+        # observaciones que el resto del informe -no se vuelve a leer la base-
+        # para que las dos mitades de la pagina hablen del mismo conjunto.
+        "airport": __import__("aeropuerto").como_json(
+            __import__("aeropuerto").informe(observaciones)),
         "analysis_radius_km": info["analysis_radius_km"],
         "within_radius": info["within_radius"],
         "outside_radius": info["outside_radius"],

@@ -44,6 +44,15 @@
 
   /* Cobertura: la barra hace visible de un vistazo la diferencia entre
      "cuantos mensajes traen el campo" y "cuantas aeronaves terminan con el". */
+  /* El diagnostico de visibilidad va en verde o en gris segun se pueda o no
+     contar operaciones desde esta ubicacion. No en rojo: no es un error del
+     sistema, es una limitacion fisica de donde esta puesta la antena. */
+  .diag { border-left: 3px solid #4b5563; border-radius: 6px; padding: 11px 15px;
+          font-size: 0.87rem; line-height: 1.55; background: #171a20; color: #c9ced6; }
+  .diag.ok { border-left-color: #34d399; }
+  .diag.no { border-left-color: #9aa0a6; }
+  .conf { color: #34d399; font-weight: 600; }
+  .card.ruido .n { color: #9aa0a6; }
   .barra { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle;
            background: #60a5fa; min-width: 2px; }
   .barra.aviones { background: #34d399; }
@@ -99,6 +108,8 @@
        filtro fisico. Son dos cosas distintas y confundirlas hace que la pagina
        mienta: el recorte es una eleccion, el filtro corrige datos imposibles. -->
   <div class="alcance" id="alcance"></div>
+
+  <div class="panel" id="apartado-aeropuerto" style="display:none"></div>
 
   <div class="panel">
     <h2>Qué trae cada campo</h2>
@@ -185,6 +196,86 @@ function pintarAeronaves(filtro = "") {
     <td>${chipEstado(a.phase)}</td>
     <td class="mono">${hora(a.last_seen)}</td>
   </tr>`).join("");
+}
+
+// El apartado de UN aeropuerto: que aviones operaron ahi, separado de todo lo
+// que la antena escucha de paso. La antena oye cualquier cosa que vuele cerca y
+// la mayoria no aterriza ni despega de ningun lado, asi que sin este filtro
+// "300 aeronaves" no dice nada sobre el aeropuerto.
+function pintarAeropuerto(apt) {
+  const caja = document.getElementById("apartado-aeropuerto");
+  if (!apt) { caja.style.display = "none"; return; }
+  caja.style.display = "";
+
+  const alt = v => v === null || v === undefined ? "–"
+                 : Math.round(v).toLocaleString("es-AR") + " ft";
+  const hora = ts => new Date(ts * 1000).toLocaleString("es-AR",
+                       {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+  // El diagnostico de si desde aca se PUEDE contar operaciones va arriba de los
+  // numeros, no debajo: leidos primero, los conteos se toman como medicion.
+  const vePista = apt.ve_la_pista;
+  const diag = `
+    <div class="diag ${vePista ? "ok" : "no"}">
+      La pista de <b>${apt.codigo}</b> está a <b>${apt.distancia_receptor_km} km</b> de la
+      antena, y el horizonte de radio a un avión <em>en la pista</em> es
+      <b>${apt.horizonte_superficie_km} km</b>:
+      ${vePista
+        ? "los aviones en la pista <b>sí</b> se escuchan desde acá."
+        : "los aviones en la pista <b>no</b> se escuchan desde acá — quedan tapados por la curvatura de la Tierra."}
+    </div>`;
+
+  const aviso = apt.advertencia
+    ? `<div class="aviso" style="margin:14px 0 0">${apt.advertencia}</div>` : "";
+
+  const filas = (apt.operaciones || []).map(o => `
+    <tr>
+      <td><span class="chip ${o.tipo === "aproximacion" ? "aterrizo" : "despego"}">${o.tipo}</span></td>
+      <td class="ident">${o.callsign || '<span class="muted">–</span>'}</td>
+      <td class="matri">${o.registration || '<span class="muted">–</span>'}</td>
+      <td>${o.aircraft_type || '<span class="muted">–</span>'}</td>
+      <td class="num mono">${alt(o.min_altitude_ft)}</td>
+      <td class="num mono">${o.min_distance_km} km</td>
+      <td class="num mono">${o.track_deg === null || o.track_deg === undefined
+          ? '<span class="muted">–</span>' : Math.round(o.track_deg) + "°"}</td>
+      <td>${o.pista ? o.pista : '<span class="muted">sin alinear</span>'}</td>
+      <td>${o.confirmada
+          ? '<span class="conf">confirmada</span>'
+          : '<span class="muted" title="hace falta estar alineada con una pista y por debajo de 2000 ft">sin confirmar</span>'}</td>
+      <td class="mono">${hora(o.timestamp)}</td>
+    </tr>`).join("");
+
+  caja.innerHTML = `
+    <h2>${apt.nombre} (${apt.codigo}) — solo lo que operó acá</h2>
+    ${diag}
+    <div class="cards" style="margin:18px 0 0">
+      <div class="card"><div class="n">${apt.aproximaciones}</div><div class="label">Aproximaciones</div>
+        <div class="sub">venían bajando</div></div>
+      <div class="card"><div class="n">${apt.salidas}</div><div class="label">Salidas</div>
+        <div class="sub">venían subiendo</div></div>
+      <div class="card matricula"><div class="n">${apt.confirmadas}</div><div class="label">Confirmadas</div>
+        <div class="sub">alineadas y bajo 2000 ft</div></div>
+      <div class="card ruido"><div class="n">${apt.sobrevuelos}</div><div class="label">Sobrevuelos</div>
+        <div class="sub">entraron sin subir ni bajar</div></div>
+    </div>
+    ${aviso}
+    <p class="nota">
+      Se cuenta lo que entró en un cilindro de <b>${apt.radio_km} km</b> de radio y
+      <b>${apt.techo_ft} ft</b> de techo sobre el aeropuerto: ${apt.posiciones_en_cilindro}
+      posiciones de ${apt.aeronaves_en_cilindro} aeronaves. Lo más bajo que se vio adentro
+      fueron <b>${alt(apt.min_altitude_vista_ft)}</b> — ese número es el que dice si esto
+      son operaciones o sobrevuelos, así que va siempre a la vista.
+      Una operación se marca <span class="conf">confirmada</span> solo si la aeronave estaba
+      alineada con una pista <em>y</em> por debajo de 2000 ft; cada condición sola deja pasar
+      casos obvios. El rumbo sale del que el avión transmite, y las pistas de sus dos
+      umbrales reales, no de la designación.
+    </p>
+    ${filas ? `<div class="table-wrap" style="margin-top:14px"><table>
+      <thead><tr><th>Tipo</th><th>Vuelo</th><th>Matrícula</th><th>Avión</th>
+        <th class="num">Alt. mín</th><th class="num">Dist.</th><th class="num">Rumbo</th>
+        <th>Pista</th><th>Estado</th><th>Cuándo</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>`
+    : '<p class="nota">Ninguna operación atribuida todavía.</p>'}`;
 }
 
 async function cargar() {
@@ -295,6 +386,7 @@ async function cargar() {
        Isidro, a 7 km de San Fernando y 13 km de Aeroparque, y a esa distancia el
        horizonte y los edificios tapan la vista a un avión en el suelo.`) + alcance;
 
+  pintarAeropuerto(datos.airport);
   pintarAeronaves();
 }
 
