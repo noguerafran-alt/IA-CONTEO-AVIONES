@@ -351,6 +351,27 @@ recién asignados. Se ve el **vuelo** (ARG1403) casi siempre; el **avión físic
 
 ---
 
+## El glosario de columnas sale de la misma lista que las columnas
+
+`/aeropuerto` tiene 21 columnas en tres grupos, y varias no se entienden solas:
+una altitud **negativa** en la pista, una matrícula que no se transmite, una
+alineación «sin confirmar» que no significa que la operación no ocurrió.
+
+La explicación de cada una vive en el campo `ayuda` de `COLUMNAS`, junto al
+título y a la celda. De ahí salen **las tres cosas**: el `title` del encabezado
+(la explicación aparece donde está la duda), el panel «Qué es cada columna», y
+los `colspan` de la fila de grupos. Un glosario escrito aparte se queda
+describiendo columnas que ya no existen, que es peor que no tenerlo.
+
+Los `colspan` estaban escritos a mano en `7/7/7`. Agregar una columna los
+desalineaba **sin que nada fallara**, y una tabla con los grupos corridos afirma
+que un número es de la operación cuando es de toda la historia de la aeronave.
+Ahora se cuentan de `COLUMNAS`, y una columna sin `g` válido hace que la fila
+diga *«columnas sin grupo: X»* en vez de pintarse corrida — probado en el
+navegador agregando una columna huérfana.
+
+---
+
 ## Ver los datos desde otra PC
 
 Se graba en **disco local** (`C:\adsb-datos\`) y se **publica** una copia a una

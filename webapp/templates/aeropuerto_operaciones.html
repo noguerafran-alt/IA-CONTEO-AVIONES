@@ -24,6 +24,22 @@
   .card.gris { background: #171a20; }
 
   .panel { background: #1a1d24; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
+
+  /* Glosario de columnas. En dos columnas cuando entra: son 21 entradas y en
+     una sola tira queda una lista larguisima que nadie recorre. */
+  #panel-glosario summary { cursor: pointer; list-style: none; }
+  #panel-glosario summary::-webkit-details-marker { display: none; }
+  #panel-glosario summary h2 { display: inline; }
+  #panel-glosario summary::after { content: " ▾"; color: #6b7280; }
+  #panel-glosario[open] summary::after { content: " ▴"; }
+  #glosario { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 22px; }
+  .grupo-ayuda h3 { font-size: 0.82rem; color: #e6e6e6; text-transform: uppercase;
+                    letter-spacing: 0.05em; margin: 0 0 2px; }
+  .grupo-ayuda .grupo-sub { color: #6b7280; font-size: 0.8rem; margin: 0 0 10px; }
+  .grupo-ayuda dl { margin: 0; }
+  .grupo-ayuda dt { color: #60a5fa; font-size: 0.85rem; font-weight: 600; margin-top: 10px; }
+  .grupo-ayuda dd { margin: 2px 0 0; color: #9aa0a6; font-size: 0.85rem; line-height: 1.5; }
+  .grupo-ayuda dd b { color: #c9ced6; }
   .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 10px 0 0; }
   .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
            padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 18px; }
@@ -105,16 +121,23 @@
              aeropuerto, y todo lo que se escucho de esa aeronave en cualquier
              lugar. Sin la fila de grupo, "Alt. mín" aparece dos veces con
              valores distintos y parece un error. -->
-        <tr>
-          <th class="grupo" colspan="7">La aeronave</th>
-          <th class="grupo" colspan="7">La operación (dentro del cilindro de este aeropuerto)</th>
-          <th class="grupo" colspan="7">Todo lo escuchado de ella, en cualquier lugar</th>
-        </tr>
+        <tr id="grupos"></tr>
         <tr id="encabezados"></tr>
       </thead>
       <tbody id="tabla"><tr><td colspan="21" class="empty">Cargando…</td></tr></tbody>
     </table>
   </div>
+
+  <!-- Abierto de entrada y no plegado: la pregunta "que es cada columna" se hace
+       la primera vez que alguien mira la tabla, y un panel cerrado hay que saber
+       que existe para abrirlo. Se pliega despues, cuando ya no hace falta. -->
+  <details class="panel" id="panel-glosario" open style="margin-top:20px">
+    <summary><h2>Qué es cada columna</h2></summary>
+    <p class="nota" style="margin-bottom:14px">
+      También aparece al apoyar el mouse sobre el título de cualquier columna.
+    </p>
+    <div id="glosario"></div>
+  </details>
 
   <div class="panel" style="margin-top:20px">
     <h2>Qué significa cada número</h2>
@@ -132,22 +155,44 @@ const hora = ts => ts === null || ts === undefined ? nada
                  : new Date(ts * 1000).toLocaleString("es-AR",
                      {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
 
-// Las columnas se declaran una vez: el encabezado, el orden y la celda salen de
-// la misma lista, asi que no puede quedar un titulo apuntando a otra columna.
-// `v` es el valor con el que se ORDENA (numero o texto) y `td` como se pinta.
+// Las columnas se declaran una vez: el encabezado, el orden, la celda, EL GRUPO
+// al que pertenece y la explicacion salen de la misma lista, asi que no puede
+// quedar un titulo apuntando a otra columna ni una ayuda describiendo una que ya
+// no existe. `v` es el valor con el que se ORDENA (numero o texto), `td` como se
+// pinta, `g` a que grupo pertenece y `ayuda` que significa.
+//
+// Los colspan de la fila de grupos tambien se cuentan de aca. Estaban escritos a
+// mano en 7/7/7: agregar una columna los desalineaba sin que nada fallara, y una
+// tabla con los grupos corridos afirma que un numero es de la operacion cuando
+// en realidad es de toda la historia de la aeronave.
+const GRUPOS = [
+  {g: "aeronave",  t: "La aeronave",
+   sub: "Qué avión es. No cambia según dónde estuvo."},
+  {g: "operacion", t: "La operación (dentro del cilindro de este aeropuerto)",
+   sub: "Solo lo que pasó adentro del cilindro de este aeropuerto."},
+  {g: "historia",  t: "Todo lo escuchado de ella, en cualquier lugar",
+   sub: "Toda la historia de la aeronave, que casi siempre ocurre lejos del aeropuerto."},
+];
+
 const COLUMNAS = [
-  {k: "icao24",    t: "ICAO24",     v: o => o.icao24, td: o => `<td class="mono">${o.icao24}</td>`},
-  {k: "callsign",  t: "Vuelo",      v: o => o.callsign || "",
+  {k: "icao24",    t: "ICAO24",     g: "aeronave", v: o => o.icao24,
+   ayuda: "La dirección única del transpondedor, en hexadecimal. Es lo <b>único que el avión transmite siempre</b>: todo lo demás de este grupo se deduce a partir de ella.",
+   td: o => `<td class="mono">${o.icao24}</td>`},
+  {k: "callsign",  t: "Vuelo",      g: "aeronave", v: o => o.callsign || "",
+   ayuda: "El distintivo que carga la tripulación. Es <b>el vuelo, no el avión</b>: mañana ese mismo número lo puede hacer otra aeronave.",
    td: o => `<td class="ident">${o.callsign || nada}</td>`},
-  {k: "registration", t: "Matrícula", v: o => o.registration || "",
+  {k: "registration", t: "Matrícula", g: "aeronave", v: o => o.registration || "",
+   ayuda: "La matrícula del avión. <b>No viaja por radio</b>: sale de buscar el ICAO24 en el registro local. Si aparece con <b>?</b> y subrayada de puntos, se dedujo del distintivo y no está confirmada por el registro.",
    td: o => `<td class="matri">${o.registration
         ? (o.registration_source && o.registration_source.startsWith("distintivo")
            ? `<span class="inferido" title="probable: el distintivo parece ser la matrícula y el país del ICAO24 concuerda. No confirmada por el registro.">${o.registration} ?</span>`
            : o.registration)
         : nada}</td>`},
-  {k: "aircraft_type", t: "Avión",  v: o => o.aircraft_type || "",
+  {k: "aircraft_type", t: "Avión",  g: "aeronave", v: o => o.aircraft_type || "",
+   ayuda: "Modelo según el Doc 8643 de la OACI, buscado por el ICAO24 en el registro. Tampoco se transmite.",
    td: o => `<td>${o.aircraft_type || nada}</td>`},
-  {k: "operator",  t: "Operador",   v: o => o.operator || "",
+  {k: "operator",  t: "Operador",   g: "aeronave", v: o => o.operator || "",
+   ayuda: "La aerolínea. Si está subrayada de puntos se <b>infirió del prefijo del distintivo</b> (ARG → Aerolíneas Argentinas), no se leyó del registro.",
    td: o => `<td>${o.operator
         ? (o.operator_source === "distintivo"
            ? `<span class="inferido" title="inferido del distintivo de vuelo${o.operator_code ? " (" + o.operator_code + ")" : ""}, no leído del registro">${o.operator}</span>`
@@ -155,60 +200,119 @@ const COLUMNAS = [
         : nada}</td>`},
   // Motores y estela salen del Doc 8643 de la OACI, por tipo de avion. La
   // estela no es adorno: define la separacion minima en aproximacion.
-  {k: "motores",   t: "Motores",    v: o => o.motores === null ? -1 : o.motores,
+  {k: "motores",   t: "Motores",    g: "aeronave", v: o => o.motores === null ? -1 : o.motores,
+   ayuda: "Cuántos motores y de qué tipo, del Doc 8643 de la OACI.",
    td: o => `<td class="num">${o.motores === null || o.motores === undefined ? nada
         : o.motores + (o.tipo_motor ? " " + o.tipo_motor.toLowerCase() : "")}</td>`},
-  {k: "estela",    t: "Estela",     v: o => o.estela || "",
+  {k: "estela",    t: "Estela",     g: "aeronave", v: o => o.estela || "",
+   ayuda: "Categoría de turbulencia de estela: <b>L</b>ight, <b>M</b>edium, <b>H</b>eavy, <b>J</b> (A380). No es un adorno: <b>define la separación mínima</b> que hay que darle al que viene atrás en aproximación.",
    td: o => `<td>${o.estela
         ? `<span title="${o.estela_texto || ""}">${o.estela}</span>` : nada}</td>`},
 
-  {k: "tipo",      t: "Qué hizo",   v: o => o.tipo,
+  {k: "tipo",      t: "Qué hizo",   g: "operacion", v: o => o.tipo,
+   ayuda: "Cómo quedó clasificada la operación. Esta tabla trae solo <b>aterrizaje</b> y <b>despegue</b>; las otras categorías (motor y al aire, en tierra, sobrevuelo, aproximación o salida sin resolver) son las tarjetas de arriba.",
    td: o => `<td><span class="chip ${o.tipo}">${o.tipo}</span></td>`},
-  {k: "timestamp", t: "Cuándo",     v: o => o.timestamp,
+  {k: "timestamp", t: "Cuándo",     g: "operacion", v: o => o.timestamp,
+   ayuda: "El momento de la operación, no el de la última vez que se escuchó a la aeronave.",
    td: o => `<td class="mono">${hora(o.timestamp)}</td>`},
   // La altitud del punto mas bajo DENTRO del cilindro. Cuando de la aeronave
   // solo llegaron mensajes de superficie no hay ninguna altitud medida, y
   // publicar un 0 seria publicar el placeholder como si fuera medicion.
-  {k: "min_altitude_ft", t: "Alt. mín acá", v: o => o.min_altitude_ft === null ? -99999 : o.min_altitude_ft,
+  {k: "min_altitude_ft", t: "Alt. mín acá", g: "operacion",
+   v: o => o.min_altitude_ft === null ? -99999 : o.min_altitude_ft,
+   ayuda: "El punto más bajo <b>dentro del cilindro</b>. <b>Los negativos no son un error</b>: es altitud de presión referida a 1013,25 hPa, no altura sobre la pista. Con la QNH alta del 23/08 un avión <em>en</em> la pista transmitía unos −315 ft. Ver la nota de abajo.",
    td: o => `<td class="num mono">${o.min_altitude_ft === null || o.min_altitude_ft === undefined
         ? '<span class="muted" title="de esta aeronave solo llegaron mensajes de superficie, que por formato no traen altitud">sin altitud</span>'
         : num(o.min_altitude_ft, " ft")}</td>`},
-  {k: "min_distance_km", t: "Dist. a la pista", v: o => o.min_distance_km,
+  {k: "min_distance_km", t: "Dist. a la pista", g: "operacion", v: o => o.min_distance_km,
+   ayuda: "Lo más cerca que pasó del <b>aeropuerto</b>. Ojo: es a la pista, no a la antena — el grupo de la derecha tiene las distancias a la antena, y son cosas distintas.",
    td: o => `<td class="num mono">${dist(o.min_distance_km)}</td>`},
-  {k: "pista",     t: "Pista",      v: o => o.pista || "",
+  {k: "pista",     t: "Pista",      g: "operacion", v: o => o.pista || "",
+   ayuda: "Qué pista usó, nombrada por sus <b>dos umbrales reales</b> (13/31) y no por la designación. <em>Sin alinear</em> = el rumbo no coincidió con ninguna cabecera.",
    td: o => `<td>${o.pista ? o.pista : '<span class="muted">sin alinear</span>'}</td>`},
-  {k: "confirmada", t: "Alineación", v: o => (o.confirmada ? 1 : 0),
+  {k: "confirmada", t: "Alineación", g: "operacion", v: o => (o.confirmada ? 1 : 0),
+   ayuda: "<b>Confirmada</b> = quedó clasificada como aterrizaje o despegue <b>y</b> su rumbo cayó dentro de ±30° de una cabecera. <em>Sin confirmar</em> = falló una de las dos, o no transmitió rumbo. No quiere decir que la operación no ocurrió: quiere decir que no se pudo atribuir a una pista.",
    td: o => `<td>${o.confirmada ? '<span class="conf">confirmada</span>'
         : '<span class="muted" title="quedó clasificada como aterrizaje o despegue, pero su rumbo no cayó dentro de la tolerancia de ninguna cabecera (o no transmitió rumbo)">sin confirmar</span>'}</td>`},
   // Las dos evidencias, separadas: un mensaje de superficie (TC 5-8 / BDS 0,6)
   // dice que el avion declara estar en el suelo, y eso es mas fuerte que una
   // altitud barometrica baja comparada contra un umbral.
-  {k: "posiciones", t: "Posiciones acá", v: o => o.posiciones,
+  {k: "posiciones", t: "Posiciones acá", g: "operacion", v: o => o.posiciones,
+   ayuda: "Cuántas posiciones se recibieron dentro del cilindro. El número verde entre paréntesis son las de <b>superficie</b>: el avión <em>declarando</em> que está en el suelo. Es la evidencia más fuerte de que llegó a la pista, más que una altitud baja comparada contra un umbral.",
    td: o => `<td class="num mono">${o.posiciones}${o.posiciones_superficie
         ? ` <span class="conf" title="posiciones de SUPERFICIE: el avión declaró estar en el suelo. Es la evidencia más fuerte de que llegó a la pista.">(${o.posiciones_superficie} en superficie)</span>` : ""}</td>`},
 
-  {k: "min_altitude_ft_total", t: "Alt. mín total", v: o => o.min_altitude_ft_total,
+  {k: "min_altitude_ft_total", t: "Alt. mín total", g: "historia", v: o => o.min_altitude_ft_total,
+   ayuda: "La altitud más baja que se le escuchó <b>en cualquier lugar</b>. Puede ser menor que «Alt. mín acá» si bajó en otro aeropuerto.",
    td: o => `<td class="num mono">${num(o.min_altitude_ft_total, " ft")}</td>`},
-  {k: "max_altitude_ft", t: "Alt. máx", v: o => o.max_altitude_ft,
+  {k: "max_altitude_ft", t: "Alt. máx", g: "historia", v: o => o.max_altitude_ft,
+   ayuda: "Lo más alto que se le escuchó. Casi siempre en crucero, lejos del aeropuerto.",
    td: o => `<td class="num mono">${num(o.max_altitude_ft, " ft")}</td>`},
-  {k: "max_speed_kt", t: "Vel. máx", v: o => o.max_speed_kt,
+  {k: "max_speed_kt", t: "Vel. máx", g: "historia", v: o => o.max_speed_kt,
+   ayuda: "Velocidad respecto del suelo más alta que transmitió, en nudos.",
    td: o => `<td class="num mono">${num(o.max_speed_kt, " kt")}</td>`},
-  {k: "min_distance_receptor_km", t: "Dist. mín a la antena", v: o => o.min_distance_receptor_km,
+  {k: "min_distance_receptor_km", t: "Dist. mín a la antena", g: "historia", v: o => o.min_distance_receptor_km,
+   ayuda: "Lo más cerca que pasó <b>de la antena</b>, no del aeropuerto. Es la que dice qué tan bien se lo pudo escuchar.",
    td: o => `<td class="num mono">${dist(o.min_distance_receptor_km, 1)}</td>`},
-  {k: "max_distance_receptor_km", t: "Dist. máx a la antena", v: o => o.max_distance_receptor_km,
+  {k: "max_distance_receptor_km", t: "Dist. máx a la antena", g: "historia", v: o => o.max_distance_receptor_km,
+   ayuda: "Lo más lejos que se lo escuchó. Leída sobre todas las filas, es el <b>alcance real medido</b> de la antena.",
    td: o => `<td class="num mono">${dist(o.max_distance_receptor_km, 1)}</td>`},
-  {k: "messages",  t: "Msjs",       v: o => o.messages,
+  {k: "messages",  t: "Msjs",       g: "historia", v: o => o.messages,
+   ayuda: "Cuántos mensajes se le recibieron en total. Pocos mensajes = todo lo demás de esta fila se apoya en poca evidencia.",
    td: o => `<td class="num mono">${num(o.messages)}</td>`},
-  {k: "last_seen", t: "Última vez", v: o => o.last_seen,
+  {k: "last_seen", t: "Última vez", g: "historia", v: o => o.last_seen,
+   ayuda: "La última vez que se escuchó a esta aeronave, haya estado donde haya estado.",
    td: o => `<td class="mono">${hora(o.last_seen)}</td>`},
 ];
 
 let OPS = [], TIPO = "", ORDEN = "timestamp", DESC = true, APT = null;
 
+// El texto de `ayuda` va como title del encabezado: la explicacion aparece
+// donde esta la duda, sin bajar al glosario.
 function pintarEncabezados() {
   document.getElementById("encabezados").innerHTML = COLUMNAS.map(c =>
     `<th class="orden ${c.k === ORDEN ? "activo" : ""} ${c.t.match(/mín|máx|Vel|Msjs|Motores|Posiciones|Dist/) ? "num" : ""}"
-         data-k="${c.k}">${c.t}${c.k === ORDEN ? (DESC ? " ↓" : " ↑") : ""}</th>`).join("");
+         data-k="${c.k}" title="${textoPlano(c.ayuda)}">${c.t}${c.k === ORDEN ? (DESC ? " ↓" : " ↑") : ""}</th>`).join("");
+}
+
+// Los <b> y <em> de la ayuda sirven en el glosario pero en un title= se verian
+// como etiquetas literales.
+function textoPlano(html) {
+  return (html || "").replace(/<[^>]+>/g, "").replace(/"/g, "&quot;");
+}
+
+// La fila de grupos se cuenta de COLUMNAS y no se escribe a mano. Si una columna
+// quedara sin `g` -o con uno que no esta en GRUPOS- los colspan no sumarian y la
+// tabla afirmaria que un numero es de la operacion cuando es de otra cosa; por
+// eso se avisa en vez de pintar una tabla corrida.
+function pintarGrupos() {
+  const fila = document.getElementById("grupos");
+  const huerfanas = COLUMNAS.filter(c => !GRUPOS.some(g => g.g === c.g));
+  if (huerfanas.length) {
+    fila.innerHTML = `<th class="grupo" colspan="${COLUMNAS.length}">`
+      + `columnas sin grupo: ${huerfanas.map(c => c.t).join(", ")}</th>`;
+    return;
+  }
+  fila.innerHTML = GRUPOS.map(g => {
+    const cuantas = COLUMNAS.filter(c => c.g === g.g).length;
+    return cuantas ? `<th class="grupo" colspan="${cuantas}">${g.t}</th>` : "";
+  }).join("");
+}
+
+// El glosario sale de la misma lista que la tabla: una columna nueva aparece
+// aca sola, y una que se borra desaparece. Un glosario escrito aparte se queda
+// describiendo columnas que ya no existen, que es peor que no tenerlo.
+function pintarGlosario() {
+  document.getElementById("glosario").innerHTML = GRUPOS.map(g => {
+    const columnas = COLUMNAS.filter(c => c.g === g.g);
+    if (!columnas.length) return "";
+    return `<div class="grupo-ayuda">
+      <h3>${g.t}</h3>
+      <p class="grupo-sub">${g.sub}</p>
+      <dl>${columnas.map(c => `<dt>${c.t}</dt><dd>${c.ayuda
+        || '<span class="muted">sin explicación — falta la <code>ayuda</code> en COLUMNAS</span>'}</dd>`).join("")}</dl>
+    </div>`;
+  }).join("");
 }
 
 function pintar() {
@@ -333,6 +437,10 @@ async function cargar() {
   pintarTarjetas(apt, d.excluidas);
 
   OPS = d.operaciones || [];
+  // Los grupos y el glosario no dependen de los datos, solo de COLUMNAS: se
+  // pintan una vez y no en cada reordenamiento como los encabezados.
+  pintarGrupos();
+  pintarGlosario();
   pintarEncabezados();
   pintar();
 
