@@ -18,8 +18,8 @@ REM Desde donde mide el sistema. Sin esto el servidor cae en el preset por
 REM defecto (San Isidro) y cada distancia, anillo del mapa y alcance que
 REM publiquen las paginas queda referido a un lugar que ya no existe -- fue
 REM exactamente lo que paso el 23/08 arrancando con este archivo. Ver
-REM ubicacion-antena.bat, que es donde se cambia si la antena se muda.
-call "%~dp0ubicacion-antena.bat"
+REM configuracion.bat, que es donde se cambia si la antena se muda.
+call "%~dp0configuracion.bat"
 
 echo Iniciando el servidor del dashboard...
 echo   midiendo desde: %ADSB_RECEIVER%

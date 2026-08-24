@@ -15,7 +15,7 @@ Aeroparque por todos lados:
   siguen medidos desde ahí y no se pueden reinterpretar.
 - **San Isidro sigue siendo el valor por defecto del código.** Un proceso que
   arranque sin `ADSB_RECEIVER` mide desde el lugar equivocado sin fallar. Por eso
-  los lanzadores llaman a `ubicacion-antena.bat`, único lugar donde se define, y
+  los lanzadores llaman a `configuracion.bat`, único lugar donde se define, y
   las cinco páginas muestran la franja de `webapp/static/franja_receptor.js`.
 
 ## Al terminar un cambio: actualizar ESTADO.md

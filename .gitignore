@@ -55,3 +55,10 @@ tools/aircraft_types.sqlite
 # Respaldos de mediciones: son datos, no codigo. El de Aeroparque del 2026-08-23
 # es irrepetible sin volver a ir con la antena.
 respaldos/
+
+# La base ya no vive en el repo: se graba en disco local (ADSB_DB) y se publica
+# una copia quieta a la carpeta compartida con publicar_datos.py. Tenerla aca
+# ademas la ponia dentro de OneDrive, que es justo donde SQLite no puede estar.
+adsb_log.db
+adsb_log.db-wal
+adsb_log.db-shm

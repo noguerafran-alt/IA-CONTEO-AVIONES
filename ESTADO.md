@@ -102,8 +102,10 @@ Todas documentadas en `.env.example`. Ninguna es secreta (no van en `.env`).
 
 | variable | default | para qué |
 |---|---|---|
-| `ADSB_RECEIVER` | `san-isidro` | dónde está la antena. Acepta `ypf`, `lat,lon` o código ICAO. **No se pone a mano**: se define en `ubicacion-antena.bat`, que llaman los cuatro lanzadores. El valor por defecto ya no es dónde está la antena |
+| `ADSB_RECEIVER` | `san-isidro` | dónde está la antena. Acepta `ypf`, `lat,lon` o código ICAO. **No se pone a mano**: se define en `configuracion.bat`, que llaman los cuatro lanzadores. El valor por defecto ya no es dónde está la antena |
 | `ADSB_ANTENNA_M` | del preset | altura de la antena. **Decide si se ven aviones en pista** |
+| `ADSB_DB` | `C:\adsb-datos\adsb_log.db` | dónde graba. **En disco local, nunca en OneDrive** |
+| `ADSB_COMPARTIDO` | `%OneDrive%\ADSB-AEROPARQUE` | carpeta donde se **publica** la copia para las otras PC |
 | `ADSB_GAIN` | `49.6` | ganancia del receptor, o `auto`. Solo para la fuente IQ |
 | `ADSB_AIRPORT` | `SABE` | qué aeropuerto contar. `NINGUNO` apaga el apartado |
 | `ADSB_AIRPORT_RADIUS_KM` | `8` | radio del cilindro de operaciones |
@@ -349,6 +351,63 @@ recién asignados. Se ve el **vuelo** (ARG1403) casi siempre; el **avión físic
 
 ---
 
+## Ver los datos desde otra PC
+
+Se graba en **disco local** (`C:\adsb-datos\`) y se **publica** una copia a una
+carpeta de OneDrive. No al revés, y no es una preferencia:
+
+**Por qué la base no puede vivir en OneDrive.** Abre en WAL, así que en todo
+momento son tres archivos que valen solo juntos:
+
+| archivo | qué tiene |
+|---|---|
+| `adsb_log.db` | lo ya consolidado |
+| `adsb_log.db-wal` | lo recién escrito, sin integrar |
+| `adsb_log.db-shm` | el índice de bloqueos entre procesos |
+
+OneDrive no sabe que los tres son **un** objeto: sube cada uno cuando cambia,
+por separado. Un `.db` sincronizado sin el `-wal` que le corresponde no queda
+visiblemente incompleto — queda **corrupto**, y lo dice recién cuando alguien lo
+lee. Y el `-shm` es justamente el mecanismo con que SQLite evita que dos
+procesos se pisen: **no cruza la red**, así que con dos PC abriendo la misma
+base las dos creen tener el candado.
+
+**Lo que sí es seguro** es publicar un volcado *quieto*: un archivo consolidado
+que nadie tiene abierto. Eso hace `publicar_datos.py`, con tres cuidados que no
+son decorativos:
+
+- **API de backup de SQLite, no copiar el archivo.** Con WAL activo hay filas
+  que viven solo en el `-wal`; una copia de archivo no las ve y sale incompleta
+  sin avisar.
+- **Escribe a `.parcial` y recién ahí renombra.** Escribir directo deja segundos
+  con el archivo a medias, y OneDrive sincroniza justo eso. El renombrado en la
+  misma carpeta es atómico.
+- **Cuenta las filas del destino, no del origen**, y corre `integrity_check`.
+  Contar el origen y suponer que la copia salió igual es como se publica una
+  base corrupta creyendo que está completa.
+
+Quedan tres archivos en la carpeta compartida: la base, un CSV (se abre con
+Excel sin instalar nada) y `estado.json` con **de cuándo son los datos y desde
+dónde se midieron**. Ese manifiesto no es adorno: la PC que mira ve una *foto*,
+y una foto sin fecha se lee como el estado actual. La ubicación del receptor
+sale de ahí y no del preset local — si la PC que mira usara el suyo, mostraría
+distancias medidas desde un lugar donde nunca hubo una antena.
+
+| dónde | qué se ejecuta |
+|---|---|
+| PC de Aeroparque (graba) | `PUBLICAR-DATOS.bat` — republica cada 5 min, se deja abierto |
+| La otra PC (solo mira) | `VER-DATOS-COMPARTIDOS.bat` — copia a disco local y abre el dashboard |
+
+Verificado de punta a punta el 2026-08-24: la PC que mira lee la copia publicada
+y ve **371 aeronaves, 18 950 mensajes, 161 matrículas, 30 operaciones**, midiendo
+desde Aeroparque y no desde su propio valor por defecto.
+
+**Si hace falta tiempo real** en vez de una foto, el camino es otro: la PC que
+graba sirve el dashboard en la red y la otra entra por `http://<IP>:8000`. Nada
+se copia, no hay nada que corromper. Requiere red común o VPN, y no está armado.
+
+---
+
 ## Un bug ya arreglado que vale recordar
 
 **Nueve horas midiendo desde el lugar equivocado.** El 2026-08-23 la antena ya
@@ -362,7 +421,7 @@ Por qué se pudo dar, y qué lo cierra:
 
 | causa | arreglo |
 |---|---|
-| La ubicación vivía **solo** en el entorno del proceso; ningún archivo del repo la escribía | `ubicacion-antena.bat`: **único** lugar donde se define. Lo llaman `dashboard.bat`, `MEDIR-EN-AEROPARQUE.bat`, `GRABAR-ADSB.bat` e `INSTALAR-Y-EJECUTAR.bat` |
+| La ubicación vivía **solo** en el entorno del proceso; ningún archivo del repo la escribía | `configuracion.bat`: **único** lugar donde se define. Lo llaman `dashboard.bat`, `MEDIR-EN-AEROPARQUE.bat`, `GRABAR-ADSB.bat` e `INSTALAR-Y-EJECUTAR.bat` |
 | De un servidor ya levantado no se podía saber desde dónde medía | `GET /api/receptor` + la franja en las cinco páginas |
 | `/adsb/mapa` era la única que nombraba al receptor, **y avisaba al revés**: pintaba el cartel solo si `is_default` era `false`, o sea que se callaba justo en el modo de falla | Reemplazado por la franja compartida. La versión **por defecto es la ruidosa** (roja): si nadie eligió, eso es lo que hay que gritar |
 | Dos copias de `set ADSB_RECEIVER` se habrían desincronizado | Una sola definición, llamada con `call` |
@@ -502,7 +561,9 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `test_adsb_incremental.py` | el cursor no pierde ni repite filas, y da igual que `load_db` |
 | `webapp/bajar_plotly.py` | baja Plotly una vez |
 | `webapp/static/franja_receptor.js` | la franja de «desde dónde se mide», igual en las cinco páginas |
-| `ubicacion-antena.bat` | **único** lugar donde se define dónde está la antena; lo llaman los cuatro lanzadores |
+| `configuracion.bat` | **único** lugar donde se define dónde está la antena y dónde viven los datos |
+| `publicar_datos.py` | publica un volcado quieto (base + CSV + manifiesto) a la carpeta compartida |
+| `mostrar_publicado.py` | lee el manifiesto: de cuándo son los datos y desde dónde se midieron |
 
 Los cuatro archivos de test pasan: `test_adsb.py`, `test_adsb_events.py`,
 `test_adsb_position.py`, `test_adsb_incremental.py`.

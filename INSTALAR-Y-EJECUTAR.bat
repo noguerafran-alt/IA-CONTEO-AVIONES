@@ -151,8 +151,8 @@ if not exist "tools\aircraft_db.sqlite" (
 REM ---------- 6. Arrancar ----------
 echo [5/5] Iniciando el dashboard...
 REM Desde donde mide el sistema: sin esto cae en el preset por defecto (San
-REM Isidro) y publica distancias referidas a otro lugar. Ver ubicacion-antena.bat.
-call "%~dp0ubicacion-antena.bat"
+REM Isidro) y publica distancias referidas a otro lugar. Ver configuracion.bat.
+call "%~dp0configuracion.bat"
 echo       Midiendo desde: %ADSB_RECEIVER%
 set "LISTO="
 start "IA-CONTEO-AVIONES - servidor" /min "%VPY%" -m uvicorn main:app --app-dir webapp --host 127.0.0.1 --port 8000

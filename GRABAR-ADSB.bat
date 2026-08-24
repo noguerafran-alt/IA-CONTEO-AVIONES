@@ -25,8 +25,8 @@ echo   Por defecto se conecta al feed SBS-1 en 127.0.0.1:30003
 echo.
 
 REM Desde donde se mide. Lo que se grabe con la ubicacion equivocada queda mal
-REM para siempre: las distancias se calculan al guardar. Ver ubicacion-antena.bat.
-call "%~dp0ubicacion-antena.bat"
+REM para siempre: las distancias se calculan al guardar. Ver configuracion.bat.
+call "%~dp0configuracion.bat"
 echo Midiendo desde: %ADSB_RECEIVER%
 
 ".venv\Scripts\python.exe" adsb_record.py %*

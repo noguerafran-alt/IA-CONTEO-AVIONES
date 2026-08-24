@@ -39,11 +39,11 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-REM La ubicacion ya no se fija aca: salio a ubicacion-antena.bat para que este
+REM La ubicacion ya no se fija aca: salio a configuracion.bat para que este
 REM archivo y dashboard.bat no puedan discrepar. Eran dos copias de la misma
 REM linea y la de dashboard.bat directamente faltaba, que es como el 23/08 se
 REM midieron nueve horas desde San Isidro con la antena ya en Aeroparque.
-call "%~dp0ubicacion-antena.bat"
+call "%~dp0configuracion.bat"
 
 REM Ganancia automatica y no 49.6. El maximo del R820T es lo correcto LEJOS;
 REM pegado a la pista satura y se pierden mensajes. Medido en la otra punta:
