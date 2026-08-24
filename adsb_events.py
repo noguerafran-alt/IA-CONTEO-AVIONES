@@ -43,7 +43,7 @@ from bisect import bisect_right as _bisect_right
 from bisect import insort as _insort
 from dataclasses import dataclass, field, replace
 
-from adsb import Observation
+from adsb import Observation, es_altitud_de_superficie
 
 try:
     import aircraft_db as _aircraft_db
@@ -362,6 +362,31 @@ class PositionGate:
     # que R1c nunca corrio con trafico real. Un contador en 0 que nadie sabe que
     # nunca se ejercito es una mentira por omision, y por eso se publica aparte.
     superficie_evaluadas: int = 0
+    # DETECTOR DE ANTENA MAL UBICADA. Un blanco apoyado en el pavimento no puede
+    # llegar de mas lejos que el horizonte de radio al suelo: no hay altitud que
+    # lo levante sobre la curvatura. Asi que una posicion de SUPERFICIE que
+    # llega desde mas lejos que horizonte_km(0) no dice "dato malo", dice "la
+    # antena no esta donde dice la configuracion".
+    #
+    # Medido sobre adsb_log.db (779 posiciones de superficie aceptadas, 30
+    # aeronaves): con el receptor por defecto (San Isidro, antena 10 m,
+    # horizonte al suelo 13.04 km) 498 de ellas, de 27 aeronaves distintas,
+    # llegan desde 12.23-14.52 km -- imposibles. Con ADSB_RECEIVER=aeroparque
+    # (3 m, 7.14 km) son 0, peor caso 0.48x del horizonte; con ypf (160 m,
+    # 52.16 km) tambien 0, peor caso 0.16x. El detector separa perfecto.
+    #
+    # NO se rechazan: la posicion es dato real y lo que esta mal es la config.
+    # Se CUENTAN, porque nada se descarta ni se acepta en silencio -- y hasta
+    # hoy /api/adsb/status publicaba rejected_by_reason.horizonte=0 mientras
+    # entraban esas 498.
+    #
+    # Y NO se aplica MARGEN_DUCTING=1.35: esta citado de PiAware para un blanco
+    # a 45000 ft (496.0 km de horizonte), y el ducting troposferico no mete en
+    # linea de vista algo que esta en el suelo. Al ras seria perdonar 4.6 km
+    # sobre 13.0, mas que el peor caso medido del error de sitio (1.11x).
+    superficie_fuera_de_horizonte: int = 0
+    superficie_fuera_max_km: float | None = None
+    _superficie_fuera_icaos: set = field(default_factory=set, repr=False)
 
     def feed(self, observation: Observation) -> str | None:
         """Evalua una observacion y devuelve el motivo de rechazo, o None.
@@ -404,6 +429,18 @@ class PositionGate:
         # sin que cambie nada real.
         if on_ground:
             self.superficie_evaluadas += 1
+            # El horizonte al suelo se evalua ACA y no en la rama de vuelo:
+            # la de superficie miraba SOLO la media celda CPR (83.5 km, 6.4x el
+            # horizonte de superficie), asi que el limite geometrico de un
+            # blanco apoyado en el pavimento no se comparaba nunca. Ver
+            # superficie_fuera_de_horizonte.
+            horizonte_suelo = horizonte_km(0)
+            if km > horizonte_suelo:
+                self.superficie_fuera_de_horizonte += 1
+                self._superficie_fuera_icaos.add(o.icao24)
+                if (self.superficie_fuera_max_km is None
+                        or km > self.superficie_fuera_max_km):
+                    self.superficie_fuera_max_km = km
             fuera_de_celda = (abs(o.latitude - self.ref[0]) > MEDIA_CELDA_CPR_LAT_DEG
                               or km > MEDIA_CELDA_CPR_KM)
             if fuera_de_celda:
@@ -498,6 +535,27 @@ class PositionGate:
         return len(self.rechazos)
 
     @property
+    def superficie_fuera_de_horizonte_aeronaves(self) -> int:
+        return len(self._superficie_fuera_icaos)
+
+    @property
+    def antena_no_esta_donde_dice(self) -> bool:
+        """Si las posiciones de superficie contradicen la ubicacion configurada.
+
+        Umbral: al menos una posicion imposible de al menos 3 aeronaves
+        distintas. El ">0" es geometria y no un ajuste -- para un blanco
+        apoyado en el pavimento el horizonte 4/3 es la linea. El piso de 3
+        aeronaves sale de la medicion: el caso real fueron 27 de 30 aeronaves,
+        o sea 9x de margen contra "fue un decode raro".
+
+        Lo que NO se puede afirmar con esto es DONDE esta la antena: descarta
+        la ubicacion configurada, y con las mismas posiciones quedan varias
+        compatibles (medido: aeroparque e ypf las dos dan 0 imposibles).
+        """
+        return (self.superficie_fuera_de_horizonte > 0
+                and self.superficie_fuera_de_horizonte_aeronaves >= 3)
+
+    @property
     def resumen(self) -> str:
         """Una linea para el CLI y el dashboard, en el estilo de EventDetector."""
         detalle = ", ".join(f"{k} {v}" for k, v in self.por_motivo.items() if v)
@@ -561,6 +619,22 @@ def imprimir_rechazos(gate: PositionGate) -> str:
         # posicion, que es justamente por que esta regla nunca corrio.
         lineas.append("    regla de superficie: SIN EJERCITAR "
                       "(0 de las posiciones evaluadas venia con on_ground)")
+    else:
+        # El cero va SIEMPRE: es la unica forma de distinguir "ninguna posicion
+        # de superficie llego de mas lejos que el horizonte al suelo" de "eso
+        # no se mira". Ver PositionGate.superficie_fuera_de_horizonte.
+        h = horizonte_km(0)
+        n = gate.superficie_fuera_de_horizonte
+        lineas.append(
+            f"    superficie: {gate.superficie_evaluadas} posiciones evaluadas, "
+            f"{n} de mas lejos que el horizonte al suelo ({h:.1f} km)"
+            + (f", de {gate.superficie_fuera_de_horizonte_aeronaves} aeronaves "
+               f"distintas, la peor a {gate.superficie_fuera_max_km:.1f} km" if n else ""))
+        if gate.antena_no_esta_donde_dice:
+            lineas.append(
+                "    OJO: un avion apoyado en el pavimento no puede llegar de mas "
+                "lejos que ese horizonte. LA ANTENA NO ESTA DONDE DICE LA "
+                "CONFIGURACION (revisar ADSB_RECEIVER y ADSB_ANTENNA_M).")
     return "\n".join(lineas)
 
 
@@ -651,6 +725,23 @@ def coverage_report(observations: list[Observation],
         # Distinto de "sin rechazos": la regla de superficie no corrio nunca.
         # Ver PositionGate.superficie_evaluadas.
         "surface_rule_exercised": bool(gate is not None and gate.superficie_evaluadas),
+        # --- la antena contra su propia configuracion ----------------------
+        # Estas cuatro salen del lado REFERENCIADO AL RECEPTOR, que es el unico
+        # lado donde puede salir: el cilindro de operaciones se define alrededor
+        # del AEROPUERTO, asi que ningun conteo de aterrizajes o despegues
+        # contiene informacion sobre donde esta la antena (medido: los conteos
+        # son identicos con y sin ADSB_RECEIVER). Ver
+        # PositionGate.superficie_fuera_de_horizonte.
+        "surface_evaluated": (gate.superficie_evaluadas if gate is not None else 0),
+        "surface_beyond_horizon": (gate.superficie_fuera_de_horizonte
+                                   if gate is not None else 0),
+        "surface_beyond_horizon_aircraft": (
+            gate.superficie_fuera_de_horizonte_aeronaves if gate is not None else 0),
+        "surface_beyond_horizon_max_km": (
+            round(gate.superficie_fuera_max_km, 2)
+            if gate is not None and gate.superficie_fuera_max_km is not None else None),
+        "surface_horizon_km": round(horizonte_km(0), 2),
+        "receiver_misplaced": bool(gate is not None and gate.antena_no_esta_donde_dice),
         "gate_applied": gate is not None,
     }
 
@@ -1117,15 +1208,29 @@ class LectorIncremental:
         r = self.cil_por_icao.get(o.icao24)
         if r is None:
             r = self.cil_por_icao[o.icao24] = {
-                "n": 0, "primera_alt": o.altitude_ft, "ultima_alt": o.altitude_ft,
-                "min_alt": o.altitude_ft, "min_t": o.timestamp, "min_d": d,
-                "track": None, "callsign": None}
+                "n": 0, "primera_alt": None, "ultima_alt": None,
+                "min_alt": None, "min_t": o.timestamp, "min_d": d,
+                "track": None, "callsign": None, "superficie": 0}
         r["n"] += 1
+        # Igual que aeropuerto.resumir_cilindro, y por la misma razon: el 0.0 de
+        # los mensajes de superficie no es una altitud medida y restarlo contra
+        # una barometrica fabrica descensos. Los dos acumuladores tienen que dar
+        # el MISMO dict -- test_adsb_incremental compara como_json() de las dos
+        # rutas campo por campo.
+        if es_altitud_de_superficie(o.altitude_ft):
+            r["superficie"] += 1
+            if o.track_deg is not None:
+                r["track"] = o.track_deg
+            if o.callsign:
+                r["callsign"] = o.callsign.strip()
+            return
+        if r["primera_alt"] is None:
+            r["primera_alt"] = o.altitude_ft
         r["ultima_alt"] = o.altitude_ft
         # Estricto y no <=: informe() usa alturas.index(min(alturas)), que
         # devuelve el PRIMER indice del minimo. Con <= se quedaria con el
         # ultimo empate y cambiarian el timestamp y la distancia publicados.
-        if o.altitude_ft < r["min_alt"]:
+        if r["min_alt"] is None or o.altitude_ft < r["min_alt"]:
             r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
         if o.track_deg is not None:
             r["track"] = o.track_deg
@@ -1160,6 +1265,18 @@ class LectorIncremental:
                                 if rechazos else None),
             "rejected_detail": [r.as_dict() for r in rechazos],
             "surface_rule_exercised": bool(self.gate.superficie_evaluadas),
+            # Salen del gate, que es el mismo objeto en las dos rutas: por eso
+            # no hay dos implementaciones que puedan divergir. Ver
+            # coverage_report().
+            "surface_evaluated": self.gate.superficie_evaluadas,
+            "surface_beyond_horizon": self.gate.superficie_fuera_de_horizonte,
+            "surface_beyond_horizon_aircraft":
+                self.gate.superficie_fuera_de_horizonte_aeronaves,
+            "surface_beyond_horizon_max_km": (
+                round(self.gate.superficie_fuera_max_km, 2)
+                if self.gate.superficie_fuera_max_km is not None else None),
+            "surface_horizon_km": round(horizonte_km(0), 2),
+            "receiver_misplaced": self.gate.antena_no_esta_donde_dice,
             "gate_applied": True,
         }
 

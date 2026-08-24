@@ -336,6 +336,74 @@ def _estaticos_adsb() -> dict:
 _ESTATICOS = None
 
 
+def _receptor_publicado() -> dict:
+    """Desde donde se esta midiendo, para la franja que va en las cinco paginas.
+
+    Un solo lugar que lo arme y un solo endpoint que lo sirva. Antes /adsb/mapa
+    era la UNICA pagina que nombraba al receptor, y encima al reves: el cartel
+    se pintaba solo `if (rx.is_default === false)`, o sea que avisaba cuando
+    alguien habia elegido la ubicacion a proposito y se callaba justo cuando
+    nadie la eligio -- que es el modo de falla. La portada no lo decia nunca,
+    /adsb -donde se APRIETA grabar- tampoco, y /aeropuerto/mapa rearmaba un dict
+    mas chico sin is_default ni antenna_m, asi que no podia avisar ni queriendo.
+    """
+    import receiver
+
+    est = _estaticos_adsb()
+    rx = dict(est["receiver"])
+    codigo = __import__("aeropuerto").objetivo()
+    rx["origen"] = receiver.origen_configuracion()
+    rx["resumen"] = receiver.resumen_configuracion(codigo)
+    objetivo = None
+    if codigo:
+        km = None
+        try:
+            from pyModeS.position._airports import AIRPORTS
+            if codigo in AIRPORTS:
+                lat, lon = AIRPORTS[codigo]
+                km = receiver.distance_km(lat, lon)
+        except Exception:
+            pass
+        objetivo = {
+            "codigo": codigo,
+            "km": (round(km, 1) if km is not None else None),
+            # Lo que la CONFIGURACION afirma. Los datos pueden contradecirlo, y
+            # cuando lo hacen es la config la que esta mal: ver
+            # coverage.receiver_misplaced y aeropuerto.Informe.advertencia.
+            "surface_visible": (km is not None and km <= receiver.horizonte_km(0)),
+        }
+    rx["objetivo"] = objetivo
+    return rx
+
+
+def _proceso_publicado() -> dict:
+    """Quien esta contestando: PID e interprete.
+
+    El 23/08 habia DOS procesos servidor vivos, arrancados el mismo segundo --
+    PID 12040 con el Python del Store de Windows y PID 22728 con el del venv --
+    y ninguna pagina permitia saber cual tenia el puerto. La configuracion de
+    ubicacion vive solo en el entorno del proceso, asi que sin esto "desde donde
+    se mide" no se puede atribuir a nadie.
+    """
+    return {"pid": os.getpid(), "ejecutable": sys.executable,
+            "arrancado_en": _ARRANCADO_EN}
+
+
+_ARRANCADO_EN = __import__("time").time()
+
+
+@app.get("/api/receptor")
+def api_receptor():
+    """La franja de receptor que pintan las cinco paginas, de un solo lugar.
+
+    Endpoint propio y barato (todo sale de _estaticos_adsb, que se calcula una
+    vez por proceso y no toca la base) para que hasta la portada pueda pintarlo
+    sin cargar como la pagina de analisis.
+    """
+    return JSONResponse({"receptor": _receptor_publicado(),
+                         "proceso": _proceso_publicado()})
+
+
 def _coverage_mapa(lector) -> dict:
     """coverage sin rejected_detail: los rechazos ya viajan en `rejected`.
 
@@ -495,9 +563,13 @@ def api_aeropuerto_map(desde: int | None = None, ventana_h: float | None = None)
                 "tracks": adornar(trazas),
                 "pistas": [p for p in geografia.como_json()["pistas"]
                            if p["apt"] == inf.codigo],
-                "receiver": {"lat": __import__("receiver").RECEIVER_LAT,
-                             "lon": __import__("receiver").RECEIVER_LON,
-                             "name": __import__("receiver").RECEIVER_NAME},
+                # El MISMO dict que las otras paginas, no uno mas chico: el
+                # de antes traia solo lat/lon/name, sin is_default ni antenna_m
+                # ni surface_horizon_km, asi que este mapa -el que dibuja las
+                # trazas de los aterrizajes- no podia avisar que la ubicacion
+                # era la de por defecto ni queriendo. Dos definiciones del mismo
+                # dato es como se termina con una pagina que avisa y otra que no.
+                "receiver": _receptor_publicado(),
                 "reconstruido_en_ms": lector.ms_reconstruccion,
             })
 
@@ -534,12 +606,132 @@ def api_aeropuerto():
         # La lista completa de operaciones no viaja: el dashboard muestra el
         # resumen y el detalle esta en /adsb/analisis.
         datos.pop("operaciones", None)
-    return JSONResponse({"airport": datos})
+    # La portada pinta los conteos y la advertencia y no nombraba en ningun
+    # momento desde donde se mide. Es la primera pantalla que alguien abre.
+    return JSONResponse({"airport": datos, "receptor": _receptor_publicado()})
+
+
+@app.get("/aeropuerto")
+def aeropuerto_operaciones_page(request: Request):
+    return templates.TemplateResponse(request, "aeropuerto_operaciones.html", {})
+
+
+@app.get("/api/aeropuerto/operaciones")
+def api_aeropuerto_operaciones():
+    """El registro COMPLETO de cada aeronave que ATERRIZO O DESPEGO en el objetivo.
+
+    Es la pregunta que el proyecto existe para contestar, y hasta hoy no habia
+    ninguna pantalla que la contestara con todos los datos: /adsb/analisis tiene
+    el registro completo por aeronave pero de TODO lo que la antena escucha
+    (aviones de paso incluidos), y el apartado del aeropuerto tiene la
+    clasificacion pero con media docena de columnas.
+
+    Aca se juntan las dos, y NO se escribe un tercer acumulador -- el repo ya
+    tuvo el problema de dos que divergen (ver resumir_cilindro). Las dos mitades
+    se calculan sobre LA MISMA lectura de la base:
+
+      aeropuerto.informe()      QUE hizo cada aeronave y donde (cilindro, pista)
+      adsb_report.summarize()   todo lo que se sabe de ella (alt, vel, mensajes)
+
+    El filtro es tipo in (aterrizaje, despegue): no van las aproximaciones sin
+    resolver, ni las salidas sin resolver, ni los sobrevuelos, ni las que
+    quedaron en tierra. Lo que se filtra igual se CUENTA y viaja en `excluidas`:
+    una tabla de 23 filas al lado de "43 aeronaves en el cilindro" tiene que
+    poder explicar las otras 20.
+    """
+    import adsb_report
+    import aeropuerto
+    from adsb_events import coverage_report, load_db
+
+    db_path = ADSB_DB_PATH
+    if not db_path.exists():
+        return JSONResponse({"airport": None, "operaciones": [],
+                             "receptor": _receptor_publicado(),
+                             "empty_reason": "todavia no se grabo nada"})
+
+    observaciones, gate = load_db(str(db_path))
+    inf = aeropuerto.informe(observaciones)
+    if inf is None:
+        return JSONResponse({"airport": None, "operaciones": [],
+                             "receptor": _receptor_publicado(),
+                             "empty_reason": "no hay aeropuerto configurado "
+                                             "(ADSB_AIRPORT)"})
+    datos = aeropuerto.como_json(inf)
+    # El registro por aeronave, indexado por ICAO24 para pegarlo a la operacion.
+    # summarize() ve TODOS los mensajes de esa aeronave, no solo los del
+    # cilindro: la altitud maxima, la velocidad maxima y la primera vez que se
+    # la escucho pasan casi siempre afuera.
+    resumenes = {s.icao24: s for s in adsb_report.summarize(observaciones)}
+
+    filas = []
+    for o in datos["operaciones"]:
+        if o["tipo"] not in ("aterrizaje", "despegue"):
+            continue
+        s = resumenes.get(o["icao24"])
+        filas.append({
+            **o,
+            # Del registro por aeronave. Los nombres se mantienen iguales a los
+            # de /api/adsb/analisis a proposito: es la misma columna y tiene que
+            # poder compararse fila a fila entre las dos paginas.
+            "messages": (s.messages if s else None),
+            "first_seen": (s.first_seen if s else None),
+            "last_seen": (s.last_seen if s else None),
+            "duration_s": (s.duration_s if s else None),
+            # OJO: min/max_altitude_ft de aca son de TODA la historia de la
+            # aeronave; min_altitude_ft de la operacion es solo lo de adentro
+            # del cilindro. Son dos preguntas distintas y por eso van las dos.
+            "min_altitude_ft_total": (s.min_altitude_ft if s else None),
+            "max_altitude_ft": (s.max_altitude_ft if s else None),
+            "max_speed_kt": (s.max_speed_kt if s else None),
+            "max_climb_fpm": (s.max_climb_fpm if s else None),
+            "max_descent_fpm": (s.max_descent_fpm if s else None),
+            # Distancia AL RECEPTOR, mientras min_distance_km de la operacion es
+            # AL AEROPUERTO. Dos origenes distintos: se publican con nombres
+            # distintos para que no se comparen sin querer.
+            "min_distance_receptor_km": (s.min_distance_km if s else None),
+            "max_distance_receptor_km": (s.max_distance_km if s else None),
+            "signal_dbfs": (s.signal_dbfs if s else None),
+            "phase": (s.phase if s else None),
+            "latitude": (s.last_latitude if s else None),
+            "longitude": (s.last_longitude if s else None),
+        })
+
+    return JSONResponse({
+        "airport": {k: v for k, v in datos.items() if k != "operaciones"},
+        "operaciones": filas,
+        # Lo que la tabla NO muestra, contado. Nada se descarta en silencio: con
+        # esto la suma de la pantalla cierra contra aeronaves_en_cilindro.
+        "excluidas": {
+            "aproximaciones": datos["aproximaciones"],
+            "salidas": datos["salidas"],
+            "frustradas": datos["frustradas"],
+            "en_tierra": datos["en_tierra"],
+            "sobrevuelos": datos["sobrevuelos"],
+        },
+        "receptor": _receptor_publicado(),
+        "proceso": _proceso_publicado(),
+        # El detector de antena mal ubicada, del lado referenciado al RECEPTOR.
+        # Va en esta pagina porque es la que afirma mas fuerte: "estos aviones
+        # aterrizaron aca". Si la antena no esta donde dice la config, la
+        # atribucion sigue siendo correcta (el cilindro se define alrededor del
+        # aeropuerto) pero todo lo que se diga de la ANTENA no lo es.
+        "coverage": coverage_report(observaciones, gate),
+    })
 
 
 @app.get("/api/adsb/status")
 def api_adsb_status():
-    return JSONResponse(adsb_service.status())
+    """El estado del grabador MAS desde donde se esta midiendo.
+
+    El receptor viaja aca porque /adsb es la pagina donde se aprieta el boton de
+    grabar y hasta hoy no podia decir desde donde se iba a grabar: su subtitulo
+    era "Aeronaves recibidas por el receptor RTL-SDR" y esta respuesta no traia
+    ni lat/lon ni nombre ni is_default. La decision de empezar a grabar se tomaba
+    sin ver la configuracion con la que se iba a grabar.
+    """
+    return JSONResponse({**adsb_service.status(),
+                         "receptor": _receptor_publicado(),
+                         "proceso": _proceso_publicado()})
 
 
 @app.post("/api/adsb/start")
@@ -602,11 +794,6 @@ def adsb_download_one(filename: str):
     return FileResponse(path, media_type="text/csv", filename=path.name)
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
-
-
 @app.get("/adsb/analisis")
 def adsb_analysis_page(request: Request):
     return templates.TemplateResponse(request, "adsb_analisis.html", {})
@@ -643,6 +830,7 @@ def api_adsb_analysis():
         # sabe si la antena recibio poco, si se recorto el radio, o si se
         # filtro ruido.
         "receiver_name": __import__("receiver").RECEIVER_NAME,
+        "receptor": _receptor_publicado(),
         # El apartado de UN aeropuerto. Se calcula sobre las mismas
         # observaciones que el resto del informe -no se vuelve a leer la base-
         # para que las dos mitades de la pagina hablen del mismo conjunto.
@@ -801,3 +989,25 @@ def api_adsb_map(desde: int | None = None, ventana_h: float | None = None):
             "coverage": _coverage_mapa(lector) if nuevos_desde else None,
             "coverage_sin_cambios": not nuevos_desde,
         })
+
+
+# El bloque de arranque va AL FINAL del archivo, no en el medio. Estaba antes de
+# los decoradores de /adsb/analisis, /api/adsb/analisis, /adsb/mapa y
+# /api/adsb/mapa, y funcionaba de casualidad: uvicorn.run("main:app") vuelve a
+# importar este modulo como "main" y esa segunda copia si registra todo, mientras
+# la copia __main__ registraba esas cuatro rutas despues de que el servidor
+# paraba. Importa porque `python main.py` es el camino de arranque documentado y
+# el que efectivamente se uso el 23/08, y porque cualquier ruta nueva agregada
+# abajo heredaba la misma fragilidad.
+if __name__ == "__main__":
+    import uvicorn
+
+    # El unico rastro que queda de con que configuracion arranco este proceso.
+    # La ubicacion vive solo en el entorno: nada del repo la escribe en un
+    # archivo, y hasta hoy no se imprimia en ningun lado -- el resumen del .bat
+    # se muestra en una ventana que se cierra a los 8 s por su propio
+    # `timeout /t 8`, y el servidor arranca con `start /min`.
+    import receiver as _receiver
+    print(f"[receptor] {_receiver.resumen_configuracion(__import__('aeropuerto').objetivo())}"
+          f" | PID {os.getpid()} | {sys.executable}", flush=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)

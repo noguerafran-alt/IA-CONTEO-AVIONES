@@ -29,6 +29,13 @@
   .alcance b { color: #e0f2fe; }
   .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
            padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 20px; }
+  /* La contradiccion entre los datos y la configuracion va en rojo y no en
+     ambar: no es una limitacion fisica que haya que tener en cuenta, es una
+     configuracion equivocada que hay que arreglar. */
+  .alarma { background: #3a1b1b; border-left: 3px solid #f87171; border-radius: 6px;
+            padding: 12px 16px; color: #fecaca; font-size: 0.87rem; line-height: 1.55;
+            margin-bottom: 20px; }
+  .alarma b { color: #fee2e2; }
 
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
@@ -76,8 +83,15 @@
   <h1>Análisis de lo grabado por ADS-B</h1>
   <div class="subtitle">
     Una fila por aeronave, juntando todos sus mensajes ·
+    <a href="/aeropuerto">operaciones del aeropuerto</a> ·
     <a href="/aeropuerto/mapa">mapa del aeropuerto</a> · <a href="/adsb">ADS-B en vivo</a> · <a href="/">dashboard</a>
   </div>
+
+  <!-- Desde donde se mide, arriba de todo. Ver webapp/static/franja_receptor.js:
+       esta pagina publica alcance, horizonte y distancias, y todos esos numeros
+       cambian de significado segun donde este la antena. -->
+  <div id="franja-receptor"></div>
+  <div id="alarma-antena"></div>
 
   <!-- Este aviso se muestra solo cuando la posición llega en 0 mensajes. Antes
        decía que la posición "no se decodifica", lo cual era cierto por un bug
@@ -102,8 +116,15 @@
       <div class="sub" id="c-ident-pct"></div></div>
     <div class="card"><div class="n" id="c-matriculas">–</div><div class="label">Con matrícula</div>
       <div class="sub">del registro por ICAO24</div></div>
-    <div class="card eventos"><div class="n" id="c-eventos">–</div><div class="label">Operaciones</div>
-      <div class="sub">aterrizajes y despegues</div></div>
+    <!-- Este numero sale del detector AGNOSTICO DE AEROPUERTO (adsb_events:
+         transiciones descending/cruising -> ground y ground -> climbing), no del
+         cilindro de ningun aeropuerto. Medido el 23/08: 30 aca contra 23 en el
+         apartado de SABE, en la misma pagina y con las mismas palabras. La
+         etiqueta tiene que decir de que habla o los dos numeros se leen como el
+         mismo conteo mal calculado. -->
+    <div class="card eventos"><div class="n" id="c-eventos">–</div>
+      <div class="label">Operaciones en cualquier lado</div>
+      <div class="sub">aterrizó o despegó, sin atribuir a una pista</div></div>
     <div class="card ruido"><div class="n" id="c-ruido">–</div><div class="label">Ruido descartado</div>
       <div class="sub">direcciones vistas una sola vez</div></div>
   </div>
@@ -158,6 +179,7 @@
     </table>
   </div>
 
+<script src="/static/franja_receptor.js"></script>
 <script>
 const num = (v, suf = "") => v === null || v === undefined ? '<span class="muted">–</span>'
                                                            : Math.round(v).toLocaleString("es-AR") + suf;
@@ -171,8 +193,23 @@ const hora = ts => new Date(ts * 1000).toLocaleString("es-AR",
 function chipEstado(estado) {
   const clase = estado === "aterrizo" ? "aterrizo" : estado === "despego" ? "despego"
               : estado === "en tierra" ? "tierra" : "otro";
-  return `<span class="chip ${clase}">${estado}</span>`;
+  return `<span class="chip ${clase}" title="fase de vuelo detectada SIN atribuir aeropuerto: dice que la aeronave aterrizó o despegó en algún lado, no que lo haya hecho en este aeropuerto">${estado}</span>`;
 }
+
+// El chip de la tabla de OPERACIONES del aeropuerto, por tipo. Antes era
+// `o.tipo === "aproximacion" ? "aterrizo" : "despego"`, o sea que con la
+// taxonomia de hoy los 14 aterrizajes se pintaban con el color de despegue y la
+// clase verde no se usaba nunca (medido: los 5 tipos presentes caian todos en la
+// rama "despego"). Es el mismo mapa que COLOR/ETIQUETA de aeropuerto_mapa.html.
+const CLASE_TIPO = {
+  aterrizaje: "aterrizo", despegue: "despego", "en tierra": "tierra",
+  frustrada: "otro", aproximacion: "otro", salida: "otro", sobrevuelo: "otro",
+};
+const ETIQUETA_TIPO = {
+  aterrizaje: "aterrizaje", despegue: "despegue", frustrada: "motor y al aire",
+  aproximacion: "aproximación sin resolver", salida: "salida sin resolver",
+  "en tierra": "en tierra", sobrevuelo: "sobrevuelo",
+};
 
 let aeronaves = [];
 
@@ -234,7 +271,7 @@ function pintarAeropuerto(apt) {
 
   const filas = (apt.operaciones || []).map(o => `
     <tr>
-      <td><span class="chip ${o.tipo === "aproximacion" ? "aterrizo" : "despego"}">${o.tipo}</span></td>
+      <td><span class="chip ${CLASE_TIPO[o.tipo] || "otro"}">${ETIQUETA_TIPO[o.tipo] || o.tipo}</span></td>
       <td class="ident">${o.callsign || '<span class="muted">–</span>'}</td>
       <td class="matri">${o.registration
           ? (o.registration_source && o.registration_source.startsWith("distintivo")
@@ -254,46 +291,132 @@ function pintarAeropuerto(apt) {
       <td>${o.pista ? o.pista : '<span class="muted">sin alinear</span>'}</td>
       <td>${o.confirmada
           ? '<span class="conf">confirmada</span>'
-          : '<span class="muted" title="hace falta estar alineada con una pista y por debajo de 2000 ft">sin confirmar</span>'}</td>
+          : '<span class="muted" title="hace falta que haya quedado clasificada como aterrizaje o despegue Y que su rumbo caiga dentro de la tolerancia de alguna cabecera">sin confirmar</span>'}</td>
       <td class="mono">${hora(o.timestamp)}</td>
     </tr>`).join("");
 
   caja.innerHTML = `
     <h2>${apt.nombre} (${apt.codigo}) — solo lo que operó acá</h2>
     ${diag}
+    <!-- Fila verde: lo que el proyecto existe para contar. El juego anterior
+         eran cuatro tarjetas -Aproximaciones, Salidas, Confirmadas,
+         Sobrevuelos- que no mostraban NUNCA los aterrizajes ni los despegues:
+         el 23/08 daban 0 / 8 / 11 / 5 = 24 contra 43 aeronaves en el cilindro,
+         con 14 aterrizajes y 9 despegues invisibles. Y el imposible aritmetico
+         a la vista -11 confirmadas con 0 aproximaciones y 8 salidas- salia de
+         que "confirmada" NO es una categoria sino un CALIFICADOR sobre
+         aterrizaje/despegue: puesta como tarjeta par de las otras no puede
+         cuadrar nunca. Por eso ahora va como sub-linea. -->
     <div class="cards" style="margin:18px 0 0">
-      <div class="card"><div class="n">${apt.aproximaciones}</div><div class="label">Aproximaciones</div>
-        <div class="sub">venían bajando</div></div>
-      <div class="card"><div class="n">${apt.salidas}</div><div class="label">Salidas</div>
-        <div class="sub">venían subiendo</div></div>
-      <div class="card matricula"><div class="n">${apt.confirmadas}</div><div class="label">Confirmadas</div>
-        <div class="sub">alineadas y bajo 2000 ft</div></div>
-      <div class="card ruido"><div class="n">${apt.sobrevuelos}</div><div class="label">Sobrevuelos</div>
-        <div class="sub">entraron sin subir ni bajar</div></div>
+      <div class="card matricula"><div class="n">${apt.aterrizajes}</div>
+        <div class="label">Aterrizajes</div><div class="sub">bajó y no volvió a subir</div></div>
+      <div class="card matricula"><div class="n">${apt.despegues}</div>
+        <div class="label">Despegues</div><div class="sub">arrancó abajo y se fue</div></div>
+      <div class="card matricula"><div class="n">${apt.operaciones_reales}</div>
+        <div class="label">Operaciones reales</div>
+        <div class="sub">confirmadas por alineación ${apt.confirmadas} de ${apt.operaciones_reales}</div></div>
     </div>
+    <!-- Fila gris: lo que entro al cilindro y no se pudo resolver. 'En tierra'
+         faltaba en las cuatro pantallas porque el tipo no tenia contador ni
+         clave en como_json, aunque _clasificar lo devuelve desde el principio y
+         /aeropuerto/mapa dibuja esas trazas con color propio. -->
+    <div class="cards" style="margin:12px 0 0">
+      <div class="card ruido"><div class="n">${apt.aproximaciones}</div>
+        <div class="label">Aproximaciones sin resolver</div>
+        <div class="sub">bajaba, nunca se vio bastante abajo</div></div>
+      <div class="card ruido"><div class="n">${apt.salidas}</div>
+        <div class="label">Salidas sin resolver</div>
+        <div class="sub">subía, nunca se vio bastante abajo</div></div>
+      <div class="card ruido"><div class="n">${apt.frustradas}</div>
+        <div class="label">Motor y al aire</div><div class="sub">bajó al final y se fue</div></div>
+      <div class="card ruido"><div class="n">${apt.en_tierra}</div>
+        <div class="label">En tierra</div><div class="sub">apareció abajo, sin subir ni bajar</div></div>
+      <div class="card ruido"><div class="n">${apt.sobrevuelos}</div>
+        <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>
+    </div>
+    <p class="nota" style="${apt.categorias_cuadran ? '' : 'color:#fca5a5'}">
+      ${apt.aterrizajes} + ${apt.despegues} + ${apt.aproximaciones} + ${apt.salidas} +
+      ${apt.frustradas} + ${apt.en_tierra} + ${apt.sobrevuelos} =
+      <b>${apt.suma_categorias}</b>, contra <b>${apt.aeronaves_en_cilindro}</b> aeronaves que
+      entraron al cilindro:
+      ${apt.categorias_cuadran ? 'cuadra.' : 'NO CUADRA — hay una categoría que no se está mostrando.'}
+      <a href="/aeropuerto">Ver el registro completo de cada aterrizaje y despegue</a>.
+    </p>
     ${aviso}
     <p class="nota">
       Se cuenta lo que entró en un cilindro de <b>${apt.radio_km} km</b> de radio y
       <b>${apt.techo_ft} ft</b> de techo sobre el aeropuerto: ${apt.posiciones_en_cilindro}
-      posiciones de ${apt.aeronaves_en_cilindro} aeronaves. Lo más bajo que se vio adentro
-      fueron <b>${alt(apt.min_altitude_vista_ft)}</b> — ese número es el que dice si esto
-      son operaciones o sobrevuelos, así que va siempre a la vista.
-      Una operación se marca <span class="conf">confirmada</span> solo si la aeronave estaba
-      alineada con una pista <em>y</em> por debajo de 2000 ft; cada condición sola deja pasar
-      casos obvios. El rumbo sale del que el avión transmite, y las pistas de sus dos
-      umbrales reales, no de la designación.
+      posiciones de ${apt.aeronaves_en_cilindro} aeronaves, de las cuales
+      <b>${apt.posiciones_en_superficie}</b> son mensajes de <em>superficie</em>
+      (de ${apt.aeronaves_en_superficie} aeronaves: el avión declarando que está en el suelo)
+      y ${apt.posiciones_con_altitud} traen altitud barométrica. Las dos evidencias se cuentan
+      aparte porque no valen lo mismo.
+      Lo más bajo que se vio adentro fueron <b>${alt(apt.min_altitude_vista_ft)}</b> — es
+      altitud de <em>presión</em> (referida a 1013,25 hPa) menos la elevación del campo, no
+      altura sobre la pista: con la QNH del 23/08 (≈1025 hPa) el nivel de pista estaba en
+      unos −315 ft, así que un número negativo acá quiere decir «en la pista», no «bajo el mar».
+      Una operación se marca <span class="conf">confirmada</span> si quedó clasificada como
+      aterrizaje o despegue <em>y</em> su rumbo cayó alineado con una cabecera; hoy
+      ${apt.confirmadas} de ${apt.operaciones_reales}. Un aterrizaje exige haber bajado de
+      <b>${alt(apt.umbral_suelo_ft)}</b> sobre el campo (o haber sido visto en superficie) y
+      no haber vuelto a subir. El rumbo sale del que el avión transmite, y las pistas de sus
+      dos umbrales reales, no de la designación.
     </p>
     ${filas ? `<div class="table-wrap" style="margin-top:14px"><table>
       <thead><tr><th>Tipo</th><th>Vuelo</th><th>Matrícula</th><th>Avión</th><th>Operador</th>
-        <th class="num">Alt. mín</th><th class="num">Dist.</th><th class="num">Rumbo</th>
+        <th class="num" title="altitud barométrica del punto más bajo dentro del cilindro (sobre el nivel del mar, no sobre la pista)">Alt. mín</th>
+        <!-- "al aeropuerto" explicito: al lado de "la pista esta a 13.3 km de la
+             antena" esta columna invitaba a comparar dos distancias con
+             origenes distintos. -->
+        <th class="num" title="distancia al AEROPUERTO en el punto más bajo, no al receptor">Dist. al apt.</th>
+        <th class="num">Rumbo</th>
         <th>Pista</th><th>Estado</th><th>Cuándo</th></tr></thead>
       <tbody>${filas}</tbody></table></div>`
     : '<p class="nota">Ninguna operación atribuida todavía.</p>'}`;
 }
 
+// El detector de antena mal ubicada, y el CINTURON del detector: dos fuentes
+// independientes de la misma pagina que hasta hoy nadie comparaba.
+//   coverage.can_see_runway_level  sale de los DATOS (hay observaciones en tierra
+//                                  o por debajo de 3000 ft)
+//   apt.ve_la_pista                sale de la CONFIG (distancia contra horizonte)
+// El 23/08 valian true y false respectivamente, y las dos frases se pintaban a
+// 200 px una de otra: "los aterrizajes y despegues detectados son confiables" y
+// "los aviones en la pista no se escuchan desde acá". Que no coincidan significa
+// que la antena no está donde dice la configuración.
+function pintarAlarmaAntena(cov, apt, rx) {
+  const caja = document.getElementById("alarma-antena");
+  const partes = [];
+  if (cov.receiver_misplaced) {
+    partes.push(`Llegaron <b>${cov.surface_beyond_horizon}</b> posiciones de aeronaves
+      <em>en superficie</em>, de <b>${cov.surface_beyond_horizon_aircraft}</b> aeronaves
+      distintas, desde más lejos que el horizonte de radio a un avión en el suelo
+      (${dist(cov.surface_horizon_km)} con la antena a ${rx.antenna_m} m); la peor, a
+      ${dist(cov.surface_beyond_horizon_max_km)}. Un avión apoyado en el pavimento no puede:
+      no hay altitud que lo levante sobre la curvatura de la Tierra.`);
+  }
+  if (apt && cov.can_see_runway_level && !apt.ve_la_pista) {
+    partes.push(`Los datos dicen que <b>sí</b> se reciben aeronaves a nivel de pista
+      (${cov.on_ground_observations} observaciones en tierra, ${cov.below_3000ft} por debajo de
+      3000 ft) y la configuración dice que la pista de ${apt.codigo}
+      (a ${apt.distancia_receptor_km} km) queda <b>bajo</b> el horizonte de
+      ${apt.horizonte_superficie_km} km. Las dos cosas no pueden ser ciertas.`);
+  }
+  if (!partes.length) { caja.innerHTML = ""; return; }
+  caja.innerHTML = `<div class="alarma"><b>La antena no está donde dice la configuración.</b>
+    ${partes.join(" ")} Revisar <code>ADSB_RECEIVER</code> y <code>ADSB_ANTENNA_M</code>:
+    los conteos de operaciones siguen siendo válidos (el cilindro se define alrededor del
+    aeropuerto, no de la antena), pero el alcance, el horizonte y las distancias al receptor
+    de esta página están referidos al lugar equivocado.</div>`;
+}
+
 async function cargar() {
   const datos = await (await fetch("/api/adsb/analisis")).json();
   aeronaves = datos.aircraft || [];
+  // La franja de receptor se pinta con lo que ya vino en esta respuesta, sin un
+  // segundo pedido: /api/adsb/analisis trae el mismo bloque que /api/receptor.
+  pintarFranjaReceptor(datos.receptor, null);
+  pintarAlarmaAntena(datos.coverage || {}, datos.airport, datos.receptor || {});
 
   if (!aeronaves.length) {
     document.getElementById("tabla-aviones").innerHTML =
@@ -380,24 +503,30 @@ async function cargar() {
         La diferencia entre los dos es altitud, no potencia: lejos solo se escucha lo
         que vuela alto. Se ven las trayectorias en el <a href="/adsb/mapa">mapa</a>.${rechazados}`
     : rechazados;
+  // NINGUNA ubicacion escrita a mano en esta frase. La version anterior tenia
+  // "el receptor está en San Isidro, a 7 km de San Fernando y 13 km de
+  // Aeroparque" clavado en el template, cinco lineas debajo de un bloque que ya
+  // imprimia receiver_name del servidor: desde Aeroparque habria afirmado San
+  // Isidro. Hoy no se veia porque can_see_runway_level=true y se pinta la otra
+  // rama, o sea que era una trampa latente. Todo sale de los datos que ya
+  // viajan: datos.receptor y apt.distancia_receptor_km / horizonte_superficie_km.
+  const rx = datos.receptor || {};
+  const obj = rx.objetivo || {};
+  const donde = rx.name ? `<strong>${rx.name}</strong>` : "donde está configurada";
+  const lejos = obj.codigo && obj.km !== null && obj.km !== undefined
+    ? ` La antena está en ${donde}, a ${dist(obj.km)} de la pista de ${obj.codigo},
+        y el horizonte de radio a un avión en el suelo es ${dist(rx.surface_horizon_km)}:
+        ${obj.surface_visible
+          ? "la pista entra en el horizonte, así que la falta de tráfico en tierra no la explica la geometría."
+          : "la pista queda bajo el horizonte, así que no recibir tráfico en tierra es el resultado físico esperado y no una falla del software."}`
+    : ` La antena está en ${donde}.`;
   document.getElementById("cobertura-texto").innerHTML = (c.can_see_runway_level
     ? `La antena <strong>sí</strong> recibe aeronaves a nivel de pista (altitud mínima recibida:
        <strong>${num(c.min_altitude_ft)} ft</strong>, ${c.below_3000ft} observaciones por debajo de
        3000 ft). Los aterrizajes y despegues detectados son confiables.`
-    // El receptor está en San Isidro, no al lado de una pista: 7.3 km a San
-    // Fernando, 13.3 km a Aeroparque, 39.1 km a Ezeiza (haversine sobre la
-    // tabla de aeropuertos de pyModeS). A esas distancias la línea de vista a
-    // un avión en el suelo la tapan el horizonte y los edificios, así que no
-    // recibir tráfico en tierra es el resultado físico esperado, no una falla
-    // del software. Lo que decía antes acá era que el receptor estaba a unos
-    // cientos de metros de la pista y que por eso esto iba a cambiar solo:
-    // era una suposición vieja escrita como si fuera un dato medido, y dejaba
-    // a quien la leyera esperando una mudanza que no arregla nada.
     : `La antena <strong>no</strong> recibió ninguna aeronave cerca del suelo
        (altitud mínima: ${num(c.min_altitude_ft)} ft). Sin eso es imposible detectar
-       operaciones — no porque no hayan ocurrido, sino porque el receptor está en San
-       Isidro, a 7 km de San Fernando y 13 km de Aeroparque, y a esa distancia el
-       horizonte y los edificios tapan la vista a un avión en el suelo.`) + alcance;
+       operaciones — no porque no hayan ocurrido.${lejos}`) + alcance;
 
   pintarAeropuerto(datos.airport);
   pintarAeronaves();

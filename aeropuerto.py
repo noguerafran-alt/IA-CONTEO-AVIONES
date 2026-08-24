@@ -44,7 +44,7 @@ import os
 from dataclasses import dataclass, field
 from math import cos, radians
 
-from adsb import Observation
+from adsb import Observation, es_altitud_de_superficie
 
 # Radio y techo del cilindro de operaciones. Los defaults no son redondos por
 # gusto: 8 km cubre la aproximacion final tipica de un aeropuerto urbano sin
@@ -118,12 +118,21 @@ class Operacion:
     tipo_motor: str | None = None
     estela: str | None = None
     estela_texto: str | None = None
+    # La altitud minima BAROMETRICA vista adentro del cilindro. None cuando de
+    # esta aeronave solo llegaron mensajes de superficie: ahi no hay ninguna
+    # altitud medida, y publicar 0 seria publicar el placeholder como si fuera
+    # una medicion (ver adsb.ALTITUD_SUPERFICIE_PLACEHOLDER).
     min_altitude_ft: float | None = None
     min_distance_km: float | None = None
     track_deg: float | None = None
     pista: str | None = None       # la pista con la que quedo alineada, si alguna
     alineada: bool = False
     posiciones: int = 0
+    # Cuantas de esas posiciones eran mensajes de SUPERFICIE (TC 5-8 / BDS 0,6).
+    # Es la evidencia mas fuerte que existe de que la aeronave estuvo en el
+    # suelo -- lo dice el formato del mensaje, no una altitud comparada contra
+    # un umbral -- y por eso se cuenta aparte y no se suma con las otras.
+    posiciones_superficie: int = 0
 
     @property
     def confirmada(self) -> bool:
@@ -156,14 +165,17 @@ class Informe:
     min_altitude_vista_ft: float | None = None
     posiciones_en_cilindro: int = 0
     aeronaves_en_cilindro: int = 0
+    # Las dos evidencias no se suman: una altitud barometrica y un mensaje de
+    # superficie dicen cosas de fuerza distinta, y hasta hoy entraban a la misma
+    # serie aritmetica. Medido sobre adsb_log.db: de las 1010 posiciones del
+    # cilindro de SABE, 779 son mensajes de superficie sin altitud y 231 traen
+    # altitud barometrica.
+    posiciones_en_superficie: int = 0
+    aeronaves_en_superficie: int = 0
     elevacion_ft: float = 0.0
+    # Los sobrevuelos son el unico tipo que NO entra a self.operaciones (no se
+    # dibujan como operacion), asi que su contador no puede ser _cuantas().
     sobrevuelos: int = 0           # entraron al cilindro sin subir ni bajar
-    # Aproximaciones que NO se pudieron resolver: venian bajando pero nunca se
-    # las vio lo bastante abajo para saber si llegaron. Se cuentan aparte de los
-    # aterrizajes a proposito -son el caso mas comun con la antena lejos- y su
-    # numero es la medida de cuanto le falta a la ubicacion actual.
-    aproximaciones_sin_resolver: int = 0
-    frustradas: int = 0            # bajaron al final y se volvieron a ir
 
     def _cuantas(self, tipo: str) -> int:
         return sum(1 for o in self.operaciones if o.tipo == tipo)
@@ -192,8 +204,42 @@ class Informe:
         return self._cuantas("salida")
 
     @property
+    def frustradas(self) -> int:
+        """Bajaron al final y se volvieron a ir (motor y al aire)."""
+        return self._cuantas("frustrada")
+
+    @property
+    def en_tierra(self) -> int:
+        """Aparecieron abajo y no subieron ni bajaron: quedaron en el aeropuerto.
+
+        Existia como resultado de _clasificar desde el principio, pero no tenia
+        propiedad ni clave en como_json, asi que NINGUNA pantalla podia
+        mostrarlas aunque quisiera. De ahi salian las tres cuentas que no
+        cerraban: 4 tarjetas que sumaban 24, 5 numeros que sumaban 31 y 6
+        tarjetas que sumaban 39, todas contra 43 aeronaves en el cilindro. Y en
+        /aeropuerto/mapa esas 4 trazas se DIBUJAN, con color y etiqueta propios.
+        """
+        return self._cuantas("en tierra")
+
+    @property
     def confirmadas(self) -> int:
         return sum(1 for o in self.operaciones if o.confirmada)
+
+    @property
+    def suma_categorias(self) -> int:
+        """La suma de las siete categorias. Tiene que dar aeronaves_en_cilindro.
+
+        Se publica para que la igualdad este a la vista en las pantallas. Es lo
+        unico que hace que un octavo tipo agregado a _clasificar rompa algo
+        visible en vez de desaparecer de las cuatro pantallas a la vez, que es
+        exactamente lo que paso con 'en tierra'.
+        """
+        return (self.aterrizajes + self.despegues + self.aproximaciones
+                + self.salidas + self.frustradas + self.en_tierra + self.sobrevuelos)
+
+    @property
+    def categorias_cuadran(self) -> bool:
+        return self.suma_categorias == self.aeronaves_en_cilindro
 
     @property
     def advertencia(self) -> str | None:
@@ -254,11 +300,41 @@ class Informe:
             return (f"Lo más bajo que se vio sobre {self.codigo} fueron "
                     f"{self.min_altitude_vista_ft:.0f} ft sobre el campo. La fase "
                     "final no se recibe desde esta ubicación.")
+        # LA CONTRADICCION VA ANTES DE LA GEOMETRIA. Esta rama existe porque el
+        # 23/08, con el servidor arrancado sin ADSB_RECEIVER, este mismo informe
+        # trajo 14 aterrizajes, 9 despegues, 3 frustradas y 1010 posiciones en
+        # el cilindro, y al lado la frase "los aviones EN la pista no se
+        # escuchan desde aca" -- las dos cosas en el mismo objeto. Se llegaba
+        # ahi porque la rama de abajo no miraba ningun conteo: repetia la
+        # geometria de la configuracion como si fuera un hecho medido.
+        #
+        # Cuando hay operaciones reales o posiciones de superficie, la
+        # afirmacion que cae NO es el conteo: es la ubicacion. Los datos se
+        # midieron; la configuracion se tipeo.
+        if not self.ve_la_pista and (self.operaciones_reales
+                                     or self.posiciones_en_superficie):
+            pruebas = []
+            if self.operaciones_reales:
+                pruebas.append(f"{self.aterrizajes} aterrizajes y "
+                               f"{self.despegues} despegues clasificados")
+            if self.posiciones_en_superficie:
+                pruebas.append(f"{self.posiciones_en_superficie} posiciones de "
+                               f"aeronaves EN SUPERFICIE de "
+                               f"{self.aeronaves_en_superficie} aeronaves")
+            return (f"Contradicción: la configuración dice que la pista de "
+                    f"{self.codigo} está a {self.distancia_receptor_km:.1f} km, "
+                    f"más que el horizonte de radio a un avión en tierra "
+                    f"({self.horizonte_superficie_km:.1f} km) — o sea que no se "
+                    f"debería oír nada en la pista — y sin embargo hay "
+                    + ", y ".join(pruebas) +
+                    ". Las dos cosas no pueden ser ciertas: la antena no está "
+                    "donde dice la configuración (revisar ADSB_RECEIVER y "
+                    "ADSB_ANTENNA_M).")
         if not self.ve_la_pista:
-            return (f"La pista de {self.codigo} esta a "
-                    f"{self.distancia_receptor_km:.1f} km, mas que el horizonte de "
-                    f"radio a un avion en tierra ({self.horizonte_superficie_km:.1f} "
-                    "km). Los aviones EN la pista no se escuchan desde aca.")
+            return (f"La pista de {self.codigo} está a "
+                    f"{self.distancia_receptor_km:.1f} km, más que el horizonte de "
+                    f"radio a un avión en tierra ({self.horizonte_superficie_km:.1f} "
+                    "km). Los aviones EN la pista no se escuchan desde acá.")
         return None
 
 
@@ -301,7 +377,8 @@ def _alineada(track: float | None, pistas: list[tuple[str, float]]) -> tuple[boo
     return (mejor_dif <= TOLERANCIA_RUMBO_DEG), (mejor if mejor_dif <= TOLERANCIA_RUMBO_DEG else None)
 
 
-def _clasificar(minima_agl: float, baja: float, sube: float) -> str:
+def _clasificar(minima_agl: float, baja: float, sube: float,
+                en_superficie: bool = False) -> str:
     """Que hizo la aeronave dentro del cilindro, con nombre propio.
 
     La distincion que importa es aterrizaje contra intento de aterrizaje, y no
@@ -316,7 +393,13 @@ def _clasificar(minima_agl: float, baja: float, sube: float) -> str:
     inventar operaciones que quizas no ocurrieron; descartarla en silencio seria
     esconder que la antena no alcanza a verlas.
     """
-    llego_al_suelo = minima_agl <= UMBRAL_SUELO_FT
+    # `en_superficie` es un mensaje TC 5-8 / BDS 0,6: el avion declara que esta
+    # en el suelo, y eso no se compara contra ningun umbral. Es evidencia mucho
+    # mas fuerte que UMBRAL_SUELO_FT y ademas no depende del clima: el umbral se
+    # compara contra altitud de PRESION, asi que se mueve con la QNH (medido: un
+    # avion detenido en la pista de SABE pasa los 300 ft solo si la QNH es >=
+    # 1002,3 hPa, y el 23/08 la QNH estaba en ~1025 hPa, 12,2 hPa del otro lado).
+    llego_al_suelo = en_superficie or minima_agl <= UMBRAL_SUELO_FT
     if llego_al_suelo:
         if sube >= REASCENSO_FT and baja >= CAMBIO_MINIMO_FT:
             return "frustrada"       # bajo hasta el final y se volvio a ir
@@ -388,13 +471,33 @@ def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[d
         r = por_icao.get(o.icao24)
         if r is None:
             r = por_icao[o.icao24] = {
-                "n": 0, "primera_alt": o.altitude_ft, "ultima_alt": o.altitude_ft,
-                "min_alt": o.altitude_ft, "min_t": o.timestamp, "min_d": d,
-                "track": None, "callsign": None}
+                "n": 0, "primera_alt": None, "ultima_alt": None,
+                "min_alt": None, "min_t": o.timestamp, "min_d": d,
+                "track": None, "callsign": None, "superficie": 0}
         r["n"] += 1
+        # EL PLACEHOLDER DE SUPERFICIE NO ENTRA EN LA ARITMETICA DE ALTITUDES.
+        # Es el 0.0 que adsb_rtlsdr escribe cuando el mensaje no trae altitud
+        # (ver adsb.ALTITUD_SUPERFICIE_PLACEHOLDER), y restarlo contra una
+        # altitud barometrica real fabrica descensos del tamano del offset de
+        # presion: medido, ARG1686 (0 / -325 / 1450) y JES3088 (0 / -300 / 2400)
+        # salian con baja=325 y baja=300 ft contra CAMBIO_MINIMO_FT=300 y
+        # quedaban clasificados como motor y al aire cuando son despegues
+        # normales. Y en el otro sentido, los 14 aterrizajes tenian ultima_alt=0
+        # y min_alt hasta -350: un reascenso FABRICADO de 350 ft, que con la QNH
+        # en 1043 hPa llegaria a REASCENSO_FT=800 y los volveria frustradas a
+        # todos. Se cuenta aparte, que es evidencia mas fuerte, no menos.
+        if es_altitud_de_superficie(o.altitude_ft):
+            r["superficie"] += 1
+            if o.track_deg is not None:
+                r["track"] = o.track_deg
+            if o.callsign:
+                r["callsign"] = o.callsign.strip()
+            continue
+        if r["primera_alt"] is None:
+            r["primera_alt"] = o.altitude_ft
         r["ultima_alt"] = o.altitude_ft
         # Estricto: alturas.index(min(alturas)) se queda con el PRIMER minimo.
-        if o.altitude_ft < r["min_alt"]:
+        if r["min_alt"] is None or o.altitude_ft < r["min_alt"]:
             r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
         if o.track_deg is not None:
             r["track"] = o.track_deg
@@ -457,27 +560,45 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
 
     inf.posiciones_en_cilindro = posiciones
     inf.aeronaves_en_cilindro = len(por_icao)
-    if por_icao:
+    inf.posiciones_en_superficie = sum(r.get("superficie", 0) for r in por_icao.values())
+    inf.aeronaves_en_superficie = sum(1 for r in por_icao.values() if r.get("superficie"))
+    reales = [r["min_alt"] for r in por_icao.values() if r["min_alt"] is not None]
+    if reales:
         # Sobre EL CAMPO, no sobre el mar: es la altura que dice si se vio la
         # fase final, y compararla contra un umbral en AGL exige que este en AGL.
-        inf.min_altitude_vista_ft = min(r["min_alt"] for r in por_icao.values()) - elevacion
+        #
+        # OJO CON LA ETIQUETA: esto es altitud de PRESION (referida a 1013,25
+        # hPa) menos la elevacion del campo, y eso no es AGL. El 23/08 la QNH
+        # estuvo en ~1025 hPa, o sea un offset de -331 ft, veinte veces la
+        # elevacion de 16 ft que se resta: este numero dio -366 ft cuando el AGL
+        # real de esa observacion era -35 +/- 26 ft, o sea el avion EN la pista.
+        # Corregirlo de verdad pide estimar la altitud de presion del campo
+        # (percentil bajo de las barometricas dentro del perimetro; hoy son 12
+        # medidas independientes en -314,6 ft con sd 25,9) o leer geo_minus_baro,
+        # que la antena ya recibe y adsb_rtlsdr.py:111 tira. Esta en ESTADO.md.
+        inf.min_altitude_vista_ft = min(reales) - elevacion
 
     for icao24, r in por_icao.items():
         # Alturas SOBRE EL CAMPO. El minimo NO es el primero contra el ultimo:
         # el avion que toca y vuelve a salir tiene el minimo en el medio, y
         # comparar los extremos lo daria como sobrevuelo.
-        minima = r["min_alt"] - elevacion
-        baja = r["primera_alt"] - r["min_alt"]
-        sube = r["ultima_alt"] - r["min_alt"]
+        en_superficie = bool(r.get("superficie"))
+        if r["min_alt"] is None:
+            # De esta aeronave solo llegaron mensajes de superficie: no hay
+            # ninguna altitud medida con la que calcular baja ni sube, y el
+            # avion declaro estar en el suelo. Inventar un 0 para restarlo seria
+            # publicar el placeholder como medicion. Medido: 3 de las 43
+            # aeronaves del cilindro estan en este caso.
+            minima, baja, sube = 0.0, 0.0, 0.0
+        else:
+            minima = r["min_alt"] - elevacion
+            baja = r["primera_alt"] - r["min_alt"]
+            sube = r["ultima_alt"] - r["min_alt"]
 
-        tipo = _clasificar(minima, baja, sube)
+        tipo = _clasificar(minima, baja, sube, en_superficie=en_superficie)
         if tipo == "sobrevuelo":
             inf.sobrevuelos += 1
             continue
-        if tipo == "aproximacion":
-            inf.aproximaciones_sin_resolver += 1
-        elif tipo == "frustrada":
-            inf.frustradas += 1
 
         # El rumbo del ultimo punto del cilindro que lo trajo. Fuera del
         # cilindro no se busca: el rumbo de crucero no dice nada sobre la
@@ -507,6 +628,7 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
             estela_texto=(ident.estela_texto if ident else None),
             min_altitude_ft=r["min_alt"], min_distance_km=round(r["min_d"], 2),
             track_deg=r["track"], pista=pista, alineada=alineada, posiciones=r["n"],
+            posiciones_superficie=r.get("superficie", 0),
         ))
 
     inf.operaciones.sort(key=lambda o: o.timestamp, reverse=True)
@@ -543,11 +665,24 @@ def como_json(inf: Informe | None) -> dict | None:
         "operaciones_reales": inf.operaciones_reales,
         "aproximaciones": inf.aproximaciones, "salidas": inf.salidas,
         "frustradas": inf.frustradas,
+        # 'en tierra' faltaba, y es la razon por la que las tarjetas de tres
+        # pantallas sumaban 24, 31 y 39 contra 43 aeronaves en el cilindro.
+        "en_tierra": inf.en_tierra,
         "confirmadas": inf.confirmadas, "sobrevuelos": inf.sobrevuelos,
+        # La igualdad viaja resuelta para que las pantallas la puedan imprimir
+        # sin recalcularla cada una a su manera. Ver Informe.suma_categorias.
+        "suma_categorias": inf.suma_categorias,
+        "categorias_cuadran": inf.categorias_cuadran,
         "elevacion_ft": inf.elevacion_ft,
         "umbral_suelo_ft": UMBRAL_SUELO_FT,
         "min_altitude_vista_ft": inf.min_altitude_vista_ft,
         "posiciones_en_cilindro": inf.posiciones_en_cilindro,
+        # Las dos evidencias, separadas: un mensaje de superficie es mas fuerte
+        # que una altitud barometrica baja, y sumarlas las iguala.
+        "posiciones_en_superficie": inf.posiciones_en_superficie,
+        "aeronaves_en_superficie": inf.aeronaves_en_superficie,
+        "posiciones_con_altitud": (inf.posiciones_en_cilindro
+                                   - inf.posiciones_en_superficie),
         "aeronaves_en_cilindro": inf.aeronaves_en_cilindro,
         "advertencia": inf.advertencia,
         "operaciones": [
@@ -561,7 +696,9 @@ def como_json(inf: Informe | None) -> dict | None:
              "estela": o.estela, "estela_texto": o.estela_texto,
              "min_altitude_ft": o.min_altitude_ft, "min_distance_km": o.min_distance_km,
              "track_deg": o.track_deg, "pista": o.pista, "alineada": o.alineada,
-             "confirmada": o.confirmada, "posiciones": o.posiciones}
+             "confirmada": o.confirmada, "posiciones": o.posiciones,
+             "posiciones_superficie": o.posiciones_superficie,
+             "en_superficie": o.posiciones_superficie > 0}
             for o in inf.operaciones
         ],
     }
@@ -588,27 +725,53 @@ if __name__ == "__main__":
           f"tierra: {inf.horizonte_superficie_km} km "
           f"-> {'SE VE la pista' if inf.ve_la_pista else 'pista BAJO el horizonte'}")
     print(f"cilindro: {inf.radio_km:.0f} km de radio, {inf.techo_ft:.0f} ft de techo")
-    print(f"  {inf.posiciones_en_cilindro} posiciones de {inf.aeronaves_en_cilindro} aeronaves")
+    print(f"  {inf.posiciones_en_cilindro} posiciones de {inf.aeronaves_en_cilindro} aeronaves"
+          f" ({inf.posiciones_en_superficie} de superficie, de "
+          f"{inf.aeronaves_en_superficie} aeronaves, y "
+          f"{inf.posiciones_en_cilindro - inf.posiciones_en_superficie} con altitud"
+          f" barometrica)")
+    # "altitud de presion menos la elevacion" y no "sobre el campo": son cosas
+    # distintas y el 23/08 la diferencia fue de 331 ft (QNH ~1025 hPa) contra
+    # los 16 ft de elevacion que se restan. Ver informe_desde_resumen.
     print(f"  altitud minima vista adentro: "
           f"{inf.min_altitude_vista_ft if inf.min_altitude_vista_ft is not None else '-'} ft "
-          f"SOBRE EL CAMPO (elevacion {inf.elevacion_ft:.0f} ft)")
+          f"de PRESION menos la elevacion del campo ({inf.elevacion_ft:.0f} ft); "
+          f"no es AGL: con QNH alta da negativo con el avion en la pista")
     print()
     print(f"ATERRIZAJES REALES {inf.aterrizajes} | despegues {inf.despegues} | "
+          f"operaciones reales {inf.operaciones_reales} | "
           f"confirmados por alineacion {inf.confirmadas}")
     print(f"  sin resolver: {inf.aproximaciones} aproximaciones que bajaban pero "
           f"nunca se vieron bajo {UMBRAL_SUELO_FT:.0f} ft sobre el campo")
     print(f"  frustradas (motor y al aire) {inf.frustradas} | "
-          f"salidas sin resolver {inf.salidas} | sobrevuelos {inf.sobrevuelos}")
+          f"salidas sin resolver {inf.salidas} | en tierra {inf.en_tierra} | "
+          f"sobrevuelos {inf.sobrevuelos}")
+    # La igualdad impresa es lo unico que hace que un tipo nuevo de _clasificar
+    # rompa algo visible en vez de desaparecer de todas las pantallas a la vez,
+    # que es lo que paso con 'en tierra': clasificado desde el principio, sin
+    # contador ni clave, invisible en las cuatro superficies.
+    print(f"  suma de las siete categorias: {inf.suma_categorias} contra "
+          f"{inf.aeronaves_en_cilindro} aeronaves en el cilindro"
+          f" -> {'CUADRA' if inf.categorias_cuadran else 'NO CUADRA'}")
     if inf.advertencia:
         print(f"\n  OJO: {inf.advertencia}")
     if inf.operaciones:
         print()
+        # ALT MSL y DIST APT, con datum y origen en el encabezado: la columna es
+        # altitud barometrica sobre el nivel del mar (el titular de arriba le
+        # resta la elevacion) y la distancia es AL AEROPUERTO, no al receptor.
+        # Leida al lado de "la pista esta a 13.3 km de la antena" invitaba a
+        # comparar dos distancias con origenes distintos.
         print(f"{'TIPO':13s} {'VUELO':9s} {'MATRICULA':10s} {'TIPO AVION':18s} "
-              f"{'ALT':>7s} {'DIST':>6s} {'RUMBO':>6s} PISTA")
-        print("-" * 92)
+              f"{'ALT MSL':>8s} {'D.APT':>6s} {'RUMBO':>6s} {'SUP':>4s} PISTA")
+        print("-" * 100)
         for o in inf.operaciones[:25]:
             print(f"{o.tipo:13s} {(o.callsign or '-'):9s} {(o.registration or '-'):10s} "
                   f"{(o.aircraft_type or '-')[:18]:18s} "
-                  f"{o.min_altitude_ft:7.0f} {o.min_distance_km:6.2f} "
+                  # "sin alt" y no 0: de esta aeronave solo llegaron mensajes de
+                  # superficie, que no traen altitud.
+                  f"{(f'{o.min_altitude_ft:.0f}' if o.min_altitude_ft is not None else 'sin alt'):>8s} "
+                  f"{o.min_distance_km:6.2f} "
                   f"{(f'{o.track_deg:.0f}' if o.track_deg is not None else '-'):>6s} "
+                  f"{o.posiciones_superficie:4d} "
                   f"{o.pista or '-'}{'  (confirmada)' if o.confirmada else ''}")

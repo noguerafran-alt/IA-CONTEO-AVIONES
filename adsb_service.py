@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from adsb import Observation
 from adsb_events import PositionGate
 from adsb_record import CSV_DIR, DB_PATH, Recorder, build_source
-from receiver import distance_km, resolve_ref
+from receiver import distance_km, horizonte_km, resolve_ref
 
 # An aircraft not heard in this long drops off the "in range now" table --
 # otherwise a plane that flew out of reception would sit there forever.
@@ -203,6 +203,21 @@ class AdsbService:
                                    {"horizonte": 0, "velocidad": 0,
                                     "superficie": 0, "sin_altitud": 0}),
             "surface_rule_exercised": bool(gate and gate.superficie_evaluadas),
+            # Las posiciones de SUPERFICIE que llegaron de mas lejos que el
+            # horizonte de radio al suelo. Un avion apoyado en el pavimento no
+            # puede: no hay altitud que lo levante sobre la curvatura. Asi que
+            # esto no cuenta datos malos, cuenta que la antena no esta donde
+            # dice la configuracion. Medido el 23/08 sobre la base: 512 de 817,
+            # de 27 aeronaves distintas, con el receptor por defecto (San
+            # Isidro, horizonte al suelo 13.0 km) y 0 con ADSB_RECEIVER
+            # =aeroparque. Mientras eso pasaba, rejected_by_reason.horizonte
+            # decia 0. Ver PositionGate.superficie_fuera_de_horizonte.
+            "surface_evaluated": (gate.superficie_evaluadas if gate else 0),
+            "surface_beyond_horizon": (gate.superficie_fuera_de_horizonte if gate else 0),
+            "surface_beyond_horizon_aircraft": (
+                gate.superficie_fuera_de_horizonte_aeronaves if gate else 0),
+            "surface_horizon_km": round(horizonte_km(0), 2),
+            "receiver_misplaced": bool(gate and gate.antena_no_esta_donde_dice),
             # Lo que descarta pyModeS antes que nadie y que este repo no leia
             # en ningun lado. Puede ser MAYOR que positions_rejected.
             "decoder_stats": getattr(source, "decoder_stats", {}) or {},

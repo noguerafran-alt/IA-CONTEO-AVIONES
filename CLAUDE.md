@@ -6,9 +6,17 @@
 resolver y qué decisiones ya se tomaron **con la medición que las respalda**, para
 no rediscutirlas sin datos nuevos.
 
-Leerlo primero ahorra repetir errores ya cometidos. El más fácil de cometer: la
-antena está en **San Isidro**, no en Aeroparque, aunque el repo nombre Aeroparque
-por todos lados (eso es el material de video).
+Leerlo primero ahorra repetir errores ya cometidos. El más fácil de cometer es
+confundir **dónde está la antena** con el material de video, que se llama
+Aeroparque por todos lados:
+
+- **Desde el 2026-08-23 la antena está en Aeroparque**, a 1153 m del umbral 13.
+- **Todo el histórico anterior se grabó desde San Isidro**, a 13,3 km. Esos datos
+  siguen medidos desde ahí y no se pueden reinterpretar.
+- **San Isidro sigue siendo el valor por defecto del código.** Un proceso que
+  arranque sin `ADSB_RECEIVER` mide desde el lugar equivocado sin fallar. Por eso
+  los lanzadores llaman a `ubicacion-antena.bat`, único lugar donde se define, y
+  las cinco páginas muestran la franja de `webapp/static/franja_receptor.js`.
 
 ## Al terminar un cambio: actualizar ESTADO.md
 

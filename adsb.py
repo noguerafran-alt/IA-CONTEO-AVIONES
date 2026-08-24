@@ -28,6 +28,30 @@ import urllib.request
 from dataclasses import dataclass, field
 
 DEFAULT_URL = "http://127.0.0.1:8080/data/aircraft.json"
+
+# El 0.0 que adsb_rtlsdr.py:129 escribe cuando el mensaje es de SUPERFICIE y por
+# formato no trae altitud (TC 5-8 / BDS 0,6: su payload es movimiento, track y
+# CPR, nada mas). NO es una medicion de 0 ft, y meterlo en una resta de
+# altitudes fabrica descensos: medido sobre adsb_log.db, 779 de las 1010
+# posiciones del cilindro de SABE son este placeholder, y con el adentro dos
+# despegues (ARG1686 y JES3088) salian clasificados como motor y al aire con
+# baja=325 y baja=300 ft contra CAMBIO_MINIMO_FT=300 -- puro offset barometrico,
+# no un descenso.
+#
+# Que 0.0 los identifique es una heuristica, no una bandera: el valor lo escribe
+# el codigo y un 0 barometrico real seria indistinguible. Lo que la respalda es
+# medido: de las 785 filas con altitud exactamente 0 y posicion, 784 traen
+# ground_speed en LA MISMA fila, y eso solo pasa en un mensaje de superficie
+# -- las posiciones en vuelo (TC 9-18) no llevan velocidad. 728 de esas 784
+# vienen a menos de 20 kt (rodaje). El arreglo de fondo es una columna propia
+# en la base, y esta anotado en ESTADO.md: no se puede hacer sin reiniciar el
+# grabador, que ahora mismo esta grabando.
+ALTITUD_SUPERFICIE_PLACEHOLDER = 0.0
+
+
+def es_altitud_de_superficie(altitude_ft) -> bool:
+    """Si esa altitud es el placeholder de superficie y no algo que se midio."""
+    return altitude_ft is not None and altitude_ft == ALTITUD_SUPERFICIE_PLACEHOLDER
 # Cuanto tiempo se conservan las observaciones. Un avion tarda minutos entre que
 # aparece en el radar y toca pista, asi que la ventana tiene que cubrir eso.
 DEFAULT_HISTORY_S = 900.0
@@ -61,7 +85,20 @@ class Observation:
 
     @property
     def is_on_ground(self) -> bool:
+        # OJO: esto es "altitud <= 0", no la bandera de superficie del mensaje.
+        # Con el offset barometrico del 23/08 (QNH ~1025 hPa, -331 ft sobre el
+        # campo de SABE) eso significa "a menos de 331 ft sobre la pista": las
+        # 69 filas con altitud negativa de la base quedan marcadas en tierra
+        # porque lo dice esta comparacion, no porque lo diga el avion.
+        # adsb_rtlsdr.py:112 SI calcula la bandera real (TC 5-8 / BDS 0,6 o
+        # vertical_status 'on-ground') y la tira; propagarla necesita columna
+        # nueva en la base, y esta anotado en ESTADO.md.
         return self.altitude_ft is not None and self.altitude_ft <= 0
+
+    @property
+    def altitud_es_de_superficie(self) -> bool:
+        """Si la altitud de esta fila es el placeholder y no una medicion."""
+        return es_altitud_de_superficie(self.altitude_ft)
 
     @property
     def is_descending(self) -> bool:

@@ -6,6 +6,7 @@
 <!-- Plotly desde /static y no de un CDN: el sistema tiene que funcionar sin
      internet. Se baja una vez con "python webapp/bajar_plotly.py". -->
 <script src="/static/plotly.min.js"></script>
+<script src="/static/franja_receptor.js"></script>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
@@ -124,7 +125,12 @@
 
   <div class="estado" id="estado"><span class="punto"></span><span id="estado-txt">–</span></div>
 
-  <div id="aviso-antena" class="aviso" style="display:none"></div>
+  <!-- Desde donde se mide. Esta era la quinta pagina y la ultima sin la franja
+       compartida, siendo la que MAS depende de la ubicacion: dibuja el circulo
+       de horizonte y el triangulo del receptor. Tenia un cartel propio que
+       ademas avisaba al reves -solo si is_default era false-, o sea que se
+       callaba justo en el modo de falla. Ver webapp/static/franja_receptor.js. -->
+  <div id="franja-receptor"></div>
   <div id="aviso-ref" class="aviso" style="display:none"></div>
 
   <div id="descartadas" class="descartadas" style="display:none"></div>
@@ -1019,15 +1025,6 @@ function pintar(estado) {
   const subRx = document.getElementById("sub-receptor");
   if (subRx && rx.name) subRx.textContent = rx.name;
 
-  const avisoAntena = document.getElementById("aviso-antena");
-  if (rx.is_default === false) {
-    avisoAntena.innerHTML = `<strong>La antena no está en la ubicación por defecto.</strong>
-      <code>ADSB_RECEIVER</code> la puso en <strong>${rx.name}</strong>
-      (${rx.lat.toFixed(4)}, ${rx.lon.toFixed(4)}), con la antena a ${rx.antenna_m} m, desde
-      donde el horizonte a un avión en pista es ${rx.surface_horizon_km} km.
-      Todo lo que este mapa mide —distancias, anillos, alcance— se mide desde ahí.`;
-    avisoAntena.style.display = "";
-  }
 
   if (rx.surface_ref && rx.surface_ref_is_default === false) {
     const aviso = document.getElementById("aviso-ref");
@@ -1242,6 +1239,13 @@ document.addEventListener("visibilitychange", () => {
   const rato = ocultaDesde ? Date.now() - ocultaDesde : 0;
   cargar(rato > OCULTA_MAX_MS).then(programar);
 });
+
+// La franja sale de /api/receptor y no de FIJO.receiver, aunque este mapa ya lo
+// tenga cargado: el punto del archivo compartido es que las cinco paginas digan
+// lo mismo, y ese dict viaja por otro endpoint que ya se desincronizo una vez.
+// Va aca y no en pintar() porque pintar() corre en cada refresco: desde donde se
+// mide no cambia sin reiniciar el servidor, asi que se pide una sola vez.
+window.cargarFranjaReceptor();
 
 cargar(true).then(programar);
 </script>

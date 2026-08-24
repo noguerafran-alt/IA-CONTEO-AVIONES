@@ -71,8 +71,15 @@
     <a href="/adsb" style="color:#60a5fa">ADS-B en vivo</a> ·
     <a href="/adsb/analisis" style="color:#60a5fa">análisis ADS-B</a> ·
     <a href="/adsb/mapa" style="color:#60a5fa">mapa ADS-B</a> ·
-    <a href="/aeropuerto/mapa" style="color:#60a5fa">mapa del aeropuerto</a>
+    <a href="/aeropuerto/mapa" style="color:#60a5fa">mapa del aeropuerto</a> ·
+    <a href="/aeropuerto" style="color:#60a5fa">operaciones del aeropuerto</a>
   </div>
+
+  <!-- Desde donde se mide, en la PRIMERA pantalla que alguien abre. Antes esta
+       pagina pintaba los seis conteos y la advertencia sin nombrar en ningun
+       momento al receptor: ni distancia, ni horizonte, ni si la ubicacion era
+       la de por defecto. Ver webapp/static/franja_receptor.js. -->
+  <div id="franja-receptor"></div>
 
   <!-- El apartado del aeropuerto objetivo en la portada. Va arriba de la tabla
        de eventos de camara porque contesta la pregunta del proyecto -que aviones
@@ -205,12 +212,17 @@
     });
   });
 </script>
+<script src="/static/franja_receptor.js"></script>
 <script>
 // Solo el resumen: el detalle de cada operacion vive en /adsb/analisis. La
 // portada tiene que cargar rapido y contestar una cosa.
 (async () => {
-  let d;
-  try { d = (await (await fetch("/api/aeropuerto")).json()).airport; } catch (e) { return; }
+  let r;
+  try { r = await (await fetch("/api/aeropuerto")).json(); } catch (e) { return; }
+  // La franja se pinta ANTES del early return: si no hay aeropuerto configurado
+  // igual hace falta saber desde donde se esta midiendo.
+  pintarFranjaReceptor(r.receptor, null);
+  const d = r.airport;
   if (!d) return;
   const caja = document.getElementById("apartado-apt");
   caja.style.display = "";
@@ -222,18 +234,30 @@
   caja.innerHTML = `
     <h2 style="margin-bottom:12px">${d.nombre} (${d.codigo})</h2>
     ${aviso}
+    <!-- Las siete categorias, no cinco. Antes faltaban SALIDAS y EN TIERRA: los
+         cinco numeros sumaban 31 contra 43 aeronaves en el cilindro y nada en
+         pantalla decia que el conjunto era parcial, asi que quien sumara no
+         tenia forma de saber donde se habian ido 12. El total va al lado para
+         que la suma se pueda verificar a ojo. -->
     <div class="apt-nums">
       <div><b>${d.aterrizajes}</b><span>aterrizajes reales</span></div>
       <div><b>${d.despegues}</b><span>despegues</span></div>
       <div class="gris"><b>${d.aproximaciones}</b><span>aproximaciones sin resolver</span></div>
+      <div class="gris"><b>${d.salidas}</b><span>salidas sin resolver</span></div>
       <div class="gris"><b>${d.frustradas}</b><span>motor y al aire</span></div>
+      <div class="gris"><b>${d.en_tierra}</b><span>en tierra</span></div>
       <div class="gris"><b>${d.sobrevuelos}</b><span>sobrevuelos</span></div>
+      <div class="gris"><b>${d.aeronaves_en_cilindro}</b><span>aeronaves en el cilindro
+        ${d.categorias_cuadran ? "· la suma cuadra" : "· LA SUMA NO CUADRA"}</span></div>
     </div>
     <p style="color:#9aa0a6;font-size:0.85rem;line-height:1.5;margin:12px 0 0">
       Un aterrizaje se cuenta solo si la aeronave bajó de ${alt(d.umbral_suelo_ft)} ft sobre el
-      campo <em>y no volvió a subir</em>: eso es lo que separa un aterrizaje de un motor y al
-      aire, que baja igual. Lo más bajo visto sobre el campo:
-      <b>${alt(d.min_altitude_vista_ft)} ft</b>.
+      campo —o se la vio en superficie, que es más fuerte— <em>y no volvió a subir</em>: eso es
+      lo que separa un aterrizaje de un motor y al aire, que baja igual. Lo más bajo visto
+      adentro: <b>${alt(d.min_altitude_vista_ft)} ft</b> de altitud de presión menos la
+      elevación del campo (no es altura sobre la pista: con QNH alta da negativo con el avión
+      en la pista).
+      <a href="/aeropuerto" style="color:#60a5fa">ver quién aterrizó y quién despegó</a> ·
       <a href="/adsb/analisis" style="color:#60a5fa">ver el detalle</a> ·
       <a href="/aeropuerto/mapa" style="color:#60a5fa">ver en el mapa del aeropuerto</a>
     </p>`;

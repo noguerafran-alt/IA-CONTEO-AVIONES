@@ -235,6 +235,46 @@ def limite_posicion_km(alt_ft: float) -> float:
     return MARGEN_DUCTING * horizonte_km(alt_ft)
 
 
+def origen_configuracion() -> str:
+    """De donde salio la ubicacion: 'ADSB_RECEIVER' o 'por defecto'.
+
+    Se publica junto con el nombre porque las dos cosas se leen distinto: "San
+    Isidro (por defecto)" quiere decir que NADIE eligio, y ese es el modo de
+    falla real -- el 23/08 el servidor se arranco con el acceso directo a
+    dashboard.bat, que no fija ninguna variable ADSB_*, y midio nueve horas
+    desde San Isidro con la antena ya mudada a Aeroparque. El unico rastro que
+    quedaba de eso era is_default=true en un JSON que ninguna pagina miraba.
+    """
+    return "ADSB_RECEIVER" if not RECEIVER_ES_DEFAULT else "por defecto"
+
+
+def resumen_configuracion(codigo_aeropuerto: str | None = None) -> str:
+    """Una linea con TODO lo que decide desde donde se mide.
+
+    Existe porque la configuracion de ubicacion vive solo en el entorno del
+    proceso: nada del repo la escribe en ningun archivo, y receiver.py no
+    imprime nada al importarse. O sea que de un servidor ya arrancado no se
+    podia saber desde donde mide sin pedirle un endpoint -- y el 23/08 hubo DOS
+    procesos servidor vivos a la vez, uno con el Python del venv y otro con el
+    del Store, sin forma de saber cual contestaba.
+    """
+    partes = [f"midiendo desde {RECEIVER_NAME} ({origen_configuracion()})",
+              f"antena {ANTENA_M:.0f} m",
+              f"horizonte al suelo {horizonte_km(0):.1f} km"]
+    if codigo_aeropuerto:
+        try:
+            from pyModeS.position._airports import AIRPORTS
+            if codigo_aeropuerto in AIRPORTS:
+                lat, lon = AIRPORTS[codigo_aeropuerto]
+                km = distance_km(lat, lon)
+                if km is not None:
+                    partes.append(f"{codigo_aeropuerto} a {km:.1f} km "
+                                  f"({'la pista entra en el horizonte' if km <= horizonte_km(0) else 'la pista queda BAJO el horizonte'})")
+        except Exception:
+            pass
+    return ", ".join(partes)
+
+
 def parse_surface_ref(text: str | None) -> tuple[float, float] | str | None:
     """Interpreta 'lat,lon' o un codigo ICAO de aeropuerto ('SADF').
 

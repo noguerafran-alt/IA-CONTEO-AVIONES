@@ -51,3 +51,7 @@ webapp/static/plotly.min.js
 
 # Tabla del Doc 8643: se importa con tipos_avion.py, no viaja en el repo.
 tools/aircraft_types.sqlite
+
+# Respaldos de mediciones: son datos, no codigo. El de Aeroparque del 2026-08-23
+# es irrepetible sin volver a ir con la antena.
+respaldos/

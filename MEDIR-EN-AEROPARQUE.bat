@@ -39,14 +39,11 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-REM ADSB_RECEIVER=aeroparque trae de una las coordenadas y la altura del preset
-REM de receiver.py. La altura de 3 m es una suposicion de armado portatil: si la
-REM medis con cinta, descomenta la linea de abajo y poné el valor real. A esta
-REM distancia igual no cambia la conclusion -con la antena a 1 m el horizonte al
-REM suelo ya son 4.1 km contra 1.15 km a la pista-, pero el numero que publica
-REM el mapa sale de ahi.
-set ADSB_RECEIVER=aeroparque
-REM set ADSB_ANTENNA_M=3
+REM La ubicacion ya no se fija aca: salio a ubicacion-antena.bat para que este
+REM archivo y dashboard.bat no puedan discrepar. Eran dos copias de la misma
+REM linea y la de dashboard.bat directamente faltaba, que es como el 23/08 se
+REM midieron nueve horas desde San Isidro con la antena ya en Aeroparque.
+call "%~dp0ubicacion-antena.bat"
 
 REM Ganancia automatica y no 49.6. El maximo del R820T es lo correcto LEJOS;
 REM pegado a la pista satura y se pierden mensajes. Medido en la otra punta:

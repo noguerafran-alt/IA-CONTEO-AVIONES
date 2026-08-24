@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Operaciones de Aeroparque — Runway Video Analytics</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 18px; }
+  a { color: #60a5fa; }
+
+  .cards { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 14px 20px; min-width: 132px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .sub { color: #6b7280; font-size: 0.78rem; margin-top: 3px; }
+  /* Verde: lo que se puede AFIRMAR que paso en esta pista. Gris: lo que entro
+     al cilindro y no se pudo resolver. La distincion es la razon de ser de la
+     pagina y por eso es de color, no de letra chica. */
+  .card.real .n { color: #34d399; }
+  .card.gris .n { color: #9aa0a6; }
+  .card.gris { background: #171a20; }
+
+  .panel { background: #1a1d24; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 10px 0 0; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.5; margin-bottom: 18px; }
+  .alarma { background: #3a1b1b; border-left: 3px solid #f87171; border-radius: 6px;
+            padding: 12px 16px; color: #fecaca; font-size: 0.87rem; line-height: 1.55; margin-bottom: 18px; }
+  .alarma b { color: #fee2e2; }
+  .cuadra { font-size: 0.85rem; color: #9aa0a6; margin: 0 0 18px; }
+  .cuadra.mal { color: #fca5a5; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.88rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.72rem; }
+  th.grupo { color: #6b7280; border-bottom: 1px solid #363b46; text-align: center; letter-spacing: 0.06em; }
+  th.orden { cursor: pointer; user-select: none; }
+  th.orden:hover { color: #e6e6e6; }
+  th.orden.activo { color: #60a5fa; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ident { color: #fbbf24; font-weight: 600; }
+  .matri { color: #34d399; font-weight: 600; }
+  .muted { color: #4b5563; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+  .conf { color: #34d399; font-weight: 600; }
+  /* Lo inferido se distingue de lo leido del registro, igual que en
+     /adsb/analisis: "LV-KEJ (registro)" y "LV-KDI (probable, del distintivo)"
+     son afirmaciones de fuerza muy distinta. */
+  .inferido { border-bottom: 1px dotted #6b7280; cursor: help; }
+
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; }
+  .chip.aterrizaje { background: #14532d; color: #86efac; }
+  .chip.despegue   { background: #1e3a5f; color: #93c5fd; }
+
+  .controles { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  input[type=search] { background: #262a33; color: #e6e6e6; border: 1px solid #363b46;
+                       border-radius: 6px; padding: 8px 14px; font-size: 0.9rem; width: 280px; }
+  .tabs button { background: #262a33; color: #9aa0a6; border: 1px solid #363b46;
+                 border-radius: 6px; padding: 7px 13px; font-size: 0.85rem; cursor: pointer; }
+  .tabs button.activo { background: #1e3a5f; color: #dbeafe; border-color: #3b82f6; }
+  .cuenta { color: #6b7280; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1 id="titulo">Operaciones del aeropuerto</h1>
+  <div class="subtitle">
+    Una fila por aeronave que <b>aterrizó o despegó</b> acá, con todo lo que se sabe de ella ·
+    <a href="/">dashboard</a> · <a href="/adsb">ADS-B en vivo</a> ·
+    <a href="/adsb/analisis">análisis ADS-B</a> · <a href="/adsb/mapa">mapa ADS-B</a> ·
+    <a href="/aeropuerto/mapa">mapa del aeropuerto</a>
+  </div>
+
+  <!-- Desde donde se mide, arriba de todo y en las cinco paginas. Ver
+       webapp/static/franja_receptor.js. -->
+  <div id="franja-receptor"></div>
+
+  <div id="alarma-antena"></div>
+  <div id="aviso"></div>
+  <div class="cards" id="tarjetas"></div>
+  <div class="cards" id="tarjetas-fuera"></div>
+  <p class="cuadra" id="cuadra"></p>
+
+  <div class="controles">
+    <h2 style="margin:0">Aeronaves que operaron acá</h2>
+    <div class="tabs" id="tabs">
+      <button data-tipo="" class="activo">Todas</button>
+      <button data-tipo="aterrizaje">Aterrizajes</button>
+      <button data-tipo="despegue">Despegues</button>
+    </div>
+    <input type="search" id="buscar" placeholder="filtrar por vuelo, matrícula, tipo, operador, pista…">
+    <span class="cuenta" id="cuenta"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <!-- Dos filas de encabezado porque las columnas hablan de DOS
+             conjuntos distintos: lo que paso adentro del cilindro de este
+             aeropuerto, y todo lo que se escucho de esa aeronave en cualquier
+             lugar. Sin la fila de grupo, "Alt. mín" aparece dos veces con
+             valores distintos y parece un error. -->
+        <tr>
+          <th class="grupo" colspan="7">La aeronave</th>
+          <th class="grupo" colspan="7">La operación (dentro del cilindro de este aeropuerto)</th>
+          <th class="grupo" colspan="7">Todo lo escuchado de ella, en cualquier lugar</th>
+        </tr>
+        <tr id="encabezados"></tr>
+      </thead>
+      <tbody id="tabla"><tr><td colspan="21" class="empty">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="panel" style="margin-top:20px">
+    <h2>Qué significa cada número</h2>
+    <p class="nota" id="explicacion">–</p>
+  </div>
+
+<script src="/static/franja_receptor.js"></script>
+<script>
+// --- formato ---------------------------------------------------------------
+const nada = '<span class="muted">–</span>';
+const num = (v, suf = "") => v === null || v === undefined ? nada
+                           : Math.round(v).toLocaleString("es-AR") + suf;
+const dist = (v, dec = 2) => v === null || v === undefined ? nada : v.toFixed(dec) + " km";
+const hora = ts => ts === null || ts === undefined ? nada
+                 : new Date(ts * 1000).toLocaleString("es-AR",
+                     {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+// Las columnas se declaran una vez: el encabezado, el orden y la celda salen de
+// la misma lista, asi que no puede quedar un titulo apuntando a otra columna.
+// `v` es el valor con el que se ORDENA (numero o texto) y `td` como se pinta.
+const COLUMNAS = [
+  {k: "icao24",    t: "ICAO24",     v: o => o.icao24, td: o => `<td class="mono">${o.icao24}</td>`},
+  {k: "callsign",  t: "Vuelo",      v: o => o.callsign || "",
+   td: o => `<td class="ident">${o.callsign || nada}</td>`},
+  {k: "registration", t: "Matrícula", v: o => o.registration || "",
+   td: o => `<td class="matri">${o.registration
+        ? (o.registration_source && o.registration_source.startsWith("distintivo")
+           ? `<span class="inferido" title="probable: el distintivo parece ser la matrícula y el país del ICAO24 concuerda. No confirmada por el registro.">${o.registration} ?</span>`
+           : o.registration)
+        : nada}</td>`},
+  {k: "aircraft_type", t: "Avión",  v: o => o.aircraft_type || "",
+   td: o => `<td>${o.aircraft_type || nada}</td>`},
+  {k: "operator",  t: "Operador",   v: o => o.operator || "",
+   td: o => `<td>${o.operator
+        ? (o.operator_source === "distintivo"
+           ? `<span class="inferido" title="inferido del distintivo de vuelo${o.operator_code ? " (" + o.operator_code + ")" : ""}, no leído del registro">${o.operator}</span>`
+           : o.operator)
+        : nada}</td>`},
+  // Motores y estela salen del Doc 8643 de la OACI, por tipo de avion. La
+  // estela no es adorno: define la separacion minima en aproximacion.
+  {k: "motores",   t: "Motores",    v: o => o.motores === null ? -1 : o.motores,
+   td: o => `<td class="num">${o.motores === null || o.motores === undefined ? nada
+        : o.motores + (o.tipo_motor ? " " + o.tipo_motor.toLowerCase() : "")}</td>`},
+  {k: "estela",    t: "Estela",     v: o => o.estela || "",
+   td: o => `<td>${o.estela
+        ? `<span title="${o.estela_texto || ""}">${o.estela}</span>` : nada}</td>`},
+
+  {k: "tipo",      t: "Qué hizo",   v: o => o.tipo,
+   td: o => `<td><span class="chip ${o.tipo}">${o.tipo}</span></td>`},
+  {k: "timestamp", t: "Cuándo",     v: o => o.timestamp,
+   td: o => `<td class="mono">${hora(o.timestamp)}</td>`},
+  // La altitud del punto mas bajo DENTRO del cilindro. Cuando de la aeronave
+  // solo llegaron mensajes de superficie no hay ninguna altitud medida, y
+  // publicar un 0 seria publicar el placeholder como si fuera medicion.
+  {k: "min_altitude_ft", t: "Alt. mín acá", v: o => o.min_altitude_ft === null ? -99999 : o.min_altitude_ft,
+   td: o => `<td class="num mono">${o.min_altitude_ft === null || o.min_altitude_ft === undefined
+        ? '<span class="muted" title="de esta aeronave solo llegaron mensajes de superficie, que por formato no traen altitud">sin altitud</span>'
+        : num(o.min_altitude_ft, " ft")}</td>`},
+  {k: "min_distance_km", t: "Dist. a la pista", v: o => o.min_distance_km,
+   td: o => `<td class="num mono">${dist(o.min_distance_km)}</td>`},
+  {k: "pista",     t: "Pista",      v: o => o.pista || "",
+   td: o => `<td>${o.pista ? o.pista : '<span class="muted">sin alinear</span>'}</td>`},
+  {k: "confirmada", t: "Alineación", v: o => (o.confirmada ? 1 : 0),
+   td: o => `<td>${o.confirmada ? '<span class="conf">confirmada</span>'
+        : '<span class="muted" title="quedó clasificada como aterrizaje o despegue, pero su rumbo no cayó dentro de la tolerancia de ninguna cabecera (o no transmitió rumbo)">sin confirmar</span>'}</td>`},
+  // Las dos evidencias, separadas: un mensaje de superficie (TC 5-8 / BDS 0,6)
+  // dice que el avion declara estar en el suelo, y eso es mas fuerte que una
+  // altitud barometrica baja comparada contra un umbral.
+  {k: "posiciones", t: "Posiciones acá", v: o => o.posiciones,
+   td: o => `<td class="num mono">${o.posiciones}${o.posiciones_superficie
+        ? ` <span class="conf" title="posiciones de SUPERFICIE: el avión declaró estar en el suelo. Es la evidencia más fuerte de que llegó a la pista.">(${o.posiciones_superficie} en superficie)</span>` : ""}</td>`},
+
+  {k: "min_altitude_ft_total", t: "Alt. mín total", v: o => o.min_altitude_ft_total,
+   td: o => `<td class="num mono">${num(o.min_altitude_ft_total, " ft")}</td>`},
+  {k: "max_altitude_ft", t: "Alt. máx", v: o => o.max_altitude_ft,
+   td: o => `<td class="num mono">${num(o.max_altitude_ft, " ft")}</td>`},
+  {k: "max_speed_kt", t: "Vel. máx", v: o => o.max_speed_kt,
+   td: o => `<td class="num mono">${num(o.max_speed_kt, " kt")}</td>`},
+  {k: "min_distance_receptor_km", t: "Dist. mín a la antena", v: o => o.min_distance_receptor_km,
+   td: o => `<td class="num mono">${dist(o.min_distance_receptor_km, 1)}</td>`},
+  {k: "max_distance_receptor_km", t: "Dist. máx a la antena", v: o => o.max_distance_receptor_km,
+   td: o => `<td class="num mono">${dist(o.max_distance_receptor_km, 1)}</td>`},
+  {k: "messages",  t: "Msjs",       v: o => o.messages,
+   td: o => `<td class="num mono">${num(o.messages)}</td>`},
+  {k: "last_seen", t: "Última vez", v: o => o.last_seen,
+   td: o => `<td class="mono">${hora(o.last_seen)}</td>`},
+];
+
+let OPS = [], TIPO = "", ORDEN = "timestamp", DESC = true, APT = null;
+
+function pintarEncabezados() {
+  document.getElementById("encabezados").innerHTML = COLUMNAS.map(c =>
+    `<th class="orden ${c.k === ORDEN ? "activo" : ""} ${c.t.match(/mín|máx|Vel|Msjs|Motores|Posiciones|Dist/) ? "num" : ""}"
+         data-k="${c.k}">${c.t}${c.k === ORDEN ? (DESC ? " ↓" : " ↑") : ""}</th>`).join("");
+}
+
+function pintar() {
+  const texto = document.getElementById("buscar").value.trim().toLowerCase();
+  let filas = OPS.filter(o => !TIPO || o.tipo === TIPO);
+  if (texto) {
+    filas = filas.filter(o => [o.icao24, o.callsign, o.registration, o.aircraft_type,
+                               o.operator, o.pista, o.tipo]
+                        .some(v => (v || "").toLowerCase().includes(texto)));
+  }
+  const col = COLUMNAS.find(c => c.k === ORDEN) || COLUMNAS[0];
+  // Los nulos van SIEMPRE al final, en los dos sentidos del orden: un null que
+  // se ordena como 0 pone "sin dato" en el medio de los datos.
+  filas = filas.slice().sort((a, b) => {
+    const va = col.v(a), vb = col.v(b);
+    const na = va === null || va === undefined || va === "";
+    const nb = vb === null || vb === undefined || vb === "";
+    if (na && nb) return 0;
+    if (na) return 1;
+    if (nb) return -1;
+    const s = typeof va === "string" ? va.localeCompare(vb) : (va - vb);
+    return DESC ? -s : s;
+  });
+
+  document.getElementById("cuenta").textContent =
+    `${filas.length} de ${OPS.length} operaciones` + (TIPO || texto ? " (filtrado)" : "");
+  const cuerpo = document.getElementById("tabla");
+  if (!filas.length) {
+    cuerpo.innerHTML = `<tr><td colspan="${COLUMNAS.length}" class="empty">Sin resultados</td></tr>`;
+    return;
+  }
+  cuerpo.innerHTML = filas.map(o => "<tr>" + COLUMNAS.map(c => c.td(o)).join("") + "</tr>").join("");
+  pintarEncabezados();
+}
+
+function pintarTarjetas(apt, fuera) {
+  // Fila verde: lo unico que se puede afirmar que paso en esta pista, que es la
+  // pregunta que el proyecto existe para contestar. "Confirmadas" NO va como
+  // tarjeta par de las otras: es un CALIFICADOR sobre aterrizaje/despegue
+  // (tipo in (aterrizaje, despegue) AND alineada), y ponerla al mismo nivel es
+  // lo que generaba el imposible aritmetico de /adsb/analisis -- 11
+  // confirmadas al lado de 0 aproximaciones y 8 salidas.
+  document.getElementById("tarjetas").innerHTML = `
+    <div class="card real"><div class="n">${apt.aterrizajes}</div>
+      <div class="label">Aterrizajes</div><div class="sub">bajó y no volvió a subir</div></div>
+    <div class="card real"><div class="n">${apt.despegues}</div>
+      <div class="label">Despegues</div><div class="sub">arrancó abajo y se fue</div></div>
+    <div class="card real"><div class="n">${apt.operaciones_reales}</div>
+      <div class="label">Operaciones reales</div>
+      <div class="sub">confirmadas por alineación ${apt.confirmadas} de ${apt.operaciones_reales}</div></div>`;
+
+  // Fila gris: lo que entro al cilindro y NO esta en esta tabla. Va en pantalla
+  // porque si no, una tabla de 25 filas al lado de "43 aeronaves" no tiene
+  // forma de explicar las otras 18.
+  document.getElementById("tarjetas-fuera").innerHTML = `
+    <div class="card gris"><div class="n">${fuera.aproximaciones}</div>
+      <div class="label">Aproximaciones sin resolver</div>
+      <div class="sub">bajaba, nunca se vio bastante abajo</div></div>
+    <div class="card gris"><div class="n">${fuera.salidas}</div>
+      <div class="label">Salidas sin resolver</div>
+      <div class="sub">subía, nunca se vio bastante abajo</div></div>
+    <div class="card gris"><div class="n">${fuera.frustradas}</div>
+      <div class="label">Motor y al aire</div><div class="sub">bajó al final y se fue</div></div>
+    <div class="card gris"><div class="n">${fuera.en_tierra}</div>
+      <div class="label">En tierra</div><div class="sub">apareció abajo, sin subir ni bajar</div></div>
+    <div class="card gris"><div class="n">${fuera.sobrevuelos}</div>
+      <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>`;
+
+  const c = document.getElementById("cuadra");
+  c.className = "cuadra" + (apt.categorias_cuadran ? "" : " mal");
+  c.innerHTML = `${apt.aterrizajes} + ${apt.despegues} + ${fuera.aproximaciones} + `
+    + `${fuera.salidas} + ${fuera.frustradas} + ${fuera.en_tierra} + ${fuera.sobrevuelos} = `
+    + `<b>${apt.suma_categorias}</b>, contra <b>${apt.aeronaves_en_cilindro}</b> aeronaves que `
+    + `entraron al cilindro: ${apt.categorias_cuadran ? "cuadra" : "NO CUADRA — hay una categoría que no se está mostrando"}.`;
+}
+
+async function cargar() {
+  const d = await (await fetch("/api/aeropuerto/operaciones")).json();
+  pintarFranjaReceptor(d.receptor, d.proceso);
+
+  const apt = d.airport;
+  if (!apt) {
+    document.getElementById("tabla").innerHTML =
+      `<tr><td colspan="${COLUMNAS.length}" class="empty">${d.empty_reason || "No hay datos"}.</td></tr>`;
+    return;
+  }
+  APT = apt;
+  document.title = `Operaciones de ${apt.nombre} — Runway Video Analytics`;
+  document.getElementById("titulo").textContent =
+    `${apt.nombre} (${apt.codigo}) — quién aterrizó y quién despegó`;
+
+  // El detector que sale del lado REFERENCIADO AL RECEPTOR. Ningun conteo de
+  // operaciones puede delatar una antena mal ubicada: el cilindro se define
+  // alrededor del AEROPUERTO, asi que los conteos salen idénticos con y sin
+  // ADSB_RECEIVER (medido: 14/11/1/8/4/5 en los dos casos). Lo que si delata es
+  // una posición de SUPERFICIE que llegó de más lejos que el horizonte de radio
+  // al suelo: un avión apoyado en el pavimento no puede.
+  const cov = d.coverage || {};
+  const alarma = document.getElementById("alarma-antena");
+  if (cov.receiver_misplaced) {
+    alarma.innerHTML = `<div class="alarma">
+      <b>La antena no está donde dice la configuración.</b>
+      Llegaron <b>${cov.surface_beyond_horizon}</b> posiciones de aeronaves
+      <em>en superficie</em>, de <b>${cov.surface_beyond_horizon_aircraft}</b> aeronaves
+      distintas, desde más lejos que el horizonte de radio a un avión en el suelo
+      (${cov.surface_horizon_km} km desde ${d.receptor.name}, con la antena a
+      ${d.receptor.antenna_m} m); la peor, a ${dist(cov.surface_beyond_horizon_max_km)}.
+      Un avión apoyado en el pavimento no puede llegar de más lejos que ese horizonte:
+      no hay altitud que lo levante sobre la curvatura de la Tierra.
+      <span class="rx-detalle">Esto <b>no</b> invalida la atribución de las operaciones —el
+      cilindro se define alrededor del aeropuerto, no de la antena— pero sí todo lo que esta
+      página diga <em>de la antena</em>: horizonte, alcance y las dos columnas de distancia a
+      la antena. Estas posiciones no se descartan: son dato real, lo que está mal es la
+      configuración.</span></div>`;
+  } else {
+    alarma.innerHTML = "";
+  }
+
+  document.getElementById("aviso").innerHTML = apt.advertencia
+    ? `<div class="aviso">${apt.advertencia}</div>` : "";
+
+  pintarTarjetas(apt, d.excluidas);
+
+  OPS = d.operaciones || [];
+  pintarEncabezados();
+  pintar();
+
+  const alt = v => v === null || v === undefined ? "–" : Math.round(v).toLocaleString("es-AR") + " ft";
+  document.getElementById("explicacion").innerHTML = `
+    Esta tabla trae <b>solo</b> las aeronaves clasificadas como <b>aterrizaje</b> o
+    <b>despegue</b> en ${apt.codigo}. No están las que pasaron por arriba, ni las
+    aproximaciones y salidas que no se pudieron resolver, ni las que quedaron en tierra:
+    esas cinco categorías son las tarjetas grises de arriba, y la suma está impresa para
+    que se pueda verificar a ojo.<br><br>
+    <b>Cómo se atribuye.</b> Se mira qué hizo cada aeronave dentro de un cilindro de
+    <b>${apt.radio_km} km</b> de radio y <b>${apt.techo_ft} ft</b> de techo sobre el
+    aeropuerto: ${apt.posiciones_en_cilindro} posiciones de ${apt.aeronaves_en_cilindro}
+    aeronaves, de las cuales <b>${apt.posiciones_en_superficie}</b> son mensajes de
+    <em>superficie</em> (TC 5-8 / BDS 0,6, de ${apt.aeronaves_en_superficie} aeronaves) y
+    ${apt.posiciones_con_altitud} traen altitud barométrica. Las dos evidencias se cuentan
+    aparte a propósito: un mensaje de superficie es el avión <em>declarando</em> que está en
+    el suelo, y eso es más fuerte que una altitud baja comparada contra un umbral.
+    Un aterrizaje se cuenta solo si bajó al suelo (o se lo vio en superficie)
+    <em>y no volvió a subir</em> ${alt(apt.umbral_suelo_ft)}: eso es lo que lo separa de un
+    motor y al aire, que baja igual.<br><br>
+    <b>Dos distancias con orígenes distintos.</b> «Dist. a la pista» es al
+    <em>aeropuerto</em> (${apt.codigo}); «Dist. mín/máx a la antena» es al
+    <em>receptor</em>. Leídas juntas sin aclararlo invitan a comparar dos cosas que no se
+    pueden comparar.<br><br>
+    <b>La altitud es barométrica, no altura sobre la pista.</b> Es altitud de presión
+    referida a 1013,25 hPa: con la QNH alta da negativa aunque el avión esté en la pista.
+    El 23/08 el desvío medido fue de <b>−331 ft</b> (QNH ≈ 1025 hPa, un anticiclón de
+    invierno normal en Buenos Aires) contra los ${alt(apt.elevacion_ft)} de elevación del
+    campo, así que un avión <em>en</em> la pista transmite unos −315 ft. Los negativos de
+    esta tabla no son un error de decodificación: 12 posiciones a menos de 100 m del eje
+    de pista, de 12 aeronaves distintas y en 1 h 14 min, dieron media −314,6 ft con desvío
+    estándar 25,9 ft — un paso de cuantización. Corregirlo de verdad está pendiente y
+    anotado en ESTADO.md.<br><br>
+    <b>Los datos de la aeronave son de toda su historia</b>, no solo de la operación: la
+    altitud máxima, la velocidad máxima y las distancias a la antena casi siempre ocurren
+    lejos del aeropuerto. Por eso van en su propio grupo de columnas.`;
+}
+
+document.getElementById("buscar").addEventListener("input", pintar);
+document.getElementById("tabs").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  TIPO = e.target.dataset.tipo;
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("activo", b === e.target);
+  pintar();
+});
+// Delegado en el <thead>, que se rehace con cada repintado: un listener por
+// <th> quedaria colgado del elemento viejo despues del primer orden.
+document.querySelector("thead").addEventListener("click", e => {
+  const th = e.target.closest("th.orden");
+  if (!th) return;
+  if (ORDEN === th.dataset.k) { DESC = !DESC; } else { ORDEN = th.dataset.k; DESC = true; }
+  pintar();
+});
+cargar();
+</script>
+</body>
+</html>

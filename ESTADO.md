@@ -74,7 +74,11 @@ aeropuerto cercano a la antena, 24/7. Aeroparque en este caso.
 cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && ..\.venv\Scripts\python.exe main.py
 ```
 
-Cuatro páginas, en `http://127.0.0.1:8000`:
+Pero para uso normal, **doble clic en `dashboard.bat`**: levanta el servidor con
+la ubicación de la antena ya puesta. Arrancarlo a mano como arriba lo deja
+midiendo desde San Isidro (ver «Nueve horas midiendo desde el lugar equivocado»).
+
+Seis páginas, en `http://127.0.0.1:8000`:
 
 | ruta | qué contesta |
 |---|---|
@@ -82,7 +86,12 @@ Cuatro páginas, en `http://127.0.0.1:8000`:
 | `/adsb` | en vivo: registro completo por aeronave, señal, resumen histórico |
 | `/adsb/analisis` | todo lo grabado: cobertura por campo, alcance, descartes, apartado del aeropuerto |
 | `/adsb/mapa` | mapa Plotly con aviones rotados al rumbo, costa y pistas reales |
+| `/aeropuerto` | **una fila por aeronave que operó ahí**, con todo lo que se sabe de ella |
 | `/aeropuerto/mapa` | **mapa de un solo aeropuerto**: centrado en la pista, solo lo que operó ahí |
+
+Las **cinco** que publican números referidos a la antena (todas menos `/label`)
+muestran arriba la franja de `webapp/static/franja_receptor.js`, que dice desde
+dónde se está midiendo y se pone **roja** si nadie lo eligió.
 
 La grabación se arranca y se para desde `/adsb`. **El dongle es exclusivo**: un
 solo proceso puede tomarlo.
@@ -93,7 +102,7 @@ Todas documentadas en `.env.example`. Ninguna es secreta (no van en `.env`).
 
 | variable | default | para qué |
 |---|---|---|
-| `ADSB_RECEIVER` | `san-isidro` | dónde está la antena. Acepta `ypf`, `lat,lon` o código ICAO |
+| `ADSB_RECEIVER` | `san-isidro` | dónde está la antena. Acepta `ypf`, `lat,lon` o código ICAO. **No se pone a mano**: se define en `ubicacion-antena.bat`, que llaman los cuatro lanzadores. El valor por defecto ya no es dónde está la antena |
 | `ADSB_ANTENNA_M` | del preset | altura de la antena. **Decide si se ven aviones en pista** |
 | `ADSB_GAIN` | `49.6` | ganancia del receptor, o `auto`. Solo para la fuente IQ |
 | `ADSB_AIRPORT` | `SABE` | qué aeropuerto contar. `NINGUNO` apaga el apartado |
@@ -342,6 +351,26 @@ recién asignados. Se ve el **vuelo** (ARG1403) casi siempre; el **avión físic
 
 ## Un bug ya arreglado que vale recordar
 
+**Nueve horas midiendo desde el lugar equivocado.** El 2026-08-23 la antena ya
+estaba en Aeroparque y el servidor se arrancó con el acceso directo a
+`dashboard.bat`, que no fijaba ninguna variable `ADSB_*`. Midió **nueve horas
+desde San Isidro**, a 13,3 km de la pista, mientras las operaciones detectadas
+estaban a **0,19–1,15 km**. Nada falló: cada distancia, anillo y alcance se
+publicó con confianza, referido a un lugar donde la antena ya no estaba.
+
+Por qué se pudo dar, y qué lo cierra:
+
+| causa | arreglo |
+|---|---|
+| La ubicación vivía **solo** en el entorno del proceso; ningún archivo del repo la escribía | `ubicacion-antena.bat`: **único** lugar donde se define. Lo llaman `dashboard.bat`, `MEDIR-EN-AEROPARQUE.bat`, `GRABAR-ADSB.bat` e `INSTALAR-Y-EJECUTAR.bat` |
+| De un servidor ya levantado no se podía saber desde dónde medía | `GET /api/receptor` + la franja en las cinco páginas |
+| `/adsb/mapa` era la única que nombraba al receptor, **y avisaba al revés**: pintaba el cartel solo si `is_default` era `false`, o sea que se callaba justo en el modo de falla | Reemplazado por la franja compartida. La versión **por defecto es la ruidosa** (roja): si nadie eligió, eso es lo que hay que gritar |
+| Dos copias de `set ADSB_RECEIVER` se habrían desincronizado | Una sola definición, llamada con `call` |
+
+La lección general: **avisar no es arreglar**. La franja hace visible el problema,
+pero el arranque además tiene que ser correcto solo — si depende de que alguien se
+acuerde de una variable, algún día no se va a acordar.
+
 **No ordenar una costa por latitud.** Parece inofensivo y la destruye: una costa
 no es monótona en latitud (bahías, el delta, la vuelta de Punta del Este), así que
 ordenar hace que el trazo salte de un lado al otro. Medido: la orilla uruguaya
@@ -472,6 +501,8 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `test_adsb_position.py` | 8 escenarios de posición y CRC |
 | `test_adsb_incremental.py` | el cursor no pierde ni repite filas, y da igual que `load_db` |
 | `webapp/bajar_plotly.py` | baja Plotly una vez |
+| `webapp/static/franja_receptor.js` | la franja de «desde dónde se mide», igual en las cinco páginas |
+| `ubicacion-antena.bat` | **único** lugar donde se define dónde está la antena; lo llaman los cuatro lanzadores |
 
 Los cuatro archivos de test pasan: `test_adsb.py`, `test_adsb_events.py`,
 `test_adsb_position.py`, `test_adsb_incremental.py`.

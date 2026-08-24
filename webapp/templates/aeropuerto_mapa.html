@@ -6,6 +6,7 @@
 <!-- Plotly desde /static y no de un CDN: el sistema tiene que funcionar sin
      internet. Se baja una vez con "python webapp/bajar_plotly.py". -->
 <script src="/static/plotly.min.js"></script>
+<script src="/static/franja_receptor.js"></script>
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
@@ -86,8 +87,15 @@
     <a href="/adsb/mapa">mapa de todo</a> ·
     <a href="/adsb/analisis">análisis</a> ·
     <a href="/adsb">ADS-B en vivo</a> ·
+    <a href="/aeropuerto">operaciones del aeropuerto</a> ·
     <a href="/">dashboard</a>
   </div>
+
+  <!-- Desde donde se mide. Esta pagina dibuja las trazas de los aterrizajes y
+       hasta hoy no podia avisar que la ubicacion era la de por defecto ni
+       queriendo: su dict receiver traia lat/lon/name y nada mas. Ver
+       webapp/static/franja_receptor.js. -->
+  <div id="franja-receptor"></div>
 
   <div class="estado" id="estado"><span>cargando…</span></div>
   <div id="diagnostico"></div>
@@ -397,8 +405,25 @@ function pintarTarjetas(apt) {
       <div class="sub">subía, nunca se vio bastante abajo</div></div>
     <div class="card gris"><div class="n">${apt.frustradas}</div>
       <div class="label">Motor y al aire</div><div class="sub">bajó y se fue</div></div>
+    <!-- La tarjeta de EN TIERRA faltaba, y este mapa las DIBUJA: tienen color
+         propio (#a78bfa) y etiqueta propia, o sea que el 23/08 habia 4 trazas
+         violetas con su nombre en el hover y ningun numero de la pantalla que
+         les correspondiera. Es literalmente el mismo bug que el comentario de
+         arriba dice haber arreglado para las salidas, repetido con el otro
+         tipo: el tipo no tenia contador ni clave en como_json. -->
+    <div class="card gris"><div class="n">${apt.en_tierra}</div>
+      <div class="label">En tierra</div><div class="sub">apareció abajo, sin subir ni bajar</div></div>
     <div class="card gris"><div class="n">${apt.sobrevuelos}</div>
-      <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>`;
+      <div class="label">Sobrevuelos</div><div class="sub">entró sin subir ni bajar</div></div>
+    <!-- El total al lado de las siete categorias: la igualdad impresa es lo
+         unico que hace que el proximo tipo agregado a _clasificar rompa algo
+         visible en vez de desaparecer de las cuatro pantallas a la vez. -->
+    <div class="card gris" title="${apt.aterrizajes} + ${apt.despegues} + ${apt.aproximaciones} + ${apt.salidas} + ${apt.frustradas} + ${apt.en_tierra} + ${apt.sobrevuelos} = ${apt.suma_categorias}">
+      <div class="n">${apt.aeronaves_en_cilindro}</div>
+      <div class="label">Aeronaves en el cilindro</div>
+      <div class="sub">${apt.categorias_cuadran
+        ? "las siete categorías suman " + apt.suma_categorias + ": cuadra"
+        : "LA SUMA NO CUADRA: " + apt.suma_categorias}</div></div>`;
 }
 
 // Resaltar es apagar el resto, con restyle y no redibujando. Los listeners van
