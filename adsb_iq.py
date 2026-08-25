@@ -62,6 +62,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import threading
 from pathlib import Path
 
@@ -328,6 +329,21 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
     if not exe.exists():
         raise FileNotFoundError(f"no se encontro {exe}")
     ganancia = ganancia or GANANCIA_DEFAULT
+    # "auto" se traduce a "0", que es como rtl_sdr pide el control automatico de
+    # ganancia. Antes la cadena se pasaba cruda: rtl_sdr le hacia atof, "auto"
+    # daba 0.0 y el AGC quedaba activado POR ACCIDENTE. Funcionaba, pero apoyado
+    # en como falla un parseo, y cualquier build que validara el argumento lo
+    # habria roto sin que nadie entendiera por que.
+    #
+    # Y el AGC importa mucho mas de lo que parecia: medido desde el piso 13 de la
+    # torre de YPF, a 7 km de Aeroparque, en 22 segundos por punto:
+    #   ganancia 49.6 -> 23 mensajes      ganancia 40.2 -> 0
+    #   ganancia 20.7 -> 0 mensajes       AGC ("auto") -> 34684
+    # Mil quinientas veces mas. Con ganancia fija el frente de radio satura -a
+    # esa altura y distancia las senales llegan enormes- y saturar no atenua:
+    # destruye la demodulacion. El AGC encuentra el punto de trabajo solo.
+    if str(ganancia).strip().lower() in ("auto", "agc", ""):
+        ganancia = "0"
     bytes_bloque = int(SAMPLE_RATE * segundos_por_bloque) * 2
     proceso = subprocess.Popen(
         [str(exe), "-f", str(FREQ_HZ), "-s", str(SAMPLE_RATE), "-g", ganancia, "-"],
@@ -430,6 +446,90 @@ class IqRecorder(RtlAdsbRecorder):
             self._procesar_hex(mensaje["hex"], mensaje["dbfs"])
 
 
+def medir(segundos: float = 30.0, ganancia: str | None = None) -> dict:
+    """Contestar en 30 segundos si esta antena recibe ADS-B, si o no.
+
+    Para usar PARADO al lado de la antena, moviendola de lugar. Existe porque
+    --escuchar no alcanza: imprime todos los mensajes juntos, y el 2026-08-24
+    desde el piso 13 de la torre de YPF eso engano. Medido, 40 s por punto:
+
+        ganancia    DF17/18 con CRC valido    otras tramas
+        49.6                             0             334
+        AGC                              0          73 604
+
+    Con AGC el dashboard reportaba 34 684 mensajes y 101 "aeronaves", todas con
+    exactamente 2 mensajes, sin distintivo, y una con altitud de 110 500 ft. Era
+    ruido al 100%. Un conteo alto de mensajes puede ser puro ruido, y mirarlo
+    manda a buscar el problema en la ganancia cuando el problema es que no llega
+    senal.
+
+    LO UNICO QUE EL RUIDO NO PUEDE FALSIFICAR es el CRC de DF17/18: 24 bits
+    contra un sindrome conocido, o sea 1 en 16.7 millones de que una trama de
+    ruido pase. Los formatos cortos llevan la paridad XOR-eada con la direccion
+    del avion, no se validan solos, y el ruido los produce a montones. Por eso
+    aca se cuentan SEPARADOS y el veredicto sale solo de los verificables.
+    """
+    from pyModeS.util import icao
+
+    verificados = 0
+    otras = 0
+    direcciones: set[str] = set()
+    niveles: list[float] = []
+    t0 = time.time()
+    for mensaje in escuchar(ganancia=ganancia):
+        if mensaje["df"] in (17, 18):
+            verificados += 1
+            niveles.append(mensaje["dbfs"])
+            try:
+                a = icao(mensaje["hex"])
+                if a:
+                    direcciones.add(a.lower())
+            except Exception:
+                pass
+        else:
+            otras += 1
+        if time.time() - t0 >= segundos:
+            break
+    transcurrido = max(time.time() - t0, 0.1)
+    niveles.sort()
+    return {
+        "segundos": transcurrido, "verificados": verificados, "otras": otras,
+        "por_segundo": verificados / transcurrido, "aeronaves": len(direcciones),
+        "mediana_dbfs": (niveles[len(niveles) // 2] if niveles else None),
+        "mejor_dbfs": (niveles[-1] if niveles else None),
+    }
+
+
+def informe_medicion(r: dict) -> None:
+    """El veredicto en pantalla, con que hacer si no hay senal."""
+    print()
+    print(f"=== {r['segundos']:.0f} s escuchando ===")
+    print()
+    if r["verificados"] > 0:
+        print(f"  SI HAY ADS-B: {r['verificados']} mensajes VERIFICADOS "
+              f"({r['por_segundo']:.1f}/s) de {r['aeronaves']} aeronaves")
+        print(f"  senal: mediana {r['mediana_dbfs']:.1f} dBFS, mejor {r['mejor_dbfs']:.1f}")
+        if r["mejor_dbfs"] is not None and r["mejor_dbfs"] > -6:
+            print("  OJO: llega tan fuerte que puede estar saturando. Proba una")
+            print("       ganancia fija mas baja y compara este mismo numero.")
+    else:
+        print(f"  NO HAY ADS-B. Cero mensajes verificados en {r['segundos']:.0f} s.")
+        print()
+        print(f"  Llegaron {r['otras']} tramas NO verificables. Eso no es senal:")
+        print("  el ruido las produce a montones, y el dashboard las cuenta como")
+        print("  mensajes. Por eso puede decir que recibe cuando no recibe nada.")
+        print()
+        print("  QUE PROBAR, en este orden:")
+        print("   1. Sacar la antena por una ventana ABIERTA o al balcon. El vidrio")
+        print("      de las torres modernas lleva capa metalica y atenua 1090 MHz")
+        print("      decenas de dB: adentro no se recibe aunque haya vista al cielo.")
+        print("   2. Revisar el conector del lado de la ANTENA, no solo del dongle.")
+        print("   3. Confirmar que sea la antena de 1090 MHz y no la de FM/TV que")
+        print("      viene en la caja del dongle.")
+        print("   4. Alejarla de las estructuras metalicas del edificio.")
+    print()
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -437,10 +537,17 @@ if __name__ == "__main__":
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--escuchar", action="store_true", help="demodular en vivo")
     parser.add_argument("--probar", action="store_true", help="autoverificacion sin antena")
+    parser.add_argument("--medir", nargs="?", const=30.0, type=float, metavar="SEG",
+                        help="decir si hay ADS-B o no, contando solo lo verificable "
+                             "(30 s por defecto). Para usar al lado de la antena.")
     parser.add_argument("--exe", type=Path, default=DEFAULT_EXE)
     parser.add_argument("--ganancia", default=GANANCIA_DEFAULT,
                         help="dB, o 'auto'. Bajala si estas cerca de la pista.")
     args = parser.parse_args()
+
+    if args.medir:
+        informe_medicion(medir(args.medir, args.ganancia))
+        raise SystemExit(0)
 
     if args.probar:
         from pyModeS.util import crc

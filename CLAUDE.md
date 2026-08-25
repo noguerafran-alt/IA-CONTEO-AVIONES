@@ -71,9 +71,29 @@ pase un avión. Hay vectores conocidos: el par CPR clásico
 `8D40621D58C382D690C8AC2863A7` / `8D40621D58C386435CC412692AD6` decodifica a
 `52.2572021484375, 3.91937255859375` a partir del 6.º mensaje.
 
+**Para saber si la antena recibe, contar SOLO el CRC verificable.** `python
+adsb_iq.py --medir 30` lo hace y contesta sí o no. El conteo total de mensajes no
+mide señal: medido el 2026-08-24 en la torre de YPF, con AGC el sistema reportaba
+34 684 mensajes y 101 "aeronaves" —todas con 2 mensajes, una con altitud de
+110 500 ft— y había **cero** DF17/18 con CRC válido. Era ruido al 100%. Solo
+DF17/18 lleva un CRC comprobable contra un síndrome conocido; los formatos cortos
+llevan la paridad XOR-eada con la dirección y el ruido los produce a montones.
+
+**No elegir la ganancia de memoria.** Más no es mejor y menos tampoco: en la torre,
+49,6 y 20,7 dieron los dos cero. `auto` es AGC y suele encontrar el punto solo. Se
+decide midiendo con `--medir`, comparando el número de verificados.
+
 **El dongle es exclusivo**: un solo proceso puede tomarlo. Antes de correr
 `rtl_sdr.exe` o `rtl_adsb.exe`, verificar que la grabación de la webapp no esté
 corriendo, o pararla desde `/adsb`.
+
+**El CSV se ve mal en Excel en español.** `-34.6635411149364` aparece como
+`-34.663.541.114.936.400` porque el punto es separador de miles en esa
+configuración regional. El archivo está bien; hay que importarlo declarando el
+punto como separador decimal. Y `registration` está vacía **por diseño**: la
+matrícula no viaja por radio, se resuelve al leer cruzando el ICAO24 contra el
+registro. Congelarla en la fila la dejaría mal para siempre — el registro completo
+de OpenSky resolvió 39 matrículas más que el anterior.
 
 **La base commitea cada 1,0 s de reloj** (antes cada 50 filas, que sin cota
 temporal dejaba filas invisibles hasta **759,5 s — 12,7 min — medidos** con el

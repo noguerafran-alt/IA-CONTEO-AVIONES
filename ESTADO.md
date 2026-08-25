@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-23, con el Doc 8643 de la OACI importado.
+Última actualización: 2026-08-24, con la medición fallida en la torre de YPF.
 
 ---
 
@@ -942,3 +942,116 @@ con el mismo gris que "todo bien". Las dos cosas están.
   —Plotly vía `uirevision`, variables de módulo, y el DOM parcheado—. Si el
   próximo cambio agrega un sexto y lo pone en el DOM sin pensarlo, vuelve el bug
   del resaltado con otra cara.
+
+---
+
+## Sesión 2026-08-24: la torre de YPF no recibe, y por qué
+
+**Resultado: cero ADS-B desde el piso 13 de la torre de YPF.** No es configuración
+ni ganancia: no llega señal de 1090 MHz. La antena estaba a **6 m de la ventana**.
+
+Medido, 40 s por punto, con el único criterio que el ruido no puede falsificar:
+
+| ganancia | DF17/18 con **CRC válido** | otras tramas |
+|---|---|---|
+| 49,6 | **0** | 334 |
+| AGC (`-g 0`) | **0** | 73 604 |
+
+**Diagnóstico: el vidrio.** El piso de ruido daba −36 dBFS, o sea que la antena
+está conectada y entra energía de radio — falta específicamente 1090 MHz. El
+vidrio con capa metálica de una torre moderna atenúa 20–40 dB, y desde San Isidro
+el margen sobre el piso de ruido era de 16–20 dB: el vidrio se lo come entero y
+sobra. **Antes de volver: la antena tiene que estar pegada al vidrio o afuera**, y
+la ventana tiene que mirar al noreste, donde queda Aeroparque desde Puerto Madero.
+
+### La trampa que costó una hora: el conteo de mensajes no mide señal
+
+Con AGC el dashboard reportaba **34 684 mensajes y 101 "aeronaves"**, todas con
+exactamente 2 mensajes, sin distintivo, y una con altitud de **110 500 ft**. Era
+ruido al 100%. Mirar el conteo total manda a buscar el problema en la ganancia
+cuando el problema es que no hay señal.
+
+Solo cuenta el **CRC verificable de DF17/18**: 24 bits contra un síndrome
+conocido, 1 en 16,7 millones de que una trama de ruido pase. Los formatos cortos
+(DF0/4/5/11/16/20/21) llevan la paridad XOR-eada con la dirección del avión, no se
+validan solos, y el ruido los produce a montones.
+
+**Herramienta nueva: `python adsb_iq.py --medir 30`.** Contesta sí o no en 30
+segundos contando las dos poblaciones separadas, y si no hay señal lista qué
+probar. Es para usar parado al lado de la antena. Requiere parar la grabación
+(el dongle es exclusivo).
+
+### La compuerta de repetición se rompe a tasa alta de mensajes
+
+Está calibrada sobre 3777 tramas no verificables, donde el azar predice **0,43**
+direcciones repetidas y se observaron 133 (313× sobre el azar). Pero con AGC
+llegan ~1576 tramas/s: en un minuto son ~94 000, y el azar predice **~263**
+colisiones. A esa tasa la regla de "dos apariciones" deja de discriminar, y de ahí
+salieron las 101 aeronaves fantasma. **Pendiente:** el umbral debería depender de
+la tasa de tramas, no ser fijo.
+
+### `ADSB_GAIN=auto` funcionaba por accidente
+
+La cadena se pasaba cruda a `-g auto`; `rtl_sdr` le hacía `atof`, daba 0, y 0 es
+AGC. Andaba apoyado en cómo falla un parseo. Ya está explícito (`auto`/`agc`/`""`
+→ `"0"`).
+
+### Dos correcciones a lo que decía este archivo
+
+**"Ganancia 20, no auto"** salió de medir saturación desde San Isidro. En la torre
+20,7 dio **cero** igual que 49,6: sin señal la ganancia es irrelevante y esa
+recomendación no se sostiene. La regla sigue siendo medir con `--medir`, no elegir
+de memoria.
+
+**Durante la medición de Aeroparque el servidor corrió como San Isidro.** Arrancó
+sin `ADSB_RECEIVER` (el acceso directo del Escritorio apunta a `dashboard.bat`,
+que no fija ninguna variable). Los datos están bien —las posiciones son
+absolutas— pero todo lo relativo al receptor salía 13 km corrido, y el
+diagnóstico decía *"los aviones en la pista no se escuchan"* con 23 operaciones a
+menos de 1 km en la misma pantalla.
+
+### La medición de Aeroparque está respaldada
+
+`respaldos/aeroparque-2026-08-23-medicion.db` — **18 950 filas, 4782 con
+posición**. Hecho con `VACUUM INTO` y no con un `cp`: la base abre en **WAL**, y
+copiar solo el `.db` puede dejar afuera lo que vive en el `-wal` y perderlo en
+silencio. Verificado que el conteo coincida. `respaldos/` está en `.gitignore`:
+son datos, y esa medición es irrepetible sin volver con la antena.
+
+Leída con la configuración correcta (`ADSB_RECEIVER=aeroparque`): **14
+aterrizajes, 11 despegues**, 1 motor y al aire, 5 sobrevuelos, `ve_la_pista=True`,
+2,2 km a la referencia, altitud mínima **−366 ft sobre el campo**.
+
+### Dos cosas del CSV que parecen bugs y no lo son
+
+**`registration` y `callsign` vacíos.** La matrícula **no viaja por radio**: el
+avión transmite su ICAO24. La columna existe pero el camino del dongle la deja
+vacía siempre, y la matrícula se resuelve al *leer*, cruzando contra el registro.
+Es deliberado: si se hubiera congelado en las filas de ayer, seguirían mal hoy —
+el registro completo de OpenSky resolvió 39 más. Y `callsign` viaja en el 3% de
+los mensajes, así que la mayoría de las filas están legítimamente vacías.
+
+**Excel destroza los números.** `-34.6635411149364` se muestra como
+`-34.663.541.114.936.400` porque en español el punto es separador de miles. El
+archivo está bien; la interpretación no. Para analizar en Excel hay que importar
+declarando el punto como separador decimal.
+
+### Pendiente de esta sesión
+
+- **La página de operaciones de Aeroparque** (solo lo que aterrizó o despegó, con
+  el registro completo por aeronave) quedó **sin implementar**: el agente que la
+  construía murió por límite de sesión. El diagnóstico previo sí se completó.
+- **Las tarjetas del apartado en `/adsb/analisis` están viejas.** Muestran
+  "aproximaciones / salidas / confirmadas / sobrevuelos" y **nunca** los
+  aterrizajes ni los despegues, que son el titular. Da un imposible visible: 11
+  confirmadas con 0 aproximaciones y 8 salidas. En `/aeropuerto/mapa` están bien.
+- **`PositionGate` no evalúa el horizonte para blancos en tierra.** La rama
+  `if on_ground:` solo chequea la media celda CPR (83,5 km), 6,4× el horizonte de
+  superficie. Medido: **498 de 779** posiciones de superficie entraron desde más
+  lejos que el horizonte al suelo desde San Isidro (63,9%, 27 aeronaves de 30), y
+  0 desde Aeroparque. Ese contraste es un detector de sitio equivocado que
+  funciona, y hoy no existe ningún contador para esa banda.
+- **Ubicación de la PC para saber dónde está la antena** (pedido explícito). No
+  implementado. Cuando se haga, debe ser *sugerencia que se confirma*, no cambio
+  automático: una posición vieja en caché mediría en silencio desde el lugar
+  equivocado, que es el bug que se intenta matar.
