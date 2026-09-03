@@ -419,10 +419,10 @@ function pintarTarjetas(apt) {
          unico que hace que el proximo tipo agregado a _clasificar rompa algo
          visible en vez de desaparecer de las cuatro pantallas a la vez. -->
     <div class="card gris" title="${apt.aterrizajes} + ${apt.despegues} + ${apt.aproximaciones} + ${apt.salidas} + ${apt.frustradas} + ${apt.en_tierra} + ${apt.sobrevuelos} = ${apt.suma_categorias}">
-      <div class="n">${apt.aeronaves_en_cilindro}</div>
-      <div class="label">Aeronaves en el cilindro</div>
+      <div class="n">${apt.pasadas_en_cilindro}</div>
+      <div class="label">Pasadas por el cilindro</div>
       <div class="sub">${apt.categorias_cuadran
-        ? "las siete categorías suman " + apt.suma_categorias + ": cuadra"
+        ? "de " + apt.aeronaves_en_cilindro + " aeronaves · las siete categorías suman " + apt.suma_categorias + ": cuadra"
         : "LA SUMA NO CUADRA: " + apt.suma_categorias}</div></div>`;
 }
 

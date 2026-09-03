@@ -81,6 +81,47 @@ UMBRAL_SUELO_FT = 300.0
 REASCENSO_FT = 800.0
 
 
+# UNA PASADA, NO UNA AERONAVE. Hasta el 2026-09-03 el resumen se agrupaba por
+# ICAO24, asi que una direccion tenia UNA sola operacion en toda la grabacion:
+# el avion que aterrizo el 22, despego el 23 y volvio a despegar hoy contaba una
+# vez. Medido sobre adsb_log.db con 3 dias parciales: 32 operaciones reales
+# agrupando por direccion contra 46 agrupando por pasada, o sea un 44% perdido,
+# y 92 de las 4166 direcciones aparecian en mas de un dia.
+#
+# Peor que perder: INVENTAR. Las 7 "motor y al aire" que publicaba el tablero
+# venian todas de direcciones vistas en 2 o 3 dias distintos, y separadas por dia
+# ninguna era un motor y al aire -- daban aterrizajes y despegues limpios. Es
+# obvio en retrospectiva: mezclar el aterrizaje del dia 22 con el despegue del 23
+# produce exactamente la firma de una frustrada (toco abajo y despues subio
+# mucho). Agrupando por pasada las frustradas pasaron de 7 a 0.
+#
+# 10 minutos sin emitir DENTRO del cilindro cierra la pasada. El numero lo eligio
+# Fran; medido, cortar por dia o por hueco de 10 o de 30 minutos daba los mismos
+# 46, asi que el resultado no es sensible al valor exacto con estos datos. La
+# segmentacion por hueco es igual la correcta: un avion que opera cuatro veces en
+# un dia bueno necesita el hueco, y con 3 dias parciales eso todavia no se puede
+# distinguir.
+HUECO_PASADA_S = float(os.environ.get("ADSB_PASS_GAP_S", 600.0))
+
+# UNA CARRERA DE PISTA, NO UN RODAJE. Los mensajes de superficie (BDS 0,6) no
+# traen altitud pero SI traen velocidad respecto al suelo, y eso alcanza para
+# saber en que sentido fue la operacion sin depender de ninguna altitud:
+#
+#   frena de mucho a poco   -> carrera de aterrizaje
+#   acelera de poco a mucho -> carrera de despegue
+#
+# Medido en JES3882 (e8061b) el 2026-09-03: 28 posiciones de superficie a 0,08 -
+# 0,46 km de SABE con la velocidad cayendo 90 -> 21 -> 8 -> 0 kt. Es un
+# aterrizaje que se veia con toda claridad en los datos y que se contaba como
+# "en tierra", porque sin altitud no habia baja ni sube que comparar.
+#
+# El umbral separa la carrera del rodaje: un avion rodando a plataforma anda por
+# debajo de 30 kt y una carrera pasa los 100. El delta exige que el cambio sea
+# grande para afirmar el sentido, en vez de leerle intencion a dos mediciones
+# parecidas.
+CARRERA_KT = 60.0
+DELTA_CARRERA_KT = 40.0
+
 # Aeroparque por defecto porque es el aeropuerto que este proyecto existe para
 # contar. Se cambia con ADSB_AIRPORT, y ADSB_AIRPORT=NINGUNO apaga la seccion.
 AEROPUERTO_DEFAULT = "SABE"
@@ -94,9 +135,16 @@ def objetivo() -> str | None:
 
 @dataclass
 class Operacion:
-    """Una aproximacion o salida atribuida a un aeropuerto."""
+    """UNA PASADA de una aeronave por el cilindro de un aeropuerto.
+
+    Una aeronave puede tener varias: aterriza a la manana y despega al mediodia
+    son dos operaciones de la misma direccion. Ver HUECO_PASADA_S.
+    """
     icao24: str
-    tipo: str                      # 'aproximacion' | 'salida'
+    # Los siete que devuelve _clasificar: aterrizaje, despegue, frustrada,
+    # en tierra, aproximacion, salida, sobrevuelo. El comentario decia
+    # "'aproximacion' | 'salida'" desde antes de que existieran los otros cinco.
+    tipo: str
     timestamp: float               # el instante mas bajo dentro del cilindro
     callsign: str | None = None
     registration: str | None = None
@@ -133,6 +181,14 @@ class Operacion:
     # suelo -- lo dice el formato del mensaje, no una altitud comparada contra
     # un umbral -- y por eso se cuenta aparte y no se suma con las otras.
     posiciones_superficie: int = 0
+    # Numero de pasada de esta aeronave por el cilindro, desde 0. Sirve para
+    # distinguir dos operaciones de la misma direccion sin mirarles la hora, y
+    # para que se vea que la segmentacion esta actuando.
+    pasada: int = 0
+    # 'frena' | 'acelera' | None: el sentido de la carrera de pista leido de la
+    # velocidad de los mensajes de superficie. Ver CARRERA_KT. Se publica porque
+    # es la evidencia que sostiene la clasificacion cuando no hubo altitud.
+    carrera: str | None = None
 
     @property
     def confirmada(self) -> bool:
@@ -165,6 +221,9 @@ class Informe:
     min_altitude_vista_ft: float | None = None
     posiciones_en_cilindro: int = 0
     aeronaves_en_cilindro: int = 0
+    # Cuantas VISITAS, que es distinto de cuantas aeronaves y es el numero
+    # contra el que cuadran las categorias. Ver HUECO_PASADA_S.
+    pasadas_en_cilindro: int = 0
     # Las dos evidencias no se suman: una altitud barometrica y un mensaje de
     # superficie dicen cosas de fuerza distinta, y hasta hoy entraban a la misma
     # serie aritmetica. Medido sobre adsb_log.db: de las 1010 posiciones del
@@ -227,7 +286,7 @@ class Informe:
 
     @property
     def suma_categorias(self) -> int:
-        """La suma de las siete categorias. Tiene que dar aeronaves_en_cilindro.
+        """La suma de las siete categorias. Tiene que dar pasadas_en_cilindro.
 
         Se publica para que la igualdad este a la vista en las pantallas. Es lo
         unico que hace que un octavo tipo agregado a _clasificar rompa algo
@@ -239,7 +298,11 @@ class Informe:
 
     @property
     def categorias_cuadran(self) -> bool:
-        return self.suma_categorias == self.aeronaves_en_cilindro
+        # Contra PASADAS, no contra aeronaves. Cada pasada produce exactamente
+        # una clasificacion, asi que es pasadas lo que tiene que cerrar; desde
+        # que se segmenta, una aeronave que entro tres veces aporta tres
+        # categorias y comparar contra aeronaves daria "no cuadra" siempre.
+        return self.suma_categorias == self.pasadas_en_cilindro
 
     @property
     def advertencia(self) -> str | None:
@@ -378,7 +441,8 @@ def _alineada(track: float | None, pistas: list[tuple[str, float]]) -> tuple[boo
 
 
 def _clasificar(minima_agl: float, baja: float, sube: float,
-                en_superficie: bool = False) -> str:
+                en_superficie: bool = False,
+                carrera: str | None = None) -> str:
     """Que hizo la aeronave dentro del cilindro, con nombre propio.
 
     La distincion que importa es aterrizaje contra intento de aterrizaje, y no
@@ -407,6 +471,20 @@ def _clasificar(minima_agl: float, baja: float, sube: float,
             return "aterrizaje"      # bajo y se quedo
         if sube >= CAMBIO_MINIMO_FT and baja < CAMBIO_MINIMO_FT:
             return "despegue"        # arranco abajo y se fue
+        # Sin altitud que comparar, pero con una carrera de pista medida: la
+        # velocidad de los mensajes de superficie dice el sentido. Es evidencia
+        # mas fuerte que el delta de altitud, no un respaldo debil -- un avion
+        # frenando de 90 a 0 kt sobre el campo esta aterrizando, y no hay
+        # interpretacion barometrica de por medio.
+        #
+        # Medido: JES3882 el 2026-09-03 tenia 28 posiciones de superficie a 80 -
+        # 460 m de SABE con la velocidad cayendo de 90 a 0 kt, y salia "en
+        # tierra" porque min_alt era None y baja y sube valian 0. Era un
+        # aterrizaje.
+        if carrera == "frena":
+            return "aterrizaje"
+        if carrera == "acelera":
+            return "despegue"
         return "en tierra"           # aparecio y quedo abajo, sin subir ni bajar
     # Nunca se la vio lo bastante abajo: no se puede afirmar que aterrizo.
     if baja >= CAMBIO_MINIMO_FT and baja >= sube:
@@ -439,73 +517,141 @@ def geometria_cilindro(codigo: str | None = None) -> dict | None:
             "elevacion_ft": geografia.ELEVACION_FT.get(codigo, 0.0)}
 
 
-def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[dict, int]:
-    """El estado O(1) por aeronave que la clasificacion necesita.
+def nuevo_resumen() -> dict:
+    """El estado que acumula acumular_en_cilindro(). Ver esa funcion."""
+    return {"por_pasada": {}, "ultimo_t": {}, "pasada": {}, "posiciones": 0}
 
-    Es la mitad de informe() que ACUMULA, separada de la que CLASIFICA. La otra
-    mitad -- LectorIncremental._absorber_cilindro -- construye exactamente este
-    mismo dict fila por fila, y las dos terminan llamando al mismo
-    _clasificar(). Se refactorizo en vez de duplicar la logica porque son los
-    conteos publicados (aterrizajes, despegues, frustradas) los que estan en
-    juego: dos implementaciones de la clasificacion pueden divergir y nadie se
-    entera hasta que las tarjetas de las dos paginas no coinciden.
+
+def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
+    """Sumar UNA observacion al resumen por pasada. True si cayo adentro.
+
+    EL UNICO ACUMULADOR. Antes habia dos copias de esta logica -- esta y
+    adsb_events.LectorIncremental._absorber_cilindro -- que tenian que producir
+    el mismo dict y se vigilaban con un test que las compara campo por campo.
+    Al segmentar por pasada el estado dejo de ser un dict plano por direccion
+    (hay que recordar el ultimo timestamp y el numero de pasada de cada una), y
+    mantener eso duplicado es exactamente la clase de duplicacion que este
+    modulo evita: son los conteos publicados -- aterrizajes, despegues,
+    frustradas -- los que estan en juego, y dos implementaciones pueden divergir
+    sin que nadie se entere hasta que las tarjetas de dos paginas no coinciden.
+
+    Las observaciones tienen que llegar en orden de timestamp. Ya era asi antes
+    de las pasadas -- primera_alt y ultima_alt dependen del orden -- pero ahora
+    importa mas, porque una fila fuera de orden puede abrir una pasada de mas.
+    """
+    import receiver
+
+    if o.altitude_ft is None or o.latitude is None or o.longitude is None:
+        return False
+    if o.altitude_ft > cilindro["techo_ft"]:
+        return False
+    d = receiver.distance_km(o.latitude, o.longitude,
+                             (cilindro["lat"], cilindro["lon"]))
+    if d is None or d > cilindro["radio_km"]:
+        return False
+
+    estado["posiciones"] += 1
+    icao24 = o.icao24
+    # El hueco se mide sobre lo que entro AL CILINDRO, no sobre todo lo que
+    # emitio la aeronave. Es la definicion honesta de "otra pasada por este
+    # aeropuerto": irse del cilindro diez minutos y volver son dos visitas, y
+    # que mientras tanto se la siguiera escuchando en crucero no las une.
+    anterior = estado["ultimo_t"].get(icao24)
+    if anterior is not None and o.timestamp - anterior > HUECO_PASADA_S:
+        estado["pasada"][icao24] = estado["pasada"].get(icao24, 0) + 1
+    estado["ultimo_t"][icao24] = o.timestamp
+
+    clave = (icao24, estado["pasada"].get(icao24, 0))
+    r = estado["por_pasada"].get(clave)
+    if r is None:
+        r = estado["por_pasada"][clave] = {
+            "n": 0, "primera_alt": None, "ultima_alt": None,
+            "min_alt": None, "min_t": o.timestamp, "min_d": d,
+            "track": None, "callsign": None, "superficie": 0,
+            # La velocidad de los mensajes de superficie, que es lo que permite
+            # distinguir una carrera de aterrizaje de una de despegue sin
+            # ninguna altitud. Ver CARRERA_KT.
+            "sup_vel_primera": None, "sup_vel_ultima": None, "sup_vel_max": None}
+    r["n"] += 1
+
+    # EL PLACEHOLDER DE SUPERFICIE NO ENTRA EN LA ARITMETICA DE ALTITUDES.
+    # Es el 0.0 que adsb_rtlsdr escribe cuando el mensaje no trae altitud
+    # (ver adsb.ALTITUD_SUPERFICIE_PLACEHOLDER), y restarlo contra una
+    # altitud barometrica real fabrica descensos del tamano del offset de
+    # presion: medido, ARG1686 (0 / -325 / 1450) y JES3088 (0 / -300 / 2400)
+    # salian con baja=325 y baja=300 ft contra CAMBIO_MINIMO_FT=300 y
+    # quedaban clasificados como motor y al aire cuando son despegues
+    # normales. Y en el otro sentido, los 14 aterrizajes tenian ultima_alt=0
+    # y min_alt hasta -350: un reascenso FABRICADO de 350 ft, que con la QNH
+    # en 1043 hPa llegaria a REASCENSO_FT=800 y los volveria frustradas a
+    # todos. Se cuenta aparte, que es evidencia mas fuerte, no menos.
+    if es_altitud_de_superficie(o.altitude_ft):
+        r["superficie"] += 1
+        if o.ground_speed_kt is not None:
+            v = float(o.ground_speed_kt)
+            if r["sup_vel_primera"] is None:
+                r["sup_vel_primera"] = v
+            r["sup_vel_ultima"] = v
+            if r["sup_vel_max"] is None or v > r["sup_vel_max"]:
+                r["sup_vel_max"] = v
+        if o.track_deg is not None:
+            r["track"] = o.track_deg
+        if o.callsign:
+            r["callsign"] = o.callsign.strip()
+        return True
+
+    if r["primera_alt"] is None:
+        r["primera_alt"] = o.altitude_ft
+    r["ultima_alt"] = o.altitude_ft
+    # Estricto: alturas.index(min(alturas)) se queda con el PRIMER minimo.
+    if r["min_alt"] is None or o.altitude_ft < r["min_alt"]:
+        r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
+    if o.track_deg is not None:
+        r["track"] = o.track_deg
+    # Truthy y no .strip() truthy: es el criterio exacto de la ruta de
+    # siempre, next((o.callsign.strip() ... if o.callsign), None).
+    if o.callsign:
+        r["callsign"] = o.callsign.strip()
+    return True
+
+
+def sentido_de_carrera(r: dict) -> str | None:
+    """'frena', 'acelera' o None, leyendo la velocidad de superficie.
+
+    Separada para que la ruta de siempre y la incremental la apliquen igual, y
+    para poder probarla sin construir un informe entero. Ver CARRERA_KT.
+    """
+    vmax = r.get("sup_vel_max")
+    if vmax is None or vmax < CARRERA_KT:
+        return None
+    v0, v1 = r.get("sup_vel_primera"), r.get("sup_vel_ultima")
+    if v0 is None or v1 is None:
+        return None
+    if v0 - v1 >= DELTA_CARRERA_KT:
+        return "frena"
+    if v1 - v0 >= DELTA_CARRERA_KT:
+        return "acelera"
+    return None
+
+
+def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[dict, int]:
+    """El estado O(1) por PASADA que la clasificacion necesita.
+
+    Es la mitad de informe() que ACUMULA, separada de la que CLASIFICA. Las dos
+    rutas -- esta y LectorIncremental -- llaman al mismo
+    acumular_en_cilindro() y terminan en el mismo _clasificar().
 
     No se puede seguir clasificando sobre la lista completa de observaciones
     porque el estado residente ya no las guarda: 313 B/obs son 143 MB a 30 dias
     y 1744 MB al ano.
-    """
-    import receiver
 
-    por_icao: dict[str, dict] = {}
-    posiciones = 0
+    El dict que devuelve esta indexado por (icao24, pasada) y NO por icao24.
+    Ver HUECO_PASADA_S para por que, y con que numeros.
+    """
+    estado = nuevo_resumen()
     for o in sorted(observations, key=lambda o: o.timestamp):
-        if o.latitude is None or o.longitude is None or o.altitude_ft is None:
-            continue
-        if o.altitude_ft > cilindro["techo_ft"]:
-            continue
-        d = receiver.distance_km(o.latitude, o.longitude,
-                                 (cilindro["lat"], cilindro["lon"]))
-        if d is None or d > cilindro["radio_km"]:
-            continue
-        posiciones += 1
-        r = por_icao.get(o.icao24)
-        if r is None:
-            r = por_icao[o.icao24] = {
-                "n": 0, "primera_alt": None, "ultima_alt": None,
-                "min_alt": None, "min_t": o.timestamp, "min_d": d,
-                "track": None, "callsign": None, "superficie": 0}
-        r["n"] += 1
-        # EL PLACEHOLDER DE SUPERFICIE NO ENTRA EN LA ARITMETICA DE ALTITUDES.
-        # Es el 0.0 que adsb_rtlsdr escribe cuando el mensaje no trae altitud
-        # (ver adsb.ALTITUD_SUPERFICIE_PLACEHOLDER), y restarlo contra una
-        # altitud barometrica real fabrica descensos del tamano del offset de
-        # presion: medido, ARG1686 (0 / -325 / 1450) y JES3088 (0 / -300 / 2400)
-        # salian con baja=325 y baja=300 ft contra CAMBIO_MINIMO_FT=300 y
-        # quedaban clasificados como motor y al aire cuando son despegues
-        # normales. Y en el otro sentido, los 14 aterrizajes tenian ultima_alt=0
-        # y min_alt hasta -350: un reascenso FABRICADO de 350 ft, que con la QNH
-        # en 1043 hPa llegaria a REASCENSO_FT=800 y los volveria frustradas a
-        # todos. Se cuenta aparte, que es evidencia mas fuerte, no menos.
-        if es_altitud_de_superficie(o.altitude_ft):
-            r["superficie"] += 1
-            if o.track_deg is not None:
-                r["track"] = o.track_deg
-            if o.callsign:
-                r["callsign"] = o.callsign.strip()
-            continue
-        if r["primera_alt"] is None:
-            r["primera_alt"] = o.altitude_ft
-        r["ultima_alt"] = o.altitude_ft
-        # Estricto: alturas.index(min(alturas)) se queda con el PRIMER minimo.
-        if r["min_alt"] is None or o.altitude_ft < r["min_alt"]:
-            r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
-        if o.track_deg is not None:
-            r["track"] = o.track_deg
-        # Truthy y no .strip() truthy: es el criterio exacto de la ruta de
-        # siempre, next((o.callsign.strip() ... if o.callsign), None).
-        if o.callsign:
-            r["callsign"] = o.callsign.strip()
-    return por_icao, posiciones
+        acumular_en_cilindro(estado, o, cilindro)
+    return estado["por_pasada"], estado["posiciones"]
 
 
 def informe_desde_resumen(por_icao: dict, posiciones: int,
@@ -559,9 +705,15 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
     inf.elevacion_ft = elevacion
 
     inf.posiciones_en_cilindro = posiciones
-    inf.aeronaves_en_cilindro = len(por_icao)
+    # PASADAS y AERONAVES ya no son el mismo numero, y el que tiene que cuadrar
+    # contra las categorias es PASADAS: cada pasada produce una clasificacion, y
+    # una aeronave que entro tres veces produce tres. Publicar los dos deja a la
+    # vista cuanta actividad repetida hay -- 46 pasadas de 39 aeronaves dice algo
+    # que ninguno de los dos numeros solo dice.
+    inf.pasadas_en_cilindro = len(por_icao)
+    inf.aeronaves_en_cilindro = len({k[0] for k in por_icao})
     inf.posiciones_en_superficie = sum(r.get("superficie", 0) for r in por_icao.values())
-    inf.aeronaves_en_superficie = sum(1 for r in por_icao.values() if r.get("superficie"))
+    inf.aeronaves_en_superficie = len({k[0] for k, r in por_icao.items() if r.get("superficie")})
     reales = [r["min_alt"] for r in por_icao.values() if r["min_alt"] is not None]
     if reales:
         # Sobre EL CAMPO, no sobre el mar: es la altura que dice si se vio la
@@ -578,7 +730,7 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
         # que la antena ya recibe y adsb_rtlsdr.py:111 tira. Esta en ESTADO.md.
         inf.min_altitude_vista_ft = min(reales) - elevacion
 
-    for icao24, r in por_icao.items():
+    for (icao24, pasada), r in por_icao.items():
         # Alturas SOBRE EL CAMPO. El minimo NO es el primero contra el ultimo:
         # el avion que toca y vuelve a salir tiene el minimo en el medio, y
         # comparar los extremos lo daria como sobrevuelo.
@@ -595,7 +747,8 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
             baja = r["primera_alt"] - r["min_alt"]
             sube = r["ultima_alt"] - r["min_alt"]
 
-        tipo = _clasificar(minima, baja, sube, en_superficie=en_superficie)
+        tipo = _clasificar(minima, baja, sube, en_superficie=en_superficie,
+                           carrera=sentido_de_carrera(r))
         if tipo == "sobrevuelo":
             inf.sobrevuelos += 1
             continue
@@ -628,6 +781,7 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
             estela_texto=(ident.estela_texto if ident else None),
             min_altitude_ft=r["min_alt"], min_distance_km=round(r["min_d"], 2),
             track_deg=r["track"], pista=pista, alineada=alineada, posiciones=r["n"],
+            pasada=pasada, carrera=sentido_de_carrera(r),
             posiciones_superficie=r.get("superficie", 0),
         ))
 
@@ -684,6 +838,7 @@ def como_json(inf: Informe | None) -> dict | None:
         "posiciones_con_altitud": (inf.posiciones_en_cilindro
                                    - inf.posiciones_en_superficie),
         "aeronaves_en_cilindro": inf.aeronaves_en_cilindro,
+        "pasadas_en_cilindro": inf.pasadas_en_cilindro,
         "advertencia": inf.advertencia,
         "operaciones": [
             {"icao24": o.icao24, "tipo": o.tipo, "timestamp": o.timestamp,
@@ -698,6 +853,7 @@ def como_json(inf: Informe | None) -> dict | None:
              "track_deg": o.track_deg, "pista": o.pista, "alineada": o.alineada,
              "confirmada": o.confirmada, "posiciones": o.posiciones,
              "posiciones_superficie": o.posiciones_superficie,
+             "pasada": o.pasada, "carrera": o.carrera,
              "en_superficie": o.posiciones_superficie > 0}
             for o in inf.operaciones
         ],

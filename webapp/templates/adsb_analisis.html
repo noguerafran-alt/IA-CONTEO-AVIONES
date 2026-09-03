@@ -337,8 +337,8 @@ function pintarAeropuerto(apt) {
     <p class="nota" style="${apt.categorias_cuadran ? '' : 'color:#fca5a5'}">
       ${apt.aterrizajes} + ${apt.despegues} + ${apt.aproximaciones} + ${apt.salidas} +
       ${apt.frustradas} + ${apt.en_tierra} + ${apt.sobrevuelos} =
-      <b>${apt.suma_categorias}</b>, contra <b>${apt.aeronaves_en_cilindro}</b> aeronaves que
-      entraron al cilindro:
+      <b>${apt.suma_categorias}</b>, contra <b>${apt.pasadas_en_cilindro}</b> pasadas por el
+      cilindro (de ${apt.aeronaves_en_cilindro} aeronaves distintas):
       ${apt.categorias_cuadran ? 'cuadra.' : 'NO CUADRA — hay una categoría que no se está mostrando.'}
       <a href="/aeropuerto">Ver el registro completo de cada aterrizaje y despegue</a>.
     </p>

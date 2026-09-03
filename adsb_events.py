@@ -1075,8 +1075,19 @@ class LectorIncremental:
         # residente ya no las guarda. Es O(1) por aeronave: primera altura,
         # minima con su punto, ultima altura, conteo, ultimo rumbo y ultimo
         # distintivo DENTRO del cilindro.
-        self.cil_por_icao: dict[str, dict] = {}
-        self.cil_posiciones = 0
+        # El resumen por aeronave que consume aeropuerto.informe(). Se acumula
+        # aca y no se recalcula sobre las observaciones porque el estado
+        # residente ya no las guarda. Es O(1) por aeronave: primera altura,
+        # minima con su punto, ultima altura, conteo, ultimo rumbo y ultimo
+        # distintivo DENTRO del cilindro.
+        # Lo construye aeropuerto.acumular_en_cilindro(), que es EL MISMO
+        # acumulador que usa la ruta de siempre. Antes habia una copia de esa
+        # logica aca abajo y las dos tenian que producir el mismo dict, vigiladas
+        # por test_adsb_incremental; con la segmentacion por pasada el estado
+        # dejo de ser un dict plano por direccion -hay que recordar el ultimo
+        # timestamp y el numero de pasada de cada una- y mantener eso duplicado
+        # habria costado el doble y divergido igual.
+        self.cil_estado: dict | None = None
         self._cache_informe = (None, None)      # (clave de cursor, Informe)
 
     # -- avance -----------------------------------------------------------
@@ -1195,49 +1206,22 @@ class LectorIncremental:
         return True
 
     def _absorber_cilindro(self, o: Observation) -> None:
-        """El estado O(1) por aeronave que aeropuerto.informe() necesita."""
-        cil = self.cilindro
-        if cil is None or o.altitude_ft is None:
+        """El estado O(1) por PASADA que aeropuerto.informe() necesita.
+
+        No reimplementa nada: delega en aeropuerto.acumular_en_cilindro(), el
+        unico acumulador. Tener dos copias de esto era la peor duplicacion
+        posible -- son los conteos publicados (aterrizajes, despegues,
+        frustradas) los que estan en juego, y dos implementaciones pueden
+        divergir sin que nadie se entere hasta que las tarjetas de dos paginas
+        no coinciden.
+        """
+        import aeropuerto
+        if self.cilindro is None:
             return
-        if o.altitude_ft > cil["techo_ft"]:
-            return
-        d = distance_km(o.latitude, o.longitude, (cil["lat"], cil["lon"]))
-        if d is None or d > cil["radio_km"]:
-            return
-        self.cil_posiciones += 1
-        r = self.cil_por_icao.get(o.icao24)
-        if r is None:
-            r = self.cil_por_icao[o.icao24] = {
-                "n": 0, "primera_alt": None, "ultima_alt": None,
-                "min_alt": None, "min_t": o.timestamp, "min_d": d,
-                "track": None, "callsign": None, "superficie": 0}
-        r["n"] += 1
-        # Igual que aeropuerto.resumir_cilindro, y por la misma razon: el 0.0 de
-        # los mensajes de superficie no es una altitud medida y restarlo contra
-        # una barometrica fabrica descensos. Los dos acumuladores tienen que dar
-        # el MISMO dict -- test_adsb_incremental compara como_json() de las dos
-        # rutas campo por campo.
-        if es_altitud_de_superficie(o.altitude_ft):
-            r["superficie"] += 1
-            if o.track_deg is not None:
-                r["track"] = o.track_deg
-            if o.callsign:
-                r["callsign"] = o.callsign.strip()
-            return
-        if r["primera_alt"] is None:
-            r["primera_alt"] = o.altitude_ft
-        r["ultima_alt"] = o.altitude_ft
-        # Estricto y no <=: informe() usa alturas.index(min(alturas)), que
-        # devuelve el PRIMER indice del minimo. Con <= se quedaria con el
-        # ultimo empate y cambiarian el timestamp y la distancia publicados.
-        if r["min_alt"] is None or o.altitude_ft < r["min_alt"]:
-            r["min_alt"], r["min_t"], r["min_d"] = o.altitude_ft, o.timestamp, d
-        if o.track_deg is not None:
-            r["track"] = o.track_deg
-        # Truthy y no .strip() truthy: es el criterio exacto de la ruta de
-        # siempre, next((o.callsign.strip() ... if o.callsign), None).
-        if o.callsign:
-            r["callsign"] = o.callsign.strip()
+        if self.cil_estado is None:
+            self.cil_estado = aeropuerto.nuevo_resumen()
+        aeropuerto.acumular_en_cilindro(self.cil_estado, o, self.cilindro)
+
 
     # -- lecturas ----------------------------------------------------------
     def coverage(self) -> dict:
@@ -1377,15 +1361,16 @@ class LectorIncremental:
             return self._cache_informe[1]
         import aeropuerto
         # Las identidades salen de self.aviones -el acumulador GLOBAL, que ve
-        # todos los mensajes- y no de cil_por_icao, que solo tiene lo de adentro
+        # todos los mensajes- y no del resumen del cilindro, que solo tiene lo de adentro
         # del cilindro. El distintivo viaja en el 3% de los mensajes y casi nunca
         # cae justo ahi.
         import identidad
         identidades = identidad.resolver_desde_resumen(
             {a.icao24: {"n": len(a.puntos) // 6 or 1, "callsign": a.callsign}
              for a in self.aviones.values()})
+        estado = self.cil_estado or aeropuerto.nuevo_resumen()
         inf = aeropuerto.informe_desde_resumen(
-            self.cil_por_icao, self.cil_posiciones,
+            estado["por_pasada"], estado["posiciones"],
             codigo or self.cilindro["codigo"], identidades)
         self._cache_informe = (clave, inf)
         return inf

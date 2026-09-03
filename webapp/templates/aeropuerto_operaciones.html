@@ -244,6 +244,15 @@ const COLUMNAS = [
   // Ordena por el timestamp, no por el texto: "hace 9 min" y "hace 10 min"
   // alfabeticamente salen al revés, y una columna de tiempo que ordena mal es
   // peor que no poder ordenarla.
+  // La evidencia que sostiene la clasificacion cuando no hubo altitud. Va a la
+  // vista y no en un tooltip porque es lo que separa "el sistema dedujo" de "el
+  // sistema midio": una carrera de 90 a 0 kt sobre el campo es un aterrizaje
+  // sin que intervenga ninguna interpretacion barometrica.
+  {k: "carrera",   t: "Carrera",     g: "operacion", v: o => o.carrera || "",
+   ayuda: "El sentido de la carrera de pista, leído de la <b>velocidad de los mensajes de superficie</b>. <b>frena</b> = carrera de aterrizaje, <b>acelera</b> = carrera de despegue. Es la evidencia que resuelve las operaciones sin altitud: los mensajes de superficie no traen altitud por formato, así que antes quedaban en \"en tierra\".",
+   td: o => `<td>${o.carrera
+        ? `<span title="velocidad de los mensajes de superficie: ${o.carrera === "frena" ? "de mucho a poco" : "de poco a mucho"}">${o.carrera}</span>`
+        : nada}</td>`},
   {k: "hace",      t: "Hace cuánto", g: "operacion", v: o => o.timestamp,
    ayuda: "Cuánto pasó desde la operación hasta ahora. Se recalcula solo cada 30 s. <b>Un valor en días no es un error</b>: dice que esa operación es de una grabación vieja, y verlo es justamente el punto.",
    td: o => `<td class="mono" data-hace="${o.timestamp}">${hace(o.timestamp)}</td>`},
@@ -417,8 +426,8 @@ function pintarTarjetas(apt, fuera) {
   c.className = "cuadra" + (apt.categorias_cuadran ? "" : " mal");
   c.innerHTML = `${apt.aterrizajes} + ${apt.despegues} + ${fuera.aproximaciones} + `
     + `${fuera.salidas} + ${fuera.frustradas} + ${fuera.en_tierra} + ${fuera.sobrevuelos} = `
-    + `<b>${apt.suma_categorias}</b>, contra <b>${apt.aeronaves_en_cilindro}</b> aeronaves que `
-    + `entraron al cilindro: ${apt.categorias_cuadran ? "cuadra" : "NO CUADRA — hay una categoría que no se está mostrando"}.`;
+    + `<b>${apt.suma_categorias}</b>, contra <b>${apt.pasadas_en_cilindro}</b> pasadas por el `
+    + `cilindro (de ${apt.aeronaves_en_cilindro} aeronaves distintas): ${apt.categorias_cuadran ? "cuadra" : "NO CUADRA — hay una categoría que no se está mostrando"}.`;
 }
 
 async function cargar() {

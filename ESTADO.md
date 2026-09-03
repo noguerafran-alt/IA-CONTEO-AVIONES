@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-03, con la columna "hace cuánto" y la edad del avión descartada con números.
+Última actualización: 2026-09-03, con las operaciones segmentadas por pasada y la carrera de pista.
 
 ---
 
@@ -1371,3 +1371,156 @@ motores tienen que seguir saliendo del Doc 8643 como ahora.
 
 Agregarlo pide reconstruir la base de 49 MB **con el server parado**, porque
 tiene el archivo tomado.
+
+---
+
+## Los dos bugs que hacían que un despegue visto con los ojos no se contara
+
+Fran vio despegar al JES3882 de Aeroparque y el tablero no lo contó. Buscando por
+qué aparecieron dos bugs distintos, uno de ellos grave.
+
+### Bug 1: una sola operación por ICAO24 en TODA la grabación
+
+`resumir_cilindro()` agrupaba por dirección, así que una aeronave tenía como
+máximo **una** operación en la historia entera. Verificado: el máximo de
+operaciones por dirección era 1, y **92 de las 4166 direcciones** aparecían en más
+de un día. `e8061b` figuraba en 3 días y su única operación era la del 22/08.
+
+Y no solo perdía: **inventaba**. Las **7 "motor y al aire"** del tablero venían
+todas de direcciones vistas en 2 o 3 días distintos. Reclasificando día por día,
+**ninguna** era un motor y al aire:
+
+| dirección | junto | separado por día |
+|---|---|---|
+| e082d6 ARG1874 | frustrada | despegue + despegue |
+| e0b392 ARG1770 | frustrada | aterrizaje + despegue |
+| e8062a JES3881 | frustrada | aterrizaje + en tierra |
+| e8061d JES3049 | frustrada | salida + despegue + despegue |
+| e06459 ARG1680 | frustrada | aterrizaje + en tierra |
+| e07583 ARG1883 | frustrada | aterrizaje + despegue |
+| e8062f JES3182 | frustrada | aterrizaje + despegue |
+
+Es obvio una vez visto: mezclar el aterrizaje del 22 con el despegue del 23 da
+`baja` grande, `sube` grande y mínima baja — la firma exacta de una frustrada. El
+sistema afirmaba siete frustradas inexistentes, que es **lo contrario** de lo que
+se pidió cuando se pidió contar aterrizajes reales y no intentos.
+
+**Arreglo:** el resumen se indexa por `(icao24, pasada)`. Una pasada se cierra
+cuando la dirección deja de emitir **dentro del cilindro** por más de
+`HUECO_PASADA_S` (600 s, elegido por Fran; `ADSB_PASS_GAP_S` lo cambia). El hueco
+se mide sobre lo que entró al cilindro y no sobre todo lo que emitió la aeronave:
+irse diez minutos y volver son dos visitas, y que mientras tanto se la siguiera
+escuchando en crucero no las une.
+
+### Bug 2: sin altitud no se podía decir el sentido
+
+Los mensajes de superficie (BDS 0,6) **no traen altitud por formato**. Cuando de
+una pasada solo llegaban esos, `min_alt` era `None`, `baja` y `sube` valían 0, y
+la pasada caía en "en tierra" sin importar qué hubiera hecho.
+
+Medido en el JES3882 del 03/09: **28 posiciones de superficie a 0,08 – 0,46 km de
+SABE, con la velocidad cayendo 90 → 21 → 8 → 0 kt.** Un aterrizaje que estaba
+escrito con toda claridad en los datos.
+
+**Arreglo:** los mensajes de superficie sí traen velocidad respecto al suelo, y
+eso da el sentido sin ninguna altitud. `sentido_de_carrera()` devuelve `frena`
+(carrera de aterrizaje), `acelera` (carrera de despegue) o `None`. Umbrales:
+`CARRERA_KT = 60` separa la carrera del rodaje —un avión rodando anda bajo 30 kt y
+una carrera pasa los 100— y `DELTA_CARRERA_KT = 40` exige que el cambio sea grande
+antes de afirmar el sentido. Es evidencia **más fuerte** que el delta de altitud,
+no un respaldo débil: no interviene ninguna interpretación barométrica.
+
+### Los números
+
+| | antes | después |
+|---|---|---|
+| aterrizajes | 9 | **23** |
+| despegues | 23 | **36** |
+| **operaciones reales** | **32** | **59** |
+| motor y al aire | 7 | **0** |
+| pasadas por el cilindro | (no existía) | 110 |
+| aeronaves en el cilindro | 69 | 69 |
+
+**+84 % de operaciones reales y 7 frustradas falsas eliminadas.** El bug 1 solo
+llevaba de 32 a 46; los 13 restantes los aporta la carrera de pista, que resolvió
+**32 pasadas** con un patrón perfectamente consistente: `frena` dio aterrizaje y
+`acelera` dio despegue, sin una excepción.
+
+### Un acumulador, no dos
+
+`aeropuerto.resumir_cilindro` y `adsb_events.LectorIncremental._absorber_cilindro`
+tenían **la misma lógica escrita dos veces**, vigiladas por un test que las compara
+campo por campo. Con la segmentación por pasada el estado dejó de ser un dict
+plano por dirección —hay que recordar el último timestamp y el número de pasada— y
+duplicar eso costaba el doble y divergía igual. Ahora las dos llaman a
+`aeropuerto.acumular_en_cilindro()` y `_absorber_cilindro` no reimplementa nada.
+
+### El cuadre cambió de referencia
+
+`suma_categorias` tiene que dar **`pasadas_en_cilindro`**, no
+`aeronaves_en_cilindro`: cada pasada produce exactamente una clasificación, y una
+aeronave que entró tres veces aporta tres categorías. Comparar contra aeronaves
+daría "NO CUADRA" siempre. Se publican los dos números —110 pasadas de 69
+aeronaves dice algo que ninguno de los dos solo dice— y las **cuatro** pantallas
+que muestran el cuadre se actualizaron: `index.html`, `adsb_analisis.html`,
+`aeropuerto_mapa.html` y `aeropuerto_operaciones.html`.
+
+### Campos nuevos
+
+- `Operacion.pasada` — el número de pasada, desde 0.
+- `Operacion.carrera` — `frena` / `acelera` / `None`, la evidencia que sostiene la
+  clasificación cuando no hubo altitud. Va en el JSON y **se muestra** en la
+  columna **Carrera** de `/aeropuerto`: lo que sostiene una afirmación va a la
+  vista, no en un tooltip.
+- `Informe.pasadas_en_cilindro`.
+- Variable de entorno nueva: **`ADSB_PASS_GAP_S`** (default 600).
+
+### Lo que NO se arregló, y por qué
+
+**El despegue que Fran vio no se cuenta todavía.** Hoy ese avión tiene tres
+pasadas y solo una toca el cilindro:
+
+| pasada | qué es | ¿dentro del cilindro de 8 km / 4000 ft? |
+|---|---|---|
+| 13:45–13:49, 10500 → 5475 ft, 35 → 12 km | aproximación | **no**, mínimo 12,3 km |
+| 14:00–14:05, 28 posiciones de superficie, 90 → 0 kt | aterrizaje — ahora sí se cuenta | sí |
+| 16:03–16:20, 5425 → 33925 ft, 15 → 128 km | **el despegue** | **no**, la primera posición ya está a 5425 ft |
+
+Del despegue de las 16:00 **no hay ni una posición dentro del cilindro**: entre la
+última de superficie (14:05:51, parado a 0 kt) y la primera del ascenso
+(16:03:05, 5425 ft a 14,85 km) hay un hueco de 117 minutos. Se perdieron los
+primeros dos o tres minutos del ascenso, que es justo el tramo que cruza el
+cilindro. Causa probable: el bootstrap CPR de posiciones aéreas necesita 3 pares
+consistentes y arranca de cero al pasar de superficie a aéreo.
+
+**Se podría inferir** —estaba demostrablemente en el campo a las 14:05 y
+demostrablemente subiendo y alejándose a las 16:03, y lo único que hay entre esas
+dos cosas es un despegue— pero eso es una categoría de evidencia nueva: cruzar
+DOS pasadas en vez de clasificar una. No se implementó. Si se hace, tiene que
+quedar marcada como inferida, como ya se hace con `registration_source`.
+
+### Verificación
+
+Los cuatro archivos de test dan `TODO CORRECTO`, incluido `test_adsb_incremental`,
+que compara `como_json()` de las dos rutas campo por campo — la prueba de que
+unificar el acumulador no rompió la equivalencia.
+
+Se agregaron **12 aserciones** en `test_adsb_incremental.py`, sección 8, con
+observaciones construidas y no esperando que pase un avión. Las dos que más valen
+son los controles negativos:
+
+- **bajar y volver a subir SIN hueco sigue siendo una frustrada** — el criterio de
+  motor y al aire no se debilitó, solo dejó de aplicarse a días distintos.
+- **rodar por debajo de `CARRERA_KT` queda "en tierra"** — el rodaje lento no se
+  promueve a operación.
+
+Las cuatro páginas se verificaron en una segunda instancia en el puerto 8011, sin
+cortar la grabación en curso. `/aeropuerto/mapa` ejercita el camino
+**incremental** y dio los mismos 110/69, o sea que el acumulador compartido
+funciona por las dos rutas.
+
+### Confirmado en producción: el error pegado
+
+El grabador se reinició y `/api/adsb/status` ahora publica `error: None` con la
+grabación andando. Antes del arreglo de `last_error` ese campo se quedaba con el
+`usb_open error -3` para siempre. Los dos arreglos del commit b1ff14a están vivos.

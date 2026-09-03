@@ -466,6 +466,94 @@ else:
     print("       -> no hay adsb_log.db; los endpoints no se ejercitan")
 print()
 
+# ---------------------------------------------------------------------------
+# 8. Pasadas y carrera de pista: los dos bugs del 2026-09-03
+#
+# Se prueba con observaciones construidas y no esperando que pase un avion,
+# porque lo que hay que fijar es el CRITERIO, no lo que dio un dia. Los dos
+# bugs eran silenciosos: no fallaba nada, solo salian numeros equivocados.
+# ---------------------------------------------------------------------------
+print("8. Pasadas y carrera de pista")
+
+import aeropuerto as _apt
+
+_CIL = _apt.geometria_cilindro("SABE")
+if _CIL is None:
+    print("       -> no se pudo ubicar SABE; no se ejercita")
+else:
+    _LAT, _LON = _CIL["lat"], _CIL["lon"]
+
+    def _obs(t, alt, *, vel=None, icao="e8061b", lat=None, lon=None):
+        """Una observacion sobre la pista de SABE salvo que se diga otra cosa."""
+        return Observation(timestamp=t, icao24=icao,
+                           latitude=(_LAT if lat is None else lat),
+                           longitude=(_LON if lon is None else lon),
+                           altitude_ft=alt, ground_speed_kt=vel)
+
+    def _tipos(filas):
+        inf = _apt.informe(filas, "SABE")
+        return sorted((o.pasada, o.tipo) for o in inf.operaciones), inf
+
+    # -- el bug 1: dos visitas separadas son dos operaciones ----------------
+    # Un aterrizaje (baja 2000 -> 100) y, tres horas despues, un despegue
+    # (sube 100 -> 2000). Agrupando por direccion los extremos dan
+    # baja=1900 y sube=1900 sobre una minima de 100 ft: la firma exacta de un
+    # motor y al aire, que es como se fabricaban las 7 frustradas del tablero.
+    T = 1_780_000_000.0
+    aterriza = [_obs(T + i * 10, a) for i, a in enumerate((2100.0, 1200.0, 400.0, 116.0))]
+    despega = [_obs(T + 10800 + i * 10, a) for i, a in enumerate((116.0, 400.0, 1200.0, 2100.0))]
+
+    tipos, inf = _tipos(aterriza + despega)
+    revisar("dos visitas separadas por 3 h dan DOS operaciones",
+            len(tipos) == 2, f"dio {tipos}")
+    revisar("y son aterrizaje y despegue, no una frustrada",
+            [t for _, t in tipos] == ["aterrizaje", "despegue"], f"dio {tipos}")
+    revisar("las pasadas se numeran 0 y 1",
+            [p for p, _ in tipos] == [0, 1], f"dio {tipos}")
+    revisar("pasadas_en_cilindro=2 con aeronaves_en_cilindro=1",
+            inf.pasadas_en_cilindro == 2 and inf.aeronaves_en_cilindro == 1,
+            f"pasadas={inf.pasadas_en_cilindro} aeronaves={inf.aeronaves_en_cilindro}")
+    revisar("y la suma de categorias cuadra contra PASADAS",
+            inf.categorias_cuadran,
+            f"{inf.suma_categorias} vs {inf.pasadas_en_cilindro}")
+
+    # Juntas dentro de la misma pasada SI tienen que dar una frustrada: el
+    # criterio no cambio, solo dejo de aplicarse a dias distintos.
+    seguido = aterriza + [_obs(T + 40 + i * 10, a) for i, a in
+                          enumerate((400.0, 1200.0, 2100.0))]
+    tipos_seguido, _ = _tipos(seguido)
+    revisar("bajar y volver a subir SIN hueco sigue siendo una frustrada",
+            [t for _, t in tipos_seguido] == ["frustrada"], f"dio {tipos_seguido}")
+
+    # El hueco es configurable y el default son 600 s. Con 601 s corta.
+    justo = aterriza + [_obs(T + 30 + _apt.HUECO_PASADA_S + 1 + i * 10, a)
+                        for i, a in enumerate((116.0, 400.0, 1200.0, 2100.0))]
+    revisar(f"un hueco de {_apt.HUECO_PASADA_S:.0f} s + 1 ya corta la pasada",
+            len(_tipos(justo)[0]) == 2, f"dio {_tipos(justo)[0]}")
+
+    # -- el bug 2: sin altitud, la carrera de pista dice el sentido ---------
+    # Mensajes de superficie: altitud 0.0 es el placeholder, no una medicion,
+    # asi que no hay baja ni sube. Antes esto salia "en tierra" siempre.
+    frena = [_obs(T + i * 10, 0.0, vel=v) for i, v in enumerate((90.0, 60.0, 20.0, 4.0))]
+    acelera = [_obs(T + i * 10, 0.0, vel=v) for i, v in enumerate((5.0, 25.0, 70.0, 130.0))]
+    rodaje = [_obs(T + i * 10, 0.0, vel=v) for i, v in enumerate((8.0, 12.0, 9.0, 6.0))]
+
+    revisar("frenando de 90 a 4 kt sobre el campo es un ATERRIZAJE",
+            [t for _, t in _tipos(frena)[0]] == ["aterrizaje"], f"dio {_tipos(frena)[0]}")
+    revisar("acelerando de 5 a 130 kt es un DESPEGUE",
+            [t for _, t in _tipos(acelera)[0]] == ["despegue"], f"dio {_tipos(acelera)[0]}")
+    revisar("rodando por debajo de la carrera queda 'en tierra', no se inventa",
+            [t for _, t in _tipos(rodaje)[0]] == ["en tierra"], f"dio {_tipos(rodaje)[0]}")
+    revisar("y la operacion publica la evidencia que la sostiene",
+            _apt.informe(frena, "SABE").operaciones[0].carrera == "frena")
+    revisar("sentido_de_carrera no opina cuando no hay velocidad",
+            _apt.sentido_de_carrera(
+                {"sup_vel_max": None, "sup_vel_primera": None,
+                 "sup_vel_ultima": None}) is None)
+    print(f"       -> {len(tipos)} operaciones donde antes habia 1, y la carrera "
+          f"de pista resuelve el caso sin altitud")
+print()
+
 conn.close(); conn2.close(); conn3.close(); conn4.close(); conn5.close()
 carpeta.cleanup()
 print("=" * 55)
