@@ -315,6 +315,34 @@ la pista el receptor satura y se pierden mensajes. Medido: con ganancia 30 desde
 San Isidro la mediana cae a −33,5 dBFS y entra **una** aeronave en 70 s, contra
 6-8 con 49,6.
 
+**Pero en Aeroparque la ganancia que gana sigue siendo 49,6, y el aviso de
+saturación de la pantalla apunta al lado equivocado.** Medido el 2026-09-03 con
+`adsb_iq.py --medir`, que es el único método que vale porque cuenta sólo CRC
+verificable:
+
+| ganancia | verificados | tasa | aeronaves | mediana |
+|---|---|---|---|---|
+| **49,6** | **129** | **4,3/s** | **6** | −19,3 dBFS |
+| `auto` (AGC) | 67 | 2,7/s | 5 | −8,2 dBFS |
+| 30 | 34 | 1,3/s | 4 | −16,7 dBFS |
+| 20 | 24 | 0,6/s | 2 | −13,4 dBFS |
+
+O sea 3,8× más que con 30 y casi el doble que con AGC. **La hipótesis de que
+pegado a la pista había que bajarla queda descartada con números para esta
+ubicación** — era lo que recomendaba `USAR-LA-ANTENA.md`, y estaba mal.
+
+En las cuatro corridas salió el cartel *"llega tan fuerte que puede estar
+saturando"*, incluso con ganancia 20. Mira el **pico** (−3 a −4 dBFS en todas),
+no el conteo de verificados, así que acá no discrimina nada. Está bien redactado
+—pide comparar el número, no bajar a ciegas— pero su recomendación apuntaba al
+revés de lo que dio la medición.
+
+Detalle contraintuitivo que confirma que la mediana no sirve para decidir: sube
+al **bajar** la ganancia (−19,3 con 49,6 contra −13,4 con 20). No es que mejore
+la señal: con poca ganancia sólo sobreviven los aviones fuertes y cercanos; con
+mucha entran también los lejanos y débiles, que tiran la mediana para abajo
+mientras el total de decodificados sube.
+
 **Plotly se sirve desde `/static`, no desde un CDN**, y no se usan sus modos
 geográficos: necesitan tiles o topojson de internet. La costa sale de Natural
 Earth y las pistas de OurAirports, horneadas en `geografia.py`.

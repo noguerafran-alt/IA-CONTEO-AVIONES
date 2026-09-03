@@ -95,21 +95,40 @@ Si aparece el segundo, leé el mensaje rojo: dice qué hacer.
 
 ## Ajustar la ganancia
 
-Es la única decisión que hay que tomar en el lugar, y **estando pegado a la pista
-más ganancia no es mejor**: el receptor satura y se pierden mensajes, que se
-siente como recibir *menos* justo cuando debería recibir mejor.
+**Ya está medida: dejala en `49.6`.** Esta guía decía antes que pegado a la pista
+convenía bajarla. Se midió el 2026-09-03 y es al revés:
 
-Arranca en `auto`, que es un punto de partida razonable de cerca.
+| ganancia | mensajes verificados en 30 s | aeronaves |
+|---|---|---|
+| **49,6** | **129** | **6** |
+| `auto` | 67 | 5 |
+| 30 | 34 | 4 |
+| 20 | 24 | 2 |
 
-En la página, abajo de los controles, hay un panel de señal con la mediana en
-dBFS, el máximo y el porcentaje de mensajes contra el techo. **La página avisa
-sola cuando conviene bajar.**
+El máximo del R820T da **3,8× más** que 30 y casi el doble que `auto`. La teoría
+de la saturación es real, pero en este lugar no se cumple, y adiviné mal.
 
-Si te avisa, cerrá el servidor, abrí el `.bat` con el bloc de notas, cambiá la
-línea `set ADSB_GAIN=auto` por un valor fijo (probá `40`, después `30`) y volvé a
-arrancar. Para referencia: `30` desde San Isidro a 13 km era demasiado poco
-—entraba **una** aeronave en 70 s contra 6-8 con `49.6`—, pero a 1 km de la pista
-es un valor razonable.
+**Te va a aparecer un cartel que dice "llega tan fuerte que puede estar
+saturando". No le hagas caso** — o mejor, hacé lo que él mismo pide: comparar el
+número. Salió en las cuatro mediciones, hasta con ganancia 20, porque mira el
+pico y no la cantidad de mensajes decodificados.
+
+Y no uses la mediana en dBFS para decidir: **empeora al subir la ganancia**
+(−19,3 con 49,6 contra −13,4 con 20) y aun así 49,6 decodifica cinco veces más.
+No es que la señal sea peor — con mucha ganancia entran también los aviones
+lejanos y débiles, que bajan la mediana mientras suben el total.
+
+Si algún día hay que volver a decidirlo, con otra antena u otra ubicación, es
+con un comando y no a ojo:
+
+```bash
+.venv\Scripts\python.exe adsb_iq.py --medir 30
+```
+
+Cuenta **sólo los mensajes con CRC verificable**, que es lo único que prueba que
+la antena recibe. El total de mensajes no mide nada: en la torre de YPF el
+sistema informaba 34 684 mensajes y 101 "aeronaves" con **cero** CRC válido. Era
+ruido al 100%.
 
 ---
 

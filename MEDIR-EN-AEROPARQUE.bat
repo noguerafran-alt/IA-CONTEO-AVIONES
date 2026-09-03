@@ -50,15 +50,30 @@ REM pegado a la pista satura y se pierden mensajes. Medido en la otra punta:
 REM con ganancia 30 desde San Isidro entraba UNA aeronave en 70 s contra 6-8 con
 REM 49.6, asi que tampoco se puede bajar a ciegas. 'auto' es el punto de partida
 REM y el panel de senal de /adsb es donde se decide si moverla.
-REM Ganancia 20 y NO auto. Medido desde San Isidro, a 13.3 km: con auto el
-REM 11.5%% de los mensajes pasaba de -6 dBFS y el pico llegaba a -4.1, o sea
-REM contra el techo del receptor. A 1.15 km del umbral la senal llega unos
-REM 21 dB mas fuerte (20*log10(13300/1150)), asi que auto daria +17 dBFS:
-REM saturacion total, y saturar hace PERDER mensajes. Con 25 el pico era
-REM -23.6 y la saturacion 0%%, asi que 20 deja margen.
-REM Si en el dashboard entran pocas aeronaves y la saturacion figura en 0%%,
-REM subila. El panel de senal de /adsb es el instrumento, no la intuicion.
-set ADSB_GAIN=20
+REM Ganancia 49.6, el maximo del R820T. Estuvo en 20 y estaba MAL.
+REM
+REM El 20 salia de extrapolar: desde San Isidro, a 13.3 km, con auto el 11.5%%
+REM de los mensajes pasaba de -6 dBFS, y a 1.15 km la senal llega unos 21 dB
+REM mas fuerte (20*log10(13300/1150)), asi que se predijo saturacion total. La
+REM cuenta esta bien y la conclusion es falsa. Medido EN LA AEROPLANTA DE YPF
+REM el 2026-09-03 con adsb_iq.py --medir, que cuenta SOLO CRC verificable:
+REM
+REM     49.6 -> 129 verificados (4.3/s), 6 aeronaves, mediana -19.3 dBFS
+REM     auto ->  67 verificados (2.7/s), 5 aeronaves, mediana  -8.2 dBFS
+REM     30   ->  34 verificados (1.3/s), 4 aeronaves, mediana -16.7 dBFS
+REM     20   ->  24 verificados (0.6/s), 2 aeronaves, mediana -13.4 dBFS
+REM
+REM Por que fallo la prediccion: los +21 dB valen para un avion EN la pista, y
+REM esos son un punado. La mayoria de lo que se decodifica esta a decenas de km
+REM y llega debil igual. Bajar la ganancia para proteger al caso raro y fuerte
+REM mata a los muchos lejanos, y el conteo total cae 5x.
+REM
+REM El cartel de "puede estar saturando" salio en las CUATRO corridas, hasta con
+REM ganancia 20: mira el pico (-3 a -4 dBFS siempre), no los verificados, asi
+REM que aca no distingue nada. Y la mediana empeora al SUBIR la ganancia
+REM (-19.3 con 49.6 contra -13.4 con 20) porque entran los debiles lejanos, no
+REM porque la senal sea peor. El unico numero que decide es el de --medir.
+set ADSB_GAIN=49.6
 
 REM La fuente por defecto seria "auto", que resuelve a rtl_adsb y NUNCA elige
 REM IQ. Hay que fijarla o el camino recomendado queda como un paso manual que se
