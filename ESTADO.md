@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-03, con la columna "hace cuánto" y por qué la edad del avión todavía no se puede dar.
+Última actualización: 2026-09-03, con la columna "hace cuánto" y la edad del avión descartada con números.
 
 ---
 
@@ -1293,3 +1293,81 @@ en curso.
 Corolario operativo: **si una página tira 404 o el error rojo no se va, primero
 reiniciar el server.** El estado que publica `/api/adsb/status` es del proceso, no
 del disco.
+
+---
+
+## Descartado con números: la edad del avión NO sale de OpenSky
+
+Se bajó el CSV completo (`aircraft-database-complete-2025-08.csv`, 108 MB, la
+**última** que publica OpenSky: el listado del bucket no tiene nada posterior a
+2025-08) y se midió. La respuesta es no, y conviene entender por qué para no
+reintentarlo.
+
+### `built` es un campo de Estados Unidos
+
+| población | con `built` | |
+|---|---|---|
+| CSV completo | 162 932 / 603 658 | 27,0 % |
+| **Estados Unidos** | 162 806 / 365 942 | **44,5 %** |
+| Canadá | 16 / 38 699 | 0,0 % |
+| Alemania | 2 / 33 048 | 0,0 % |
+| Reino Unido | 2 / 26 830 | 0,0 % |
+| Francia, Italia, China, Rusia | 0 | 0,0 % |
+| Brasil | 7 / 5 659 | 0,1 % |
+| **Argentina** | **0 / 1 813** | **0,0 %** |
+| Uruguay, Paraguay, Bolivia, Panamá | 0 | 0,0 % |
+
+**El 99,92 % de los valores de `built` son de matrículas estadounidenses.** Es
+casi con seguridad un volcado del registro de la FAA, que publica año de
+fabricación; los demás registros civiles no le pasan ese campo a OpenSky. No es
+que esté incompleto para Argentina: está en **cero exacto** sobre 1813 aeronaves.
+
+### Sobre nuestro tráfico
+
+| población | con `built` |
+|---|---|
+| 122 direcciones con posición emitida | 6 (5 %) |
+| **33 que aterrizaron o despegaron en Aeroparque** | **0 (0 %)** |
+
+Las 6 que sí tienen fecha son **todas matrículas N**: tres 777 y un 787 de
+American, un A330 de Delta, un Cessna 210 de Sky West. Ninguna operó en
+Aeroparque — son sobrevuelos.
+
+### Y la fecha no es una fecha
+
+De los 162 932 valores de `built`, **162 836 terminan en `-01-01`**. O sea que el
+campo es un **año** rellenado a formato fecha. Mostrar "nacido 2019-01-01" sería
+publicar una precisión inventada de día y mes, que es justo lo que este repo no
+hace.
+
+`firstFlightDate` es todavía peor: **457 filas en todo el archivo (0,1 %)**, y 0
+en nuestro tráfico.
+
+### Conclusión
+
+**No se agrega `built` al esquema.** Una columna que resuelve 0 de 33 operaciones
+no es una columna con poca cobertura: es una columna vacía con un encabezado. Si
+alguna vez hace falta la edad del avión para tráfico argentino, hay que buscarla
+en otra fuente —el registro de ANAC, o una base de flotas comercial—, no acá.
+
+### Lo que sí apareció: número de serie
+
+Midiendo todos los campos del CSV sobre las 32 operaciones que están en él:
+
+| campo | con dato | ¿ya lo usamos? |
+|---|---|---|
+| `typecode` | 100 % | sí |
+| `country` | 100 % | se deriva del bloque del ICAO24 |
+| `operatorIcao` | 81 % | sí |
+| `model` | 81 % | sí |
+| **`serialNumber`** | **66 %** | **no — es lo único nuevo que sirve** |
+| `owner` | 66 % | sí (alias de `operator`) |
+| `built`, `firstFlightDate`, `lineNumber`, `registered`, `regUntil`, `status`, `categoryDescription`, `engines` | 0 % | — |
+
+`serialNumber` identifica el **fuselaje físico**, que es más estable que la
+matrícula (la matrícula cambia de dueño, el serial no). Queda como candidato real
+para "saber todo lo posible de cada vuelo". `engines` viene en 0 %, así que los
+motores tienen que seguir saliendo del Doc 8643 como ahora.
+
+Agregarlo pide reconstruir la base de 49 MB **con el server parado**, porque
+tiene el archivo tomado.
