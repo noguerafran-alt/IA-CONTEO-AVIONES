@@ -803,6 +803,11 @@ def _read_csv(path: str) -> list[Observation]:
                 # antes de arreglar el decodificador) siguen cargando igual.
                 latitude=num(row.get("latitude")),
                 longitude=num(row.get("longitude")),
+                # "" -> None (el avion no lo dijo, o el CSV es anterior a la
+                # columna), "1"/"0" -> True/False. Los CSV viejos no traen la
+                # clave y row.get() da None, que es el valor correcto.
+                on_ground_reported=(None if not (row.get("on_ground_reported") or "").strip()
+                                    else row["on_ground_reported"].strip() == "1"),
             ))
     return rows
 
@@ -836,12 +841,16 @@ def _read_db_con_ids(path: str, *, desde: int = 0
     contestarle a cada cliente "que hay de nuevo desde tu cursor" sin
     guardar estado por pestana en el servidor.
     """
-    # Decision explicita sobre la columna on_ground, que se escribe y nadie
-    # lee: NO se agrega a Observation. El portador de "esta en tierra" es
-    # altitude_ft=0.0, que decoded_to_observation ya fija para los mensajes de
-    # superficie (que por diseno no traen altitud) y que si viaja de ida y
-    # vuelta por la base. Duplicar el estado en dos columnas invita a que se
-    # contradigan. La columna on_ground queda para leer el CSV en Excel.
+    # on_ground (la columna combinada) sigue SIN leerse a proposito: es
+    # derivable de altitude_ft=0.0, que decoded_to_observation ya fija para los
+    # mensajes de superficie, y duplicar un estado derivable en dos columnas
+    # invita a que se contradigan. Queda para leer el CSV en Excel.
+    #
+    # on_ground_reported SI se lee, y no es la misma discusion: no es derivable
+    # de nada. Es lo que el avion DECLARO, y ningun valor de altitud puede
+    # reconstruirlo -- un avion en pista con QNH alto informa altitud negativa
+    # y uno detenido en plataforma puede no informar altitud en absoluto. Es
+    # dato nuevo, no una copia.
     import sqlite3
 
     # mode=ro y no sqlite3.connect(path) a secas: esto corre en el hilo de
@@ -912,6 +921,13 @@ def _read_db_con_ids(path: str, *, desde: int = 0
             # reventaria en vez de degradar a "esta fuente no lo media".
             signal_dbfs=(row["signal_dbfs"] if "signal_dbfs" in row.keys() else None),
             track_deg=(row["track_deg"] if "track_deg" in row.keys() else None),
+            # bool() explicito y solo si no es None: SQLite devuelve 1/0/NULL,
+            # y pasar el entero crudo haria que `is True` -- que es como se
+            # consulta un tri-estado -- fallara contra un 1 legitimo.
+            on_ground_reported=(
+                None if "on_ground_reported" not in row.keys()
+                or row["on_ground_reported"] is None
+                else bool(row["on_ground_reported"])),
         )
         for row in rows
     ], ids, cursor, estado
@@ -1070,11 +1086,6 @@ class LectorIncremental:
         self.ultimo_epoch = None
         self._ids_rechazo: list[int] = []
 
-        # El resumen por aeronave que consume aeropuerto.informe(). Se acumula
-        # aca y no se recalcula sobre las observaciones porque el estado
-        # residente ya no las guarda. Es O(1) por aeronave: primera altura,
-        # minima con su punto, ultima altura, conteo, ultimo rumbo y ultimo
-        # distintivo DENTRO del cilindro.
         # El resumen por aeronave que consume aeropuerto.informe(). Se acumula
         # aca y no se recalcula sobre las observaciones porque el estado
         # residente ya no las guarda. Es O(1) por aeronave: primera altura,

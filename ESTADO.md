@@ -71,7 +71,7 @@ aeropuerto cercano a la antena, 24/7. Aeroparque en este caso.
 ## Cómo se levanta
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && ..\.venv\Scripts\python.exe main.py
+cd "C:\Users\nogue\OneDrive\Desktop\CLAUDE\RADAR YPF\webapp" && ..\.venv\Scripts\python.exe main.py
 ```
 
 Pero para uso normal, **doble clic en `dashboard.bat`**: levanta el servidor con
@@ -121,7 +121,7 @@ el puerto — ese servidor seguiría midiendo desde San Isidro sin decirlo. El
 equivalente a mano:
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics\webapp && cmd /c "set ADSB_RECEIVER=aeroparque && set ADSB_GAIN=20 && set ADSB_SOURCE=iq && ..\.venv\Scripts\python.exe main.py"
+cd "C:\Users\nogue\OneDrive\Desktop\CLAUDE\RADAR YPF\webapp" && cmd /c "set ADSB_RECEIVER=aeroparque && set ADSB_GAIN=20 && set ADSB_SOURCE=iq && ..\.venv\Scripts\python.exe main.py"
 ```
 
 ---
@@ -1055,6 +1055,129 @@ declarando el punto como separador decimal.
   implementado. Cuando se haga, debe ser *sugerencia que se confirma*, no cambio
   automático: una posición vieja en caché mediría en silencio desde el lugar
   equivocado, que es el bug que se intenta matar.
+
+---
+
+## Sesión 2026-08-25: la bandera de superficie, y el hex crudo que ya no se tira
+
+### La bandera de superficie dejó de descartarse
+
+`adsb_rtlsdr.py` calculaba la bandera real de tierra (TC 5-8 / BDS 0,6, o
+`vertical_status` de DF0/16) **y la tiraba**; todo el sistema contestaba "en
+tierra" por `altitude_ft <= 0`. Con el offset barométrico del 23/08 eso en
+realidad significaba "a menos de 331 ft sobre la pista".
+
+Ahora `Observation.on_ground_reported` es un **tri-estado**: `True`/`False` solo
+si el mensaje lo declaró, `None` si el mensaje no hablaba del tema. `None` NO es
+`False`, y esa distinción es el punto: las ~10 000 filas históricas quedan en
+`None` porque nadie las escuchó decirlo.
+
+- `is_on_ground` ahora prefiere la bandera y sólo cae a la altitud si no hay.
+- La propagan las tres fuentes: `adsb_rtlsdr.py` (por formato de mensaje),
+  `adsb_sbs.py` (campo 21, que antes aplastaba vacío y `'0'` en el mismo
+  `False`) y `adsb.py` (el literal `"ground"` de dump1090).
+- Viaja a la base y al CSV, y `adsb_events.py` la lee de vuelta por los dos
+  caminos.
+- **`altitude == 0` quedó deliberadamente fuera** de la bandera: es justamente
+  la inferencia de la que hay que poder distinguirla.
+
+**Sigue sin ejercitarse con tráfico real.** Es la misma advertencia de siempre:
+esta antena todavía no decodificó un avión en tierra, así que el contador en
+cero significa "nunca corrió".
+
+### El CSV ya puede ganar columnas sin romper a quien lo lea
+
+Antes había una prohibición escrita: no agregar columnas, porque el archivo se
+abre en *append* y las filas nuevas quedarían con un campo de más bajo el
+encabezado viejo. La prohibición se cambió por una **comprobación**:
+`Recorder._ruta_compatible()` lee el encabezado del archivo del día y, si no
+coincide con `COLUMNS`, rota a `adsb_2026-08-25.1.csv`. El viejo queda intacto y
+legible con su encabezado; ninguno de los dos miente.
+
+### El hex crudo ahora se guarda (`adsb_raw.py`)
+
+Este era el agujero de fondo. El hex se decodificaba y se soltaba, así que
+**todo lo que el decodificador no extraía en el momento era irrecuperable**: las
+~10 000 filas grabadas tienen 8 campos porque `decoded_to_observation` extrae 8
+campos, y no hay forma de sacarles un noveno. Un cambio en el decodificador no
+se podía aplicar a lo ya grabado.
+
+`adsb_raw.py` graba `epoch,hex` y nada más — ninguna decisión de interpretación
+se toma ahí, porque cualquier decisión que se tome ahí es una que no se va a
+poder revisar después. Cuesta ~30 bytes por mensaje.
+
+### Decodificación completa a Excel (`adsb_decode_full.py` + `adsb_catalogo.py`)
+
+Vuelca el diccionario **entero** que devuelve pyModeS, campo por campo. Las
+columnas no están escritas a mano: son la unión de las claves que realmente
+aparecieron, ordenadas por `adsb_catalogo.ORDEN`. Un campo que el catálogo no
+prevé igual se exporta, y el diccionario lo marca "sin catalogar" — que es como
+aparecieron `icao_verified` y `selected_altitude_mcp`, hoy ya catalogados.
+
+Cuatro hojas: `mensajes`, `diccionario` (qué es cada columna, unidad, de qué
+mensaje sale, y en qué % de filas viene con dato), `aeronaves` y `procedencia`.
+El diccionario va DENTRO del archivo: un Excel que no se explica a sí mismo
+obliga a adivinar.
+
+**Medido: 76 columnas** contra las 11 del CSV operativo.
+
+`output/adsb/CATALOGO-columnas-ADSB.xlsx` es el catálogo de columnas, generado
+con **mensajes de referencia públicos, NO capturados por esta antena** — lo dice
+su propia hoja de procedencia. Cubre las 9 familias de mensaje.
+
+### Los cuatro tests dependen de `ADSB_RECEIVER` y nadie lo avisaba
+
+**Medido hoy:** con `ADSB_RECEIVER=aeroparque`, `test_adsb_events.py` falla 6
+casos y `test_adsb_position.py` falla 3. Sin la variable (default San Isidro),
+los cuatro dan TODO CORRECTO. Los valores esperados están calculados desde San
+Isidro.
+
+O sea que **el resultado de la suite depende de cómo se la invoque**, y el
+comando que documenta `CLAUDE.md` no fija la variable. Un test que pasa o falla
+según el entorno no está midiendo lo que dice medir. Sin resolver: hay que
+decidir si los tests fijan su propio receptor o si los esperados se recalculan.
+
+### La antena está recibiendo mal, y hay que mirarlo
+
+**Medido el 2026-08-25 desde Aeroparque, con `adsb_iq.py --medir 40`:**
+
+| ganancia | verificados en 40 s | aeronaves | señal mediana |
+|---|---|---|---|
+| 49,6 dB | 2 | 1 | −31,3 dBFS |
+| `auto` (AGC) | 5 | 1 | −15,9 dBFS |
+
+`auto` gana claro: 2,5× más mensajes y 15 dB más de señal.
+
+### rtl_adsb.exe es un demodulador mucho peor que el propio, y estaba medido sin querer
+
+El hallazgo salió de comparar dos capturas del mismo rato con la misma antena:
+
+| camino | mensajes | ventana | tasa |
+|---|---|---|---|
+| `rtl_adsb.exe -e 1` | 5 | 600 s | 0,008/s |
+| IQ crudo (`adsb_iq.escuchar`), AGC | 5 **verificados** | 40 s | 0,125/s |
+
+**Unas 15 veces más por el camino de IQ**, y encima el de IQ mide el nivel de
+señal de cada mensaje, que `rtl_adsb` tira. Por eso `adsb_raw.py` graba por IQ
+**por defecto**, y `--rtl-adsb` queda sólo para poder rehacer esta comparación.
+
+Esto reencuadra lo de arriba: buena parte de "la antena recibe mal" era el
+demodulador, no la antena. Lo que sigue abierto es cuánto queda de brecha real
+contra los **93 DF17/18 en 40 s** de la medición histórica, y eso hay que
+volver a medirlo por el camino de IQ antes de salir a revisar cables.
+
+### Dos bugs propios que valen como recordatorio
+
+- **Flush por cantidad sin cota temporal.** `adsb_raw.py` flusheaba cada 200
+  mensajes; con el cielo flojo eso son diez minutos con el archivo en 0 bytes,
+  indistinguible de un capturador roto. Ahora flushea por tiempo (2 s), igual
+  que el `commit_interval_s` de `adsb_record.py`. Es el mismo error, cometido de
+  nuevo en un archivo nuevo.
+- **Un plazo que no vencía.** El `--seconds` se chequeaba dentro de
+  `for linea in proceso.stdout`, que se bloquea esperando datos: si el aire se
+  calla, no llega ningún mensaje y el plazo no vence nunca. Una captura de 720 s
+  quedó colgada. Ahora un `threading.Timer` termina el proceso, el pipe da EOF y
+  el bucle sale solo.
 
 ---
 

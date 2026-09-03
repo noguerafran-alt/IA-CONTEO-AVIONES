@@ -50,12 +50,19 @@ DB_PATH = Path(os.environ.get("ADSB_DB") or (Path(__file__).parent / "adsb_log.d
 COLUMNS = [
     "utc", "epoch", "icao24", "registration", "callsign",
     "altitude_ft", "ground_speed_kt", "vertical_rate_fpm",
-    "latitude", "longitude", "on_ground",
+    "latitude", "longitude", "on_ground", "on_ground_reported",
 ]
 
-# La columna del filtro va SOLO a la base y no al CSV. Agregarla a COLUMNS
-# cambiaria el encabezado del CSV del dia, y el archivo se abre en modo append:
-# las filas nuevas quedarian con un campo de mas bajo el encabezado viejo.
+# on_ground_reported SI va al CSV, y por eso existe _ruta_compatible(): el
+# archivo se abre en append, y hasta ahora agregar una columna dejaba las filas
+# nuevas con un campo de mas bajo el encabezado viejo. Eso se resolvia
+# prohibiendose agregar columnas; ahora se comprueba el encabezado y, si no
+# coincide, se rota a un archivo nuevo del mismo dia. La prohibicion pasa a ser
+# una comprobacion.
+#
+# rejected_reason sigue yendo SOLO a la base, pero por otro motivo: no es un
+# dato del avion sino el veredicto de un filtro que corre despues, y el CSV es
+# el registro de lo que se recibio.
 # signal_dbfs va SOLO a la base, igual que rejected_reason: el CSV es el
 # formato de intercambio y agregarle una columna rompe a quien lo lea por
 # posicion. Es None salvo por el camino de adsb_iq.py, el unico que lo mide.
@@ -82,6 +89,7 @@ CREATE TABLE IF NOT EXISTS adsb_log (
     latitude REAL,
     longitude REAL,
     on_ground INTEGER,
+    on_ground_reported INTEGER,
     rejected_reason TEXT,
     signal_dbfs REAL,
     track_deg REAL
@@ -106,7 +114,7 @@ def migrar_esquema(conn: sqlite3.Connection, db_path: Path | str = DB_PATH) -> b
     # que agregar la segunda rompa la migracion de la primera.
     faltantes = [(nombre, tipo) for nombre, tipo in
                  (("rejected_reason", "TEXT"), ("signal_dbfs", "REAL"),
-                  ("track_deg", "REAL"))
+                  ("track_deg", "REAL"), ("on_ground_reported", "INTEGER"))
                  if nombre not in columnas]
     if not faltantes:
         return False
@@ -143,6 +151,15 @@ def as_row(observation: Observation) -> dict:
         "latitude": observation.latitude if observation.latitude is not None else "",
         "longitude": observation.longitude if observation.longitude is not None else "",
         "on_ground": 1 if observation.is_on_ground else 0,
+        # Tri-estado y no booleano: "" es "el avion no lo dijo". Es la unica
+        # columna del CSV donde el vacio no significa "no se recibio el dato"
+        # sino "el mensaje no hablaba del tema", y hay que respetarlo al
+        # analizar: contar los vacios como 0 volveria a mezclar lo declarado
+        # con lo inferido, que es lo que esta columna existe para separar.
+        # on_ground (la de al lado) sigue siendo la respuesta combinada:
+        # la bandera si la hay, la altitud si no.
+        "on_ground_reported": ("" if observation.on_ground_reported is None
+                               else (1 if observation.on_ground_reported else 0)),
     }
 
 
@@ -242,13 +259,40 @@ class Recorder:
         self.aircraft: set[str] = set()
         self.with_registration: set[str] = set()
 
+    def _ruta_compatible(self, base: Path) -> Path:
+        """La primera ruta del dia cuyo encabezado coincida con COLUMNS.
+
+        El CSV se abre en APPEND. Un archivo del dia escrito con un juego de
+        columnas viejo recibiria filas con un campo de mas bajo el encabezado
+        equivocado, y quien lo lea por posicion cobra el desfasaje sin que
+        salte un solo error -- silencioso, que es la peor clase.
+
+        Rotar a adsb_2026-08-25.1.csv es feo y es lo correcto: el archivo viejo
+        queda intacto y legible con SU encabezado, el nuevo arranca con el
+        actual, y ninguno de los dos miente. Un archivo vacio se reutiliza (se
+        le escribe el encabezado nuevo) porque no hay nada que preservar.
+        """
+        candidata = base
+        sufijo = 0
+        while candidata.exists() and candidata.stat().st_size > 0:
+            try:
+                with candidata.open(encoding="utf-8", newline="") as fh:
+                    encabezado = next(csv.reader(fh), None)
+            except OSError:
+                encabezado = None
+            if encabezado == COLUMNS:
+                return candidata
+            sufijo += 1
+            candidata = base.with_name(f"{base.stem}.{sufijo}{base.suffix}")
+        return candidata
+
     def _csv_for(self, timestamp: float) -> csv.DictWriter:
         day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
         if day != self._csv_day:
             if self._csv_file:
                 self._csv_file.close()
-            path = self.csv_dir / f"adsb_{day}.csv"
-            nuevo = not path.exists()
+            path = self._ruta_compatible(self.csv_dir / f"adsb_{day}.csv")
+            nuevo = not path.exists() or path.stat().st_size == 0
             self._csv_file = path.open("a", newline="", encoding="utf-8")
             self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=COLUMNS)
             if nuevo:

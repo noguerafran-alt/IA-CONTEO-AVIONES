@@ -82,17 +82,34 @@ class Observation:
     # velocidad, pero el transmitido manda.
     track_deg: float | None = None
     signal_dbfs: float | None = None
+    # Lo que el avion DIJO sobre estar en tierra, distinto de lo que se deduce
+    # de la altitud. True/False solo si el mensaje lo declaro (TC 5-8 / BDS 0,6,
+    # o vertical_status 'on-ground' de DF0/16); None es "esta fuente no lo trae,
+    # o el mensaje no lo decia", que NO es lo mismo que False. La diferencia
+    # importa: hasta ahora adsb_rtlsdr.py la calculaba y la tiraba, y todo el
+    # sistema respondia "en tierra" por altitud.
+    on_ground_reported: bool | None = None
 
     @property
     def is_on_ground(self) -> bool:
-        # OJO: esto es "altitud <= 0", no la bandera de superficie del mensaje.
-        # Con el offset barometrico del 23/08 (QNH ~1025 hPa, -331 ft sobre el
-        # campo de SABE) eso significa "a menos de 331 ft sobre la pista": las
-        # 69 filas con altitud negativa de la base quedan marcadas en tierra
-        # porque lo dice esta comparacion, no porque lo diga el avion.
-        # adsb_rtlsdr.py:112 SI calcula la bandera real (TC 5-8 / BDS 0,6 o
-        # vertical_status 'on-ground') y la tira; propagarla necesita columna
-        # nueva en la base, y esta anotado en ESTADO.md.
+        """En tierra: lo que el avion DIJO, y solo si no lo dijo, la altitud.
+
+        La bandera transmitida manda. Un mensaje de superficie (TC 5-8 /
+        BDS 0,6) o un vertical_status 'on-ground' (DF0/16) es la aeronave
+        declarando su estado, y ahi no hay nada que deducir.
+
+        El respaldo por altitud sigue existiendo porque la mayoria de las filas
+        no tienen bandera: las ~10 000 historicas de la base son anteriores a
+        esta columna y quedan en None. Pero ese respaldo MIENTE de un modo
+        conocido -- es "altitud <= 0", y con el offset barometrico del 23/08
+        (QNH ~1025 hPa, -331 ft sobre el campo de SABE) en realidad significa
+        "a menos de 331 ft sobre la pista". Las 69 filas con altitud negativa
+        de la base quedan en tierra por esta comparacion, no porque lo diga el
+        avion. Por eso la bandera se guarda en su propia columna en vez de
+        pisar la altitud: para poder separar las dos cosas al leer la base.
+        """
+        if self.on_ground_reported is not None:
+            return self.on_ground_reported
         return self.altitude_ft is not None and self.altitude_ft <= 0
 
     @property
@@ -137,6 +154,12 @@ def parse_aircraft_json(payload: dict, now: float | None = None) -> list[Observa
         altitude = entry.get("alt_baro", entry.get("altitude"))
         # Both forks report a grounded aircraft as the string "ground".
         altitude_ft = 0.0 if altitude == "ground" else _as_float(altitude)
+        # Ese literal "ground" ES la bandera declarada: dump1090 la escribe
+        # cuando el avion transmitio un mensaje de superficie. Al reves no
+        # vale -- una altitud numerica no prueba que el avion haya dicho
+        # "en vuelo", solo que se recibio una altitud -- asi que el otro caso
+        # queda en None y no en False.
+        on_ground_reported = True if altitude == "ground" else None
 
         observations.append(Observation(
             timestamp=stamp - age,
@@ -148,6 +171,7 @@ def parse_aircraft_json(payload: dict, now: float | None = None) -> list[Observa
             vertical_rate_fpm=_as_float(entry.get("baro_rate", entry.get("vert_rate"))),
             latitude=_as_float(entry.get("lat")),
             longitude=_as_float(entry.get("lon")),
+            on_ground_reported=on_ground_reported,
         ))
     return observations
 

@@ -112,6 +112,30 @@ def decoded_to_observation(icao24: str, decoded: dict, timestamp: float,
     on_ground = (surface or decoded.get("vertical_status") == "on-ground"
                  or altitude == 0)
 
+    # La bandera DECLARADA, separada de la inferencia de arriba. `on_ground`
+    # mezcla las dos cosas a proposito porque de eso depende el placeholder de
+    # altitud; esta variable no puede mezclarlas, porque su valor entero esta
+    # en decir quien lo afirmo.
+    #
+    # Un TC 5-8 / BDS 0,6 es por definicion un mensaje de SUPERFICIE y un
+    # TC 9-18 / 20-22 (BDS 0,5) uno de posicion EN VUELO: los dos declaran el
+    # estado, en sentidos opuestos. vertical_status (DF0/16) lo dice literal.
+    #
+    # None es "este mensaje no hablaba del tema" -- uno de velocidad, de
+    # identificacion o un Comm-B -- y NO "esta en vuelo". Confundir esas dos
+    # cosas es el bug que esta columna existe para evitar: `altitude == 0`
+    # queda deliberadamente FUERA, porque es justamente la inferencia de la
+    # que hay que poder distinguirla.
+    en_vuelo_por_formato = (decoded.get("bds") == "0,5"
+                            or (typecode is not None
+                                and (9 <= typecode <= 18 or 20 <= typecode <= 22)))
+    if surface or decoded.get("vertical_status") == "on-ground":
+        on_ground_reported = True
+    elif en_vuelo_por_formato or decoded.get("vertical_status") == "airborne":
+        on_ground_reported = False
+    else:
+        on_ground_reported = None
+
     # bds06.py siempre devuelve la clave "groundspeed", con valor None cuando
     # MOV==0 o MOV>124 (avion detenido o sin informacion de movimiento): un
     # avion parado en plataforma o en cabecera de pista. bds09.py hace lo mismo
@@ -147,6 +171,7 @@ def decoded_to_observation(icao24: str, decoded: dict, timestamp: float,
         track_deg=(decoded.get("track") if decoded.get("track") is not None
                    else decoded.get("heading")),
         signal_dbfs=signal_dbfs,
+        on_ground_reported=on_ground_reported,
         registration=None,   # raw ADS-B carries ICAO24, not the tail number
     )
 

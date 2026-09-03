@@ -101,7 +101,14 @@ def parse_sbs_line(line: str, now: float | None = None) -> Observation | None:
     if not icao24:
         return None
 
-    on_ground = fields[21].strip() == "-1"
+    # Tres estados, no dos. El campo 21 del SBS trae '-1' (en tierra), '0' (en
+    # vuelo) o vacio (el mensaje no lo dice), y el `== "-1"` de antes aplastaba
+    # los dos ultimos en False: un mensaje que callaba quedaba indistinguible
+    # de uno que afirmaba "en vuelo".
+    crudo_en_tierra = fields[21].strip()
+    on_ground_reported = (True if crudo_en_tierra == "-1"
+                          else False if crudo_en_tierra == "0" else None)
+    on_ground = on_ground_reported is True
     altitude_ft = _to_float(fields[11])
     if on_ground and altitude_ft is None:
         altitude_ft = 0.0
@@ -115,6 +122,7 @@ def parse_sbs_line(line: str, now: float | None = None) -> Observation | None:
         vertical_rate_fpm=_to_float(fields[16]),
         latitude=_to_float(fields[14]),
         longitude=_to_float(fields[15]),
+        on_ground_reported=on_ground_reported,
         # SBS never carries the tail number, only the ICAO24 hex address.
         # A lookup against an aircraft database could fill this in later;
         # match_adsb.py works fine with icao24 alone in the meantime.
