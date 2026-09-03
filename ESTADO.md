@@ -1805,10 +1805,57 @@ posterior, y el duplicado de un despegue ya medido.
 
 ### Pendiente que salió de acá
 
-- **Seis assertions del test suite fallan con `ADSB_RECEIVER=aeroparque`** y pasan
-  sin la variable: son las de distancias mínima/máxima/mediana/p95, escritas con
-  los números de San Isidro fijos. Verificado que **fallan igual en el commit
-  anterior**, así que no las rompió este cambio — pero significa que los test no
-  se están corriendo en la configuración en la que el sistema realmente opera.
+- ~~Seis assertions fallan con `ADSB_RECEIVER=aeroparque`~~ → **arreglado**, y
+  eran **nueve**, no seis: el conteo inicial salió de correr un solo archivo con
+  la variable puesta. Ver la sesión siguiente.
 
 ---
+
+---
+
+## Sesión 2026-09-03 (4): los test no se corrían en la configuración real
+
+Salió del pendiente de la sesión anterior. **Eran nueve, no seis**: el conteo
+inicial se hizo corriendo un solo archivo con `ADSB_RECEIVER` puesto.
+
+| archivo | comprobaciones | qué tenían escrito |
+|---|---|---|
+| `test_adsb_events.py` | 6 | 7,3 · 39,1 · 789,5 km y umbrales fijos de mediana/p95 |
+| `test_adsb_position.py` | 3 | 7,3 · 13,3 · 39,1 km |
+
+Todas eran distancias **vistas desde San Isidro**. Pasaban con el valor por
+defecto y fallaban con `ADSB_RECEIVER=aeroparque`, que es donde el sistema
+realmente corre — o sea que los test no estaban cubriendo la producción.
+
+### El arreglo: afirmar la relación, no el número
+
+Las distancias esperadas ahora se **calculan** con el mismo `distance_km` que usa
+el código. Lo que el test afirma pasa a ser lo que siempre quiso decir: que la
+mínima es la del aeropuerto más cercano, que la máxima es el alcance real, que el
+p95 se va con la cola y la mediana no. Eso vale desde cualquier receptor.
+
+### Un escenario que además estaba mal planteado
+
+El 12 —mediana contra p95— ponía los dos grupos en coordenadas fijas. Desde
+Ezeiza la geometría se da vuelta: el grupo «lejos» (−35,10 / −58,42) queda a
+**32,6 km** y el «cerca» (−34,4532 / −58,5896) a **41,3 km**, o sea que el lejano
+está más cerca que el cercano y el escenario deja de significar lo que dice.
+Ahora los dos grupos se ubican **relativos al receptor** (7 km y 70 km), así que
+la forma que el test quiere reproducir es la misma desde donde sea.
+
+### Verificado desde siete ubicaciones
+
+Los cuatro archivos dan `TODO CORRECTO` desde: sin variable, `san-isidro`,
+`aeroparque`, `ypf`, `SABE`, `SADF`, `SAEZ` y un par lat/lon de la ciudad.
+
+Desde un receptor a cientos de km —probado con `-40.0,-65.0`— **fallan, y está
+bien que fallen**: los datos de prueba son trazas reales de Buenos Aires, y desde
+la Patagonia quedan más allá del horizonte de radio, así que el filtro las
+rechaza porque tiene que rechazarlas. Queda dicho en la cabecera de los dos
+archivos para que nadie lo "arregle" aflojando el filtro.
+
+### Y queda como regla
+
+`CLAUDE.md` ahora pide correr los test **también** con `ADSB_RECEIVER=aeroparque`.
+Un test que no se corre en la configuración de producción no está cubriendo la
+producción.

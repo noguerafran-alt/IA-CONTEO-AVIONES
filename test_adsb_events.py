@@ -4,13 +4,30 @@ No antenna needed: each scenario is built, so the awkward cases can be tested
 deliberately instead of waiting for one to happen. The ones that matter are the
 situations that look like an operation but are not -- a reception gap, a single
 odd message, an aircraft descending toward the airport but never landing.
+
+LOS TEST NO PUEDEN DEPENDER DE DONDE ESTA LA ANTENA. Varias comprobaciones de
+distancia tenian escritos los kilometros vistos DESDE SAN ISIDRO (7.3, 13.3,
+39.1, 789.5) y fallaban corriendo con ADSB_RECEIVER=aeroparque, que es la
+configuracion en la que el sistema realmente opera: nueve en total entre este
+archivo y test_adsb_position.py. Ahora las distancias se CALCULAN con el mismo
+distance_km que usa el codigo, asi que lo que se afirma es la relacion -la
+minima es la del aeropuerto mas cercano, el p95 se va con la cola- y no un
+numero, que es lo que el test queria decir desde el principio.
+
+Los datos de prueba SI son de Buenos Aires: trazas reales grabadas en la zona.
+Verificado que pasa desde san-isidro, aeroparque, ypf, SABE, SADF, SAEZ y un par
+lat/lon de la ciudad. Desde un receptor a cientos de km -Patagonia, por ejemplo-
+fallan, y esta bien que fallen: esas posiciones quedan mas alla del horizonte de
+radio y el filtro las rechaza porque tiene que rechazarlas. No es algo para
+"arreglar" aflojando el filtro.
 """
 import time
 
 from adsb import Observation
 from adsb_events import (EventDetector, PositionGate, apply_position_gate,
                          coverage_report, detect)
-from receiver import horizonte_km, limite_posicion_km
+from receiver import (RECEIVER_LAT, RECEIVER_LON, distance_km,
+                      horizonte_km, limite_posicion_km)
 
 T0 = 1_800_000_000.0
 fallos = []
@@ -130,20 +147,30 @@ print(f"       -> solo en altura: alcanza pista = {cob['can_see_runway_level']}\
 
 print("11. Cobertura horizontal: hasta donde llega la antena, no solo hasta que altura")
 # El otro eje de la misma pregunta, y el que no se podia medir mientras la
-# posicion salia None. Coordenadas de los tres aeropuertos de la zona vistos
-# desde San Isidro: 7.3, 13.3 y 39.1 km medidos con el haversine del repo.
+# posicion salia None. Son los tres aeropuertos de la zona.
+#
+# LAS DISTANCIAS ESPERADAS SE CALCULAN, no se escriben. Estaban fijas en 7.3,
+# 13.3 y 39.1 km -- los valores vistos desde San Isidro-- y por eso estas dos
+# comprobaciones fallaban con ADSB_RECEIVER=aeroparque, que es la configuracion
+# en la que el sistema realmente corre: desde Aeroparque los mismos tres puntos
+# dan 2.2, 0.2 y 31.4 km. Lo que el test afirma no es un numero sino una
+# relacion -- la minima es el mas cercano y la maxima el mas lejano-- y esa
+# relacion vale desde cualquier lado.
 cerca_y_lejos = [
-    obs(0, lat=-34.4532, lon=-58.5896, alt=0),      # San Fernando,  7.3 km
-    obs(10, lat=-34.55942, lon=-58.41554, alt=0),   # Aeroparque,   13.3 km
-    obs(20, lat=-34.8222, lon=-58.5358, alt=0),     # Ezeiza,       39.1 km
+    obs(0, lat=-34.4532, lon=-58.5896, alt=0),      # San Fernando
+    obs(10, lat=-34.55942, lon=-58.41554, alt=0),   # Aeroparque
+    obs(20, lat=-34.8222, lon=-58.5358, alt=0),     # Ezeiza
 ]
 cob = coverage_report(cerca_y_lejos)
 revisar("cuenta las observaciones con posicion", cob["with_position"] == 3,
         f"conto {cob['with_position']}")
-revisar("la minima es el aeropuerto mas cercano", abs(cob["min_distance_km"] - 7.3) < 0.5,
-        f"dio {cob['min_distance_km']}")
-revisar("la maxima es el alcance real", abs(cob["max_distance_km"] - 39.1) < 0.5,
-        f"dio {cob['max_distance_km']}")
+_d3 = [distance_km(o.latitude, o.longitude) for o in cerca_y_lejos]
+revisar("la minima es el aeropuerto mas cercano",
+        abs(cob["min_distance_km"] - min(_d3)) < 0.1,
+        f"dio {cob['min_distance_km']}, el mas cercano esta a {min(_d3):.1f}")
+revisar("la maxima es el alcance real",
+        abs(cob["max_distance_km"] - max(_d3)) < 0.1,
+        f"dio {cob['max_distance_km']}, el mas lejano esta a {max(_d3):.1f}")
 # Sin posiciones no hay alcance que informar, y tiene que quedar en None en vez
 # de en 0: un cero se leeria como "la antena no llega a ninguna parte".
 sin_pos = coverage_report([obs(i * 10, alt=30000) for i in range(5)])
@@ -160,15 +187,33 @@ print("12. La mediana aguanta la cola larga; el p95, con pocas muestras, no")
 # del grupo lejano en vez de recortarlo, que es la razon por la que la interfaz
 # muestra la mediana. Si alguna vez el p95 vuelve a parecer el numero correcto
 # para mostrar, este test explica por que no lo es.
-cerca = [obs(i, lat=-34.4532, lon=-58.5896, alt=1000) for i in range(39)]   # 7.3 km
-lejos = [obs(100 + i, lat=-35.10, lon=-58.42, alt=36000) for i in range(4)]  # ~70 km
+# Los dos grupos se ubican RELATIVOS AL RECEPTOR y no en coordenadas fijas. Con
+# puntos fijos la geometria se da vuelta segun donde este la antena: desde
+# Ezeiza el grupo "lejos" (-35.10, -58.42) cae a 32.6 km y el "cerca"
+# (-34.4532, -58.5896) a 41.3 km, o sea que el lejano queda mas cerca que el
+# cercano y el escenario deja de significar lo que dice. Un grado de latitud son
+# ~111 km, asi que esto pone un grupo a 7 km y otro a 70 km desde donde sea.
+_KM_POR_GRADO = 111.0
+cerca = [obs(i, lat=RECEIVER_LAT + 7 / _KM_POR_GRADO, lon=RECEIVER_LON, alt=1000)
+         for i in range(39)]
+lejos = [obs(100 + i, lat=RECEIVER_LAT + 70 / _KM_POR_GRADO, lon=RECEIVER_LON, alt=36000)
+         for i in range(4)]
 cob = coverage_report(cerca + lejos)
-revisar("la mediana se queda con el grueso", abs(cob["median_distance_km"] - 7.3) < 0.5,
-        f"dio {cob['median_distance_km']}")
-revisar("el p95 se va con la cola", cob["p95_distance_km"] > 60,
-        f"dio {cob['p95_distance_km']}")
+# Calculadas y no fijas, por lo mismo que el punto 11: lo que se afirma es que
+# la mediana se queda con el grupo cercano y el p95 se va con el lejano, y eso
+# es cierto desde cualquier receptor. Con los numeros de San Isidro escritos a
+# mano, estas dos fallaban corriendo con ADSB_RECEIVER=aeroparque.
+_d_cerca = distance_km(cerca[0].latitude, cerca[0].longitude)
+_d_lejos = distance_km(lejos[0].latitude, lejos[0].longitude)
+revisar("la mediana se queda con el grueso",
+        abs(cob["median_distance_km"] - _d_cerca) < 0.5,
+        f"dio {cob['median_distance_km']}, el grupo cercano esta a {_d_cerca:.1f}")
+revisar("el p95 se va con la cola",
+        abs(cob["p95_distance_km"] - _d_lejos) < 0.5,
+        f"dio {cob['p95_distance_km']}, el grupo lejano esta a {_d_lejos:.1f}")
 revisar("y por eso mediana y p95 no son intercambiables",
-        cob["p95_distance_km"] - cob["median_distance_km"] > 50)
+        cob["p95_distance_km"] - cob["median_distance_km"] > (_d_lejos - _d_cerca) * 0.9,
+        f"se separan {cob['p95_distance_km'] - cob['median_distance_km']:.1f} km")
 revisar("sin posiciones la mediana tambien es None",
         coverage_report([])["median_distance_km"] is None)
 print(f"       -> mediana {cob['median_distance_km']:.1f} km vs p95 "
@@ -230,8 +275,12 @@ filtradas, gate = apply_position_gate(traza)
 revisar("rechaza exactamente una posicion", gate.rechazadas == 1,
         f"rechazo {gate.rechazadas}: {[(r.icao24, round(r.km)) for r in gate.rechazos]}")
 r = gate.rechazos[0] if gate.rechazos else None
-revisar("y es la de 789.5 km", r is not None and abs(r.km - 789.5) < 0.5,
-        f"dio {r.km if r else None}")
+# 789.5 km era la distancia del fantasma VISTA DESDE SAN ISIDRO. La trama
+# corrupta es la misma desde cualquier lado -- el error es del emisor, no del
+# receptor-- pero los km hasta ella no, asi que se calculan.
+_d_fantasma = distance_km(-28.07276838916843, -54.906867532169116)
+revisar("y es la del fantasma", r is not None and abs(r.km - _d_fantasma) < 0.5,
+        f"dio {r.km if r else None}, el fantasma esta a {_d_fantasma:.1f}")
 revisar("el motivo es el horizonte de radio", r is not None and r.motivo == "horizonte",
         f"dio {r.motivo if r else None}")
 # 2.384x el horizonte. El salto entre esto y la segunda peor de toda la base
@@ -379,8 +428,9 @@ revisar("desglosa por motivo",
         cob["rejected_by_reason"] == {"horizonte": 1, "velocidad": 0,
                                       "superficie": 0, "sin_altitud": 0},
         f"dio {cob['rejected_by_reason']}")
-revisar("publica el km descartado mas grande", abs(cob["rejected_max_km"] - 789.5) < 0.5,
-        f"dio {cob['rejected_max_km']}")
+revisar("publica el km descartado mas grande",
+        abs(cob["rejected_max_km"] - _d_fantasma) < 0.5,
+        f"dio {cob['rejected_max_km']}, el fantasma esta a {_d_fantasma:.1f}")
 revisar("y el detalle auditable", len(cob["rejected_detail"]) == 1
         and cob["rejected_detail"][0]["icao24"] == "e0b14a")
 # with_position cuenta solo las ACEPTADAS; observations y aircraft no cambian,

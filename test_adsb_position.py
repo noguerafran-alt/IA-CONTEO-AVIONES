@@ -14,6 +14,22 @@ punta a punta: hex -> Observation -> SQLite/CSV -> resumen -> cobertura.
 Los mensajes de superficie son sinteticos con CRC recalculado, porque un avion
 en pista es exactamente lo que esta antena todavia no escucha (esta en San
 Isidro, a 7 km de la pista mas cercana) y no hay una captura real que usar.
+
+LOS TEST NO PUEDEN DEPENDER DE DONDE ESTA LA ANTENA. Varias comprobaciones de
+distancia tenian escritos los kilometros vistos DESDE SAN ISIDRO (7.3, 13.3,
+39.1, 789.5) y fallaban corriendo con ADSB_RECEIVER=aeroparque, que es la
+configuracion en la que el sistema realmente opera: nueve en total entre este
+archivo y test_adsb_position.py. Ahora las distancias se CALCULAN con el mismo
+distance_km que usa el codigo, asi que lo que se afirma es la relacion -la
+minima es la del aeropuerto mas cercano, el p95 se va con la cola- y no un
+numero, que es lo que el test queria decir desde el principio.
+
+Los datos de prueba SI son de Buenos Aires: trazas reales grabadas en la zona.
+Verificado que pasa desde san-isidro, aeroparque, ypf, SABE, SADF, SAEZ y un par
+lat/lon de la ciudad. Desde un receptor a cientos de km -Patagonia, por ejemplo-
+fallan, y esta bien que fallen: esas posiciones quedan mas alla del horizonte de
+radio y el filtro las rechaza porque tiene que rechazarlas. No es algo para
+"arreglar" aflojando el filtro.
 """
 import csv as _csv
 import math
@@ -215,7 +231,7 @@ with tempfile.TemporaryDirectory() as carpeta:
             gate.por_motivo["horizonte"] == 5, f"conto {gate.por_motivo}")
     revisar("y las 2 teletransportaciones entre aeropuertos por velocidad",
             gate.por_motivo["velocidad"] == 2, f"conto {gate.por_motivo}")
-    # La que sobrevive es SADF a 7.3 km, y sobrevive con razon: es la PRIMERA
+    # La que sobrevive es la de SADF, y sobrevive con razon: es la PRIMERA
     # posicion de ese icao24, o sea que R2 no tiene contra que compararla, y
     # por si sola es perfectamente plausible (un avion en pista a 7 km de la
     # antena). Es el agujero conocido y aceptado del diseno: un fantasma que
@@ -224,10 +240,17 @@ with tempfile.TemporaryDirectory() as carpeta:
     # toda traza nueva. Queda fijado aca para que sea una decision y no un
     # olvido.
     quedan = [o for o in filtradas if o.latitude is not None]
+    # La distancia esperada se CALCULA desde el receptor configurado. Estaba
+    # fija en 7.3 km -- SADF visto desde San Isidro-- y por eso fallaba con
+    # ADSB_RECEIVER=aeroparque, que es donde el sistema realmente corre. Lo que
+    # se afirma es que sobrevive la de SADF, y eso vale desde cualquier lado.
+    _d_sadf = distance_km(*SUPERFICIE["SADF"][1])
     revisar("sobrevive solo la primera de superficie, que es plausible",
             len(quedan) == 1 and abs(distance_km(quedan[0].latitude,
-                                                 quedan[0].longitude) - 7.3) < 0.5,
-            f"quedaron {len(quedan)}")
+                                                 quedan[0].longitude) - _d_sadf) < 0.5,
+            f"quedaron {len(quedan)}, a "
+            f"{distance_km(quedan[0].latitude, quedan[0].longitude):.1f} km "
+            f"contra los {_d_sadf:.1f} de SADF" if quedan else "no quedo ninguna")
     # La observacion NO se borra: el filtro anula lat/lon y deja el resto.
     revisar("pero conserva las observaciones enteras", len(filtradas) == len(releidas),
             f"{len(filtradas)} contra {len(releidas)}")
@@ -264,14 +287,20 @@ resumen = {s.icao24: s for s in summarize(releidas)}
 pista = resumen["e0640d"]
 revisar("el resumen guarda la ultima posicion conocida",
         pista.last_latitude is not None and pista.last_longitude is not None)
-# Los tres mensajes de superficie son San Fernando, Aeroparque y Ezeiza vistos
-# desde San Isidro: 7.3, 13.3 y 39.1 km medidos con el haversine del repo.
+# Los tres mensajes de superficie son San Fernando, Aeroparque y Ezeiza. Las
+# distancias se CALCULAN desde el receptor configurado y no se escriben: estaban
+# fijas en 7.3, 13.3 y 39.1 km -- lo que se ve desde San Isidro-- y por eso estas
+# dos fallaban corriendo con ADSB_RECEIVER=aeroparque. La afirmacion que importa
+# es que la minima sea la del mas cercano y la maxima la del mas lejano.
+_d_apt = [distance_km(*SUPERFICIE[c][1]) for c in ("SADF", "SABE", "SAEZ")]
 revisar("la distancia minima es la del aeropuerto mas cercano",
-        pista.min_distance_km is not None and abs(pista.min_distance_km - 7.3) < 0.5,
-        f"dio {pista.min_distance_km}")
+        pista.min_distance_km is not None
+        and abs(pista.min_distance_km - min(_d_apt)) < 0.5,
+        f"dio {pista.min_distance_km}, el mas cercano esta a {min(_d_apt):.1f}")
 revisar("la distancia maxima es el alcance real",
-        pista.max_distance_km is not None and abs(pista.max_distance_km - 39.1) < 0.5,
-        f"dio {pista.max_distance_km}")
+        pista.max_distance_km is not None
+        and abs(pista.max_distance_km - max(_d_apt)) < 0.5,
+        f"dio {pista.max_distance_km}, el mas lejano esta a {max(_d_apt):.1f}")
 cobertura = coverage_report(releidas)
 revisar("la cobertura informa cuantas posiciones hubo",
         cobertura["with_position"] == esperadas, f"dio {cobertura['with_position']}")

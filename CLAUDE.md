@@ -66,6 +66,14 @@ Los cuatro archivos de test tienen que pasar antes de commitear:
 cd "C:\Users\nogue\OneDrive\Desktop\CLAUDE\RADAR YPF" && .venv\Scripts\python.exe test_adsb.py && .venv\Scripts\python.exe test_adsb_events.py && .venv\Scripts\python.exe test_adsb_position.py && .venv\Scripts\python.exe test_adsb_incremental.py
 ```
 
+**Correrlos también con `ADSB_RECEIVER=aeroparque`**, que es la configuración en
+la que el sistema realmente opera. Nueve comprobaciones de distancia tenían
+escritos los kilómetros vistos desde San Isidro y pasaban solo con el valor por
+defecto: un test que no se corre en la configuración de producción no está
+cubriendo la producción. Las distancias esperadas ahora se **calculan** con el
+mismo `distance_km` que usa el código, así que lo que se afirma es la relación y
+no un número.
+
 Para lo de ADS-B, verificar con **replay de mensajes hex** y no esperando que
 pase un avión. Hay vectores conocidos: el par CPR clásico
 `8D40621D58C382D690C8AC2863A7` / `8D40621D58C386435CC412692AD6` decodifica a
