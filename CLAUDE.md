@@ -63,7 +63,7 @@ es peor que un cero explicado.
 Los cuatro archivos de test tienen que pasar antes de commitear:
 
 ```bash
-cd C:\Users\nogue\OneDrive\Desktop\CLAUDE\runway-video-analytics && .venv\Scripts\python.exe test_adsb.py && .venv\Scripts\python.exe test_adsb_events.py && .venv\Scripts\python.exe test_adsb_position.py && .venv\Scripts\python.exe test_adsb_incremental.py
+cd "C:\Users\nogue\OneDrive\Desktop\CLAUDE\RADAR YPF" && .venv\Scripts\python.exe test_adsb.py && .venv\Scripts\python.exe test_adsb_events.py && .venv\Scripts\python.exe test_adsb_position.py && .venv\Scripts\python.exe test_adsb_incremental.py
 ```
 
 Para lo de ADS-B, verificar con **replay de mensajes hex** y no esperando que

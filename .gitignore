@@ -62,3 +62,12 @@ respaldos/
 adsb_log.db
 adsb_log.db-wal
 adsb_log.db-shm
+
+# CAMPOS-ADSB.xlsx lo genera adsb_decode_full.py desde la base: es salida, no
+# fuente. Versionarlo garantiza que en algun momento el archivo del repo diga
+# una cosa y la base otra.
+CAMPOS-ADSB.xlsx
+
+# Restos de SQLite en WAL cuando un -shm se borra con el archivo todavia
+# abierto. No es dato: es estado transitorio que OneDrive deja tirado.
+.fuse_hidden*
