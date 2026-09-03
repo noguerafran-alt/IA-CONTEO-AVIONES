@@ -155,6 +155,32 @@ const hora = ts => ts === null || ts === undefined ? nada
                  : new Date(ts * 1000).toLocaleString("es-AR",
                      {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
 
+// "Hace cuanto" al lado de la hora, no en su lugar: la pregunta operativa es la
+// distancia al presente, y "03/09 11:42" obliga a hacer la resta de cabeza. Las
+// dos columnas contestan cosas distintas -una ubica el hecho, la otra dice si
+// todavia importa- asi que van las dos.
+//
+// Se calcula en el NAVEGADOR y no en el servidor porque el valor envejece: si
+// viniera resuelto en el JSON, una pestana abierta media hora seguiria diciendo
+// "hace 2 min" para siempre, que es peor que no mostrarlo.
+const HORA_S = 3600, DIA_S = 86400;
+function hace(ts) {
+  if (ts === null || ts === undefined || !isFinite(ts)) return "";
+  const s = Date.now() / 1000 - ts;
+  // Negativo = el reloj de esta PC esta atrasado respecto al dato, no un dato
+  // del futuro. Se dice, en vez de mostrar "hace -3 min".
+  if (s < -60) return "reloj desfasado";
+  if (s < 60) return "hace instantes";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `hace ${m} min`;
+  if (s < DIA_S) {
+    const h = Math.floor(s / HORA_S), mm = Math.floor((s % HORA_S) / 60);
+    return mm ? `hace ${h} h ${mm} min` : `hace ${h} h`;
+  }
+  const d = Math.floor(s / DIA_S), hh = Math.floor((s % DIA_S) / HORA_S);
+  return hh ? `hace ${d} d ${hh} h` : `hace ${d} d`;
+}
+
 // Las columnas se declaran una vez: el encabezado, el orden, la celda, EL GRUPO
 // al que pertenece y la explicacion salen de la misma lista, asi que no puede
 // quedar un titulo apuntando a otra columna ni una ayuda describiendo una que ya
@@ -215,6 +241,12 @@ const COLUMNAS = [
   {k: "timestamp", t: "Cuándo",     g: "operacion", v: o => o.timestamp,
    ayuda: "El momento de la operación, no el de la última vez que se escuchó a la aeronave.",
    td: o => `<td class="mono">${hora(o.timestamp)}</td>`},
+  // Ordena por el timestamp, no por el texto: "hace 9 min" y "hace 10 min"
+  // alfabeticamente salen al revés, y una columna de tiempo que ordena mal es
+  // peor que no poder ordenarla.
+  {k: "hace",      t: "Hace cuánto", g: "operacion", v: o => o.timestamp,
+   ayuda: "Cuánto pasó desde la operación hasta ahora. Se recalcula solo cada 30 s. <b>Un valor en días no es un error</b>: dice que esa operación es de una grabación vieja, y verlo es justamente el punto.",
+   td: o => `<td class="mono" data-hace="${o.timestamp}">${hace(o.timestamp)}</td>`},
   // La altitud del punto mas bajo DENTRO del cilindro. Cuando de la aeronave
   // solo llegaron mensajes de superficie no hay ninguna altitud medida, y
   // publicar un 0 seria publicar el placeholder como si fuera medicion.
@@ -495,6 +527,18 @@ document.querySelector("thead").addEventListener("click", e => {
   if (ORDEN === th.dataset.k) { DESC = !DESC; } else { ORDEN = th.dataset.k; DESC = true; }
   pintar();
 });
+
+// El "hace cuanto" envejece solo, asi que se reescriben SOLO esas celdas cada
+// 30 s. No se repinta la tabla entera a proposito: repintar tira el scroll y la
+// seleccion de texto del usuario, y hacerlo cada 30 segundos por una columna
+// seria una pagina que se sacude sola mientras alguien la esta leyendo.
+function refrescarHace() {
+  document.querySelectorAll("[data-hace]").forEach(td => {
+    td.textContent = hace(parseFloat(td.dataset.hace));
+  });
+}
+setInterval(refrescarHace, 30000);
+
 cargar();
 </script>
 </body>

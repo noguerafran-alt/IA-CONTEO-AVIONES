@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-03, con el `rtl_sdr.exe` colgado que dejaba el receptor muerto.
+Última actualización: 2026-09-03, con la columna "hace cuánto" y por qué la edad del avión todavía no se puede dar.
 
 ---
 
@@ -1197,3 +1197,99 @@ tal como está y no un síntoma de esto.
   ya están: el descriptor vacío basta.
 - **Ver por qué el dongle se cae del bus.** Esta vez pasó una vez; si se repite,
   es puerto, cable o calor, y conviene anotar cuándo.
+
+---
+
+## Sesión 2026-09-03 (2): "hace cuánto despegó" sí, la edad del avión no
+
+Pedido: ver en el análisis **la edad de la aeronave** y **hace cuánto despegó**.
+Son dos preguntas con respuestas muy distintas.
+
+### "Hace cuánto" ya estaba calculado y no se mostraba
+
+`Operacion.timestamp` existe desde siempre —el instante más bajo dentro del
+cilindro, que en un despegue es la carrera— y `como_json()` ya lo publicaba.
+Faltaba la columna. Se agregó **Hace cuánto** al lado de **Cuándo**, en el grupo
+de la operación, en `webapp/templates/aeropuerto_operaciones.html`.
+
+Van las dos columnas y no una: "03/09 11:42" **ubica** el hecho y "hace 27 min"
+dice si **todavía importa**. Son preguntas distintas y obligar a hacer la resta
+de cabeza es lo que hace que nadie mire la columna.
+
+Tres decisiones que valen anotarse:
+
+- **Se calcula en el navegador, no en el servidor.** El valor envejece: si
+  viniera resuelto en el JSON, una pestaña abierta media hora seguiría diciendo
+  "hace 2 min" para siempre, que es peor que no mostrarlo.
+- **Se refrescan SOLO esas celdas** (`refrescarHace()` sobre `[data-hace]`, cada
+  30 s), no la tabla entera. Repintar tira el scroll y la selección de texto: una
+  página que se sacude sola cada 30 segundos por una columna es un downgrade.
+- **Ordena por el `timestamp`, no por el texto.** Alfabéticamente "hace 9 min"
+  va después de "hace 10 min". Una columna de tiempo que ordena mal es peor que
+  una que no se puede ordenar.
+
+Verificado en vivo sobre las 33 operaciones reales: la columna aparece, los
+`colspan` del grupo se reajustaron solos de 7 a 8 (se cuentan desde `COLUMNAS`,
+no están escritos a mano), el orden invierte bien en los dos sentidos, y
+envejeciendo un dato 45 min a mano la celda pasó de "hace 6 min" a "hace 52 min".
+
+Efecto secundario útil: la columna **hace visible que la grabación mezcla épocas**.
+Hay operaciones de "hace 11 d" —la era de San Isidro— junto a las de hoy desde
+Aeroparque. Antes eso estaba en la tabla y no se notaba.
+
+### La edad del avión NO se puede dar hoy
+
+`tools/aircraft_db.sqlite` tiene **609 357 aeronaves y ocho columnas**: `icao24`,
+`registration`, `manufacturer`, `model`, `typecode`, `operator`, `operator_icao`,
+`operator_iata`. **Ninguna fecha.** No es que venga vacía: no existe.
+
+El CSV completo de OpenSky **sí** trae `built` y `firstflightdate` (y también
+`serialnumber`, `linenumber`, `registered`, `reguntil`, `status`). El `ALIAS` de
+`aircraft_db.py` no los mapea, así que la importación los descarta en silencio.
+
+Y el archivo fuente **ya no está** en `~/Downloads`. Para tener la edad hacen
+falta tres cosas, en este orden:
+
+1. Volver a bajar `aircraft-database-complete-*.csv` de OpenSky.
+2. Agregar `built` (y quizá `firstflightdate`) al `SCHEMA` y al `ALIAS`.
+3. Reconstruir la base — con el server parado, porque tiene el archivo tomado
+   (ese `PermissionError` ya pasó una vez).
+
+**Antes de prometer la columna hay que medir la cobertura de `built`.** En OpenSky
+está bastante poblada para aviones de línea y bastante vacía para aviación
+general, y este es un repo donde una columna que resuelve el 20% se cuenta, no se
+muestra como si resolviera todo.
+
+### Cobertura del registro: el 9% era un artefacto
+
+Midiendo mal daba **9%**; midiendo bien da **95%**. La diferencia importa:
+
+| población | resuelven | |
+|---|---|---|
+| 3984 icao24 distintos en toda la base | 372 | **9%** |
+| 120 que emitieron **al menos una posición** | 114 | **95%** |
+
+Los 3984 incluyen las direcciones fantasma del ruido de la torre de YPF, que
+aparecían con dos mensajes y sin posición nunca. Esas direcciones no existen, así
+que pedirle al registro que las resuelva y contar el fracaso es medirse mal a uno
+mismo. **El filtro correcto para "tráfico real" es tener posición emitida.**
+
+### El server que corre puede estar viejo, y no lo dice
+
+Buscando la página me dio 404 en `/aeropuerto/operaciones` —la ruta es
+`/aeropuerto`, sin sufijo— pero además **el server de las 10:07 daba 404 en las
+dos**: no tenía la ruta registrada aunque `@app.get("/aeropuerto")` está en HEAD.
+uvicorn corre sin `--reload`, así que el código se congela en el arranque; con el
+repo dentro de OneDrive, los archivos pueden llegar después de que el proceso
+importó.
+
+Para verificar sin cortar la grabación se levantó una **segunda instancia en el
+puerto 8010** con la misma configuración. Es seguro: `webapp/main.py` **no
+arranca el grabador solo** (no hay `on_event`, `lifespan` ni `.start()`), así que
+una segunda instancia no le pelea el dongle a la primera mientras nadie toque
+"Iniciar". Queda como la forma de probar cambios de la webapp con una grabación
+en curso.
+
+Corolario operativo: **si una página tira 404 o el error rojo no se va, primero
+reiniciar el server.** El estado que publica `/api/adsb/status` es del proceso, no
+del disco.
