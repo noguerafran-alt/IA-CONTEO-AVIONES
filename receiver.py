@@ -88,11 +88,19 @@ UBICACIONES: dict[str, tuple[float, float, float, str]] = {
     # La atenuacion del vidrio no es el limite; si algun dia lo fuera, se veria
     # como una mediana mucho mas baja, no como menos aeronaves.
     #
-    # La altura sigue sin importar para la pregunta de si se ve la pista: con la
-    # antena a 1 m el horizonte al suelo ya son 4.1 km, 15 veces los 266 m al
-    # eje. Los 3.0 m son la misma suposicion de armado portatil que en el preset
-    # anterior y se pisan con ADSB_ANTENNA_M si alguien la mide con cinta.
-    "aeroparque-pista": (-34.56167115035011, -58.416347685490514, 3.0,
+    # 6 m es la altura APROXIMADA informada por quien la instalo, no medida con
+    # cinta. Se escribe igual y no se deja en el default de 3.0 porque no es un
+    # decorado: el horizonte de radio a un avion en el suelo pasa de 7.1 a 10.1
+    # km, y ese numero es contra el que las paginas comparan las posiciones de
+    # SUPERFICIE para avisar "la antena no esta donde dice la configuracion".
+    # Con el horizonte subestimado, posiciones legitimas de aviones en pista se
+    # marcarian como imposibles.
+    #
+    # Para la pregunta de si se ve la pista la altura sigue sin decidir nada:
+    # incluso a 1 m el horizonte son 4.1 km, 15 veces los 266 m al eje, y a 6 m
+    # el margen es de 38 veces. Si alguien la mide con cinta, se pisa con
+    # ADSB_ANTENNA_M sin tocar este archivo.
+    "aeroparque-pista": (-34.56167115035011, -58.416347685490514, 6.0,
                          "Aeroparque (266 m del eje de pista)"),
 }
 UBICACION_DEFAULT = "san-isidro"

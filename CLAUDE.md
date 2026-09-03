@@ -11,8 +11,8 @@ confundir **dónde está la antena** con el material de video, que se llama
 Aeroparque por todos lados:
 
 - **Desde el 2026-09-03 (tarde) la antena está al costado de la pista**, a 266 m
-  del eje y a mitad de campo, detrás de un doble vidrio. Preset
-  `aeroparque-pista`.
+  del eje y a mitad de campo, a ~6 m de altura y detrás de un doble vidrio.
+  Preset `aeroparque-pista`.
 - Entre el **2026-08-23 y el 2026-09-03** estuvo a 1153 m del umbral 13, preset
   `aeroparque`. Ese preset se deja definido porque es desde donde se grabó ese
   tramo del histórico.

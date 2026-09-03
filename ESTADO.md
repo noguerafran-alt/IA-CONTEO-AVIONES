@@ -1897,13 +1897,22 @@ Atenúa en 1090 MHz, pero a esta distancia sobra: medido, **mediana −25,4 dBFS
 pico −2,7 sobre 1855 mensajes**. Si algún día el vidrio fuera el límite se vería
 como una mediana mucho más baja, no como menos aeronaves.
 
-### La altura sigue sin importar acá
+### La altura: 6 m, y sí cambia un número publicado
 
-Con la antena a 1 m el horizonte al suelo ya son 4,1 km, **15 veces** los 266 m al
-eje. Los 3,0 m del preset son la misma suposición de armado portátil que antes y
-se pisan con `ADSB_ANTENNA_M` si alguien la mide con cinta. Es el opuesto de San
-Isidro, donde 13,3 km contra 13,0 km de horizonte hacía que 300 metros decidieran
-todo.
+**6 m aproximados**, informados por quien la instaló — no medidos con cinta. El
+preset arrancó en 3,0 (la suposición heredada) y se corrigió.
+
+No es un decorado: el horizonte de radio a un avión **en el suelo** pasa de 7,1 a
+**10,1 km**, y contra ese número comparan las páginas las posiciones de superficie
+para avisar *"la antena no está donde dice la configuración"*. Con el horizonte
+subestimado, posiciones legítimas de aviones en pista se marcarían como
+imposibles.
+
+Para la pregunta de si **se ve** la pista sigue sin decidir nada: incluso a 1 m el
+horizonte son 4,1 km, 15 veces los 266 m al eje; a 6 m el margen es de **38
+veces**. Es el opuesto de San Isidro, donde 13,3 km contra 13,0 km de horizonte
+hacía que 300 metros decidieran todo. Si alguien la mide con cinta, se pisa con
+`ADSB_ANTENNA_M`.
 
 ### La ganancia: NO bajarla por el cartel
 
