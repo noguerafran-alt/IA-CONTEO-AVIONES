@@ -349,10 +349,37 @@ Earth y las pistas de OurAirports, horneadas en `geografia.py`.
 
 ---
 
-## El problema abierto más importante
+## RESUELTO el 2026-09-03: hay posiciones en tierra
+
+**Era el problema abierto más importante del proyecto y dejó de estarlo.** Desde
+la **aeroplanta de YPF en Aeroparque**, en 90 minutos:
+
+| | San Isidro (13,3 km) | Aeroplanta YPF (1,15 km) |
+|---|---|---|
+| altitud mínima vista | 2134 ft | **0 ft** |
+| posiciones en tierra | **0**, nunca ninguna | **177** |
+| aeronaves en tierra ubicadas | 0 | 10 |
+
+Y caen donde tienen que caer. Distancia al **eje real de la pista 13/31**
+(umbrales de OurAirports, vía `geografia.py`): mínima **4 m**, mediana 151 m,
+máxima 379 m. Los de 4–65 m van a 20 kt y 5 kt — un avión en la pista. Los de
+144–279 m van a 0–10 kt: calles de rodaje y plataforma.
+
+La regla de superficie, que estuvo *"sin ejercitar"* durante todo el proyecto
+—su contador en cero significaba "nunca corrió", no "sin rechazos"— ahora corre.
+
+Sigue entrando con la configuración actual: 21 posiciones en tierra en los
+últimos 15 minutos, con `ADSB_SOURCE=iq` y `ADSB_GAIN=49.6`.
+
+**Lo que queda por hacer con esto:** los aterrizajes y despegues todavía no se
+cuentan sobre estas posiciones. El dato ya está; falta que `aeropuerto.py` lo
+aproveche, y revisar que los umbrales de `CARRERA_KT` y del cilindro tengan
+sentido ahora que se ve el avión frenando en pista y no sólo pasando a 2000 ft.
+
+### El diagnóstico viejo, que sigue explicando por qué
 
 **Desde San Isidro no se puede contar operaciones de Aeroparque, y el sistema lo
-dice.** De 1413 posiciones grabadas: **cero** por debajo de 1500 ft y **cero** a
+decía.** De 1413 posiciones grabadas: **cero** por debajo de 1500 ft y **cero** a
 menos de 3 km de Aeroparque. Lo más bajo son 2134 ft sobre el campo.
 
 No es el horizonte teórico (a 2000 ft daría 114 km) sino **obstrucción real**:
@@ -366,10 +393,11 @@ Validación por contraste, mismos datos, mismo código:
 | San Fernando | 7,3 km | **sí** | **215 ft AGL** | 1 aproximación a 450 ft |
 | Aeroparque | 13,3 km | no | 2134 ft AGL | 0 aterrizajes, con advertencia |
 
-**A 300 m de la pista esto se da vuelta.** Ahí conviene: bajar la ganancia
-(`ADSB_GAIN=20`, no `auto`: ver la medición más arriba), mirar el panel de señal
-de `/adsb`, y si las
-"aproximaciones sin resolver" quedan altas, subir `ADSB_AIRPORT_RADIUS_KM`.
+**A 1,15 km de la pista se dio vuelta**, y está confirmado arriba con las 177
+posiciones en tierra. Lo que se predijo mal fue la ganancia: se recomendaba
+bajarla a 20 por la saturación esperada, y medido en el lugar da 24 mensajes
+verificados contra 129 con 49,6. Va `ADSB_GAIN=49.6`. Si las "aproximaciones sin
+resolver" quedan altas, subir `ADSB_AIRPORT_RADIUS_KM`.
 
 **Y lo que ninguna antena arregla:** la matrícula y el tipo no viajan por radio,
 salen de cruzar el ICAO24 contra el registro de OpenSky. El 47% del tráfico real
