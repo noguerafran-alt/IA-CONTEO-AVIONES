@@ -371,10 +371,24 @@ La regla de superficie, que estuvo *"sin ejercitar"* durante todo el proyecto
 Sigue entrando con la configuración actual: 21 posiciones en tierra en los
 últimos 15 minutos, con `ADSB_SOURCE=iq` y `ADSB_GAIN=49.6`.
 
-**Lo que queda por hacer con esto:** los aterrizajes y despegues todavía no se
-cuentan sobre estas posiciones. El dato ya está; falta que `aeropuerto.py` lo
-aproveche, y revisar que los umbrales de `CARRERA_KT` y del cilindro tengan
-sentido ahora que se ve el avión frenando en pista y no sólo pasando a 2000 ft.
+**Lo que queda por hacer con esto.** Primero una corrección: acá decía que los
+aterrizajes y despegues *no* se contaban sobre estas posiciones. Era una
+suposición sin verificar y es falsa — `aeropuerto.py` ya las usa, y sobre la base
+viva da 24 aterrizajes, 37 despegues y 2058 posiciones en superficie de 57
+aeronaves. Lo que hay son tres huecos concretos, medidos:
+
+- **19 de los 24 aterrizajes quedan sin confirmar**, casi todos con `pista=None` y
+  `min_alt=None`, a 0,08–0,7 km del campo. La hipótesis es que son pasadas hechas
+  sólo de posiciones de superficie, que por diseño del protocolo (TC 5-8) **no
+  traen altitud**, así que toda la confirmación por altitud no puede dispararse.
+  Pero ahora hay coordenadas con precisión de metros: la pista se podría asignar
+  por geometría.
+- **Una "en tierra" con `min_alt=1850 ft` y `min_dist=4,11 km`.** Un avión a 1850
+  ft y 4 km no está en tierra: o es un bug de segmentación, o la categoría
+  significa otra cosa que su nombre.
+- **`e8062c` aparece dos veces**, como aterrizaje sin confirmar (0,3 km) y como
+  "en tierra" (4,11 km). Son dos pasadas, lo cual es esperable con
+  `HUECO_PASADA_S=600`, pero hay que confirmar que parta donde corresponde.
 
 ### El diagnóstico viejo, que sigue explicando por qué
 
