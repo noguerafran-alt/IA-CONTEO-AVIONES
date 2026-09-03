@@ -363,6 +363,24 @@ class RtlAdsbRecorder:
         Duplicar esa compuerta seria la peor clase de duplicacion: dos copias
         de una regla de aceptacion de datos que pueden divergir en silencio.
         """
+        # Si llego un hex hasta aca, la cadena entera -USB, muestras,
+        # demodulacion- esta funcionando AHORA, asi que el error anterior ya no
+        # describe nada.
+        #
+        # Sin esto, _loop reintenta y se recupera pero last_error queda pegado
+        # para siempre, y como is_receiving es "poll_count > 0 and last_error is
+        # None", la pagina muestra "la grabacion esta activa pero NO entra nada"
+        # mas el RuntimeError en rojo mientras los datos entran normalmente.
+        #
+        # Medido el 2026-09-03: con last_error pegado de una colision por el
+        # dongle, /api/adsb/status seguia publicando el "usb_open error -3"
+        # mientras positions_evaluated subia de 2075 a 2095 en 25 segundos. El
+        # comentario de escuchar() dice que un tablero que dice grabar mientras
+        # no recibe nada es peor que uno que se cae; al reves es igual de malo,
+        # porque un error rojo permanente que convive con datos que entran
+        # ensena a ignorar el renglon del error.
+        if self.last_error is not None:
+            self.last_error = None
         decoded = self._decoder.decode(hex_message, timestamp=time.time())
         # Tres estados, no dos. pyModeS solo fija crc_valid para DF17/18/20/21;
         # para DF0/4/5/11/16 la clave viene con valor None porque el campo de

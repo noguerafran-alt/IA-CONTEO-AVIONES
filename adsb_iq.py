@@ -368,6 +368,34 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
             cola = bloque[-solapamiento:] if bloque.size > solapamiento else bloque
     finally:
         proceso.terminate()
+        # terminate() no alcanza, y no verificarlo tiene una consecuencia grave:
+        # el dongle es EXCLUSIVO, asi que un hijo que queda vivo agarrando el USB
+        # deja el receptor inservible hasta que alguien lo mate a mano.
+        #
+        # Medido el 2026-09-03: un rtl_sdr.exe que habia fallado con "Library
+        # error -5" seguia listado 49 MINUTOS despues de que este mismo finally
+        # corriera su terminate(). Cada intento posterior moria con "usb_open
+        # error -3", y el descriptor del dongle volvia vacio -"0: , , SN:" en vez
+        # de "Realtek, RTL2838UHIDIR"-, que es la senal inequivoca de que otro
+        # proceso lo tiene abierto. En Windows, TerminateProcess sobre un proceso
+        # trabado dentro del driver USB puede dejarlo en un limbo que conserva
+        # los handles del kernel.
+        #
+        # Por eso: confirmar la muerte, escalar a kill(), y si ni asi murio
+        # DECIRLO. Suponer que el hijo murio es como se convierte una falla
+        # pasajera del USB en un receptor roto hasta el proximo reinicio.
+        quedo_vivo = False
+        try:
+            proceso.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proceso.kill()
+            try:
+                proceso.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                quedo_vivo = True
+                print(f"  rtl_sdr: el proceso {proceso.pid} NO murio; mientras"
+                      f" siga vivo va a seguir agarrando el dongle. Matalo con:"
+                      f" taskkill /PID {proceso.pid} /F", file=sys.stderr)
         error = ""
         if proceso.stderr:
             error = (proceso.stderr.read() or b"").decode("utf-8", "replace").strip()
@@ -397,6 +425,33 @@ def escuchar(exe: Path = DEFAULT_EXE, ganancia: str | None = None,
                          " cerralo y volve a intentar. Si no hay ninguno, falta"
                          " el driver WinUSB, que se instala con Zadig desde"
                          " INSTALAR-ADSB.bat.")
+            elif "transfer status" in error or "Library error" in error:
+                # Caso distinto del anterior y facil de confundir: aca el dongle
+                # SI se abrio -"Using device 0", tuner encontrado, frecuencia y
+                # ganancia puestas- y desaparecio del bus USB en medio de la
+                # lectura. transfer status 5 es LIBUSB_TRANSFER_NO_DEVICE y el
+                # error -5 es LIBUSB_ERROR_NOT_FOUND: los dos dicen "no hay
+                # dispositivo", no "no pude configurarlo".
+                pista = (" El dongle se abrio bien y despues DESAPARECIO del bus"
+                         " USB en medio de la lectura (transfer status 5 ="
+                         " LIBUSB_TRANSFER_NO_DEVICE, Library error -5 ="
+                         " LIBUSB_ERROR_NOT_FOUND). No es la ganancia ni la"
+                         " antena: es alimentacion o conexion. Enchufalo en un"
+                         " puerto USB directo de la maquina, sin hub y sin"
+                         " alargue -a 2 Msps pide unos 300 mA y se calienta- y"
+                         " revisa que el ahorro de energia de USB no lo este"
+                         " suspendiendo.")
+            # Las lineas de "Enabled direct sampling mode, input 2" y "[R82XX]
+            # PLL not locked!" del arranque NO son el problema, aunque asusten y
+            # aparezcan justo antes del error: verificado el 2026-09-03, salen
+            # identicas en las corridas que funcionan (8 MB capturados limpios).
+            # Son un sondeo de init de este build de librtlsdr, y termina en
+            # "Disabled direct sampling mode" seguido de "Tuned to 1090000000
+            # Hz". Queda anotado para que nadie mas las persiga.
+            if quedo_vivo:
+                pista += (f" ADEMAS el rtl_sdr.exe (PID {proceso.pid}) no murio"
+                          f" cuando se lo pidio: hasta que no muera, ningun"
+                          f" intento nuevo va a poder abrir el dongle.")
             raise RuntimeError(
                 f"rtl_sdr no entrego ninguna muestra.{pista}"
                 + (f" Dijo: {error}" if error else ""))

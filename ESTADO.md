@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-08-24, con la medición fallida en la torre de YPF.
+Última actualización: 2026-09-03, con el `rtl_sdr.exe` colgado que dejaba el receptor muerto.
 
 ---
 
@@ -1055,3 +1055,145 @@ declarando el punto como separador decimal.
   implementado. Cuando se haga, debe ser *sugerencia que se confirma*, no cambio
   automático: una posición vieja en caché mediría en silencio desde el lugar
   equivocado, que es el bug que se intenta matar.
+
+---
+
+## Sesión 2026-09-03: un `rtl_sdr.exe` colgado deja el receptor muerto, y el tablero mentía al revés
+
+Arrancó con una captura de `/adsb`: el punto decía **"la grabación está activa
+pero NO entra nada"** y abajo, en rojo, `RuntimeError: rtl_sdr no entregó
+ninguna muestra` con esta cola:
+
+```
+Enabled direct sampling mode, input 2
+[R82XX] PLL not locked!
+Disabled direct sampling mode
+Tuned to 1090000000 Hz.
+Tuner gain set to 49.60 dB.
+Reading samples in async mode...
+cb transfer status: 5, canceling...   (×15)
+Library error -5, exiting...
+```
+
+### Lo que NO era el problema (para que nadie más lo persiga)
+
+**Las líneas de `direct sampling mode` y `PLL not locked!`.** Asustan, dicen
+"not locked" y caen justo antes del error, así que parecen la causa. No lo son:
+aparecen **idénticas en las corridas que funcionan**. Verificado corriendo
+`rtl_sdr.exe` a mano con el dongle libre — mismas seis líneas, y después
+8.000.000 de bytes capturados limpios (`-n 4000000`, 2 bytes por muestra). Es un
+sondeo de init de este build de librtlsdr y termina solo en
+`Disabled direct sampling mode` → `Tuned to 1090000000 Hz`.
+
+**La ganancia.** El log dice `49.60 dB` y el selector de la página dice
+"Automatico", lo que parece un cableado roto. No lo es: ese selector es de
+**fuente** (`ADSB_SOURCE`), no de ganancia. La ganancia sale de
+`GANANCIA_DEFAULT = os.environ.get("ADSB_GAIN") or "49.6"` y nadie tenía
+`ADSB_GAIN` puesta. Son dos cosas distintas con la misma palabra encima.
+
+### El diagnóstico real
+
+`cb transfer status: 5` es `LIBUSB_TRANSFER_NO_DEVICE` y `Library error -5` es
+`LIBUSB_ERROR_NOT_FOUND`. Los dos dicen **no hay dispositivo**, no "no pude
+configurarlo": el dongle se abrió bien —tuner encontrado, frecuencia y ganancia
+puestas— y **desapareció del bus USB en medio de la lectura**.
+
+Eso es una falla pasajera de alimentación o conexión. Lo que la volvió permanente
+fue otra cosa: **el `rtl_sdr.exe` que falló nunca murió.**
+
+| medición | valor |
+|---|---|
+| PID colgado | 16444, hijo vivo del server (17720) |
+| arrancado | 10:07:59, con `-g 49.6` |
+| seguía vivo a las | 10:56 — **49 minutos** |
+| prueba standalone con él vivo | `usb_open error -3` |
+| descriptor del dongle con él vivo | `0:  , , SN:` (vacío) |
+| descriptor con el dongle libre | `Realtek, RTL2838UHIDIR, SN: 00000001` |
+
+**Ese descriptor vacío es el mejor indicador que tenemos de "otro proceso lo
+tiene abierto".** Cuando el dongle está libre, `rtl_sdr` lee fabricante, modelo y
+número de serie; cuando está tomado, los tres vuelven en blanco. Si aparece
+`0:  , , SN:` en un log, no busques el driver: buscá el proceso.
+
+`taskkill /PID 16444 /F` liberó el dongle y el server lo retomó solo en segundos.
+
+### Arreglo 1 — confirmar que el hijo murió (`adsb_iq.py`, `escuchar()`)
+
+El `finally` llamaba a `proceso.terminate()` **y nada más**: ni `wait()`, ni
+verificación. En Windows, `TerminateProcess` sobre un proceso trabado dentro del
+driver USB puede dejarlo en un limbo que conserva los handles del kernel — y
+como el dongle es **exclusivo**, un hijo en ese limbo deja el receptor inservible
+hasta que alguien lo mate a mano. Una falla de USB de un segundo se convertía en
+un receptor roto hasta el próximo reinicio.
+
+Ahora: `terminate()` → `wait(timeout=3)` → `kill()` → `wait(timeout=3)`, y si ni
+así murió lo **dice**, con el PID y el `taskkill` listo para copiar. Suponer que
+el hijo murió era el bug.
+
+También se separó la pista del error en dos casos, que antes se confundían:
+
+- `usb_open error -3` / `Failed to open` → **no se pudo abrir**: casi siempre
+  otro proceso lo tiene. Ese es el caso del descriptor vacío.
+- `transfer status` / `Library error` → **se abrió y después desapareció**: es
+  alimentación o conexión. Puerto USB directo, sin hub ni alargue (a 2 Msps pide
+  unos 300 mA y se calienta), y revisar que el ahorro de energía de USB no lo
+  esté suspendiendo. **No es la ganancia ni la antena**, que es exactamente donde
+  uno va a mirar primero si el mensaje no lo aclara.
+
+### Arreglo 2 — el tablero mentía, pero al revés (`adsb_rtlsdr.py`, `_procesar_hex()`)
+
+`_loop` reintenta y se recupera, pero **nunca borraba `last_error`**. Y como
+`is_receiving` es `poll_count > 0 and last_error is None`, un solo fallo dejaba
+la página diciendo "la grabación está activa pero NO entra nada" **para siempre**,
+con el error en rojo, mientras los datos entraban normalmente.
+
+Medido: con `last_error` pegado de una colisión por el dongle,
+`/api/adsb/status` seguía publicando el `usb_open error -3` mientras
+`positions_evaluated` subía de 2075 a 2095 en 25 segundos (~0,8 posiciones/s).
+
+`escuchar()` ya tenía un comentario diciendo que un tablero que dice grabar
+mientras no recibe nada es peor que uno que se cae. **Al revés es igual de malo**:
+un error rojo permanente que convive con datos que entran enseña a ignorar el
+renglón del error, que es justo el renglón que importa la próxima vez.
+
+Ahora, si llega un hex hasta `_procesar_hex`, la cadena entera —USB, muestras,
+demodulación— está funcionando ahora mismo, así que el error anterior ya no
+describe nada y se limpia ahí. Verificado: con `last_error` puesto a mano,
+dos mensajes lo dejan en `None`, `poll_count` en 2 y `is_receiving` en `True`.
+
+### El intérprete: `.venv` del repo, no el del sistema
+
+Los tests fallan con el `python` del sistema y con el de WindowsApps —los dos
+dicen `ModuleNotFoundError: No module named 'pyModeS'`—. **pyModeS 3.6.0 está en
+`.venv` dentro del repo**, y ahí los cuatro archivos dan `TODO CORRECTO`:
+
+```
+./.venv/Scripts/python.exe test_adsb.py
+```
+
+Perdí un rato creyendo que había roto algo. Los venvs de `%USERPROFILE%\venvs`
+son de MAPA-NEGOCIO y no tienen pyModeS.
+
+### Estado del árbol al cerrar
+
+`adsb_iq.py` quedó con dos hunks, los dos de esta sesión. `adsb_rtlsdr.py` tiene
+tres: uno de esta sesión en `RtlAdsbRecorder`, y dos en
+`decoded_to_observation` que ya estaban sin commitear de la sesión del
+2026-08-25, igual que `adsb.py`, `adsb_events.py`, `adsb_record.py`,
+`adsb_sbs.py`, `adsb_catalogo.py`, `adsb_decode_full.py` y `adsb_raw.py`.
+**No se commiteó nada** para no mezclar trabajo ajeno en curso con estos dos
+arreglos.
+
+### El receptor, ahora
+
+Recibiendo. 282 aeronaves, 2208 registros, 2095 posiciones evaluadas con **3
+rechazadas**. `with_registration` sigue en 0, que es lo esperado con el registro
+tal como está y no un síntoma de esto.
+
+### Pendiente que salió de acá
+
+- **Detectar un `rtl_sdr.exe` ajeno ANTES de arrancar** y decirlo con el PID, en
+  vez de fallar y recién entonces sugerir que lo busque. Los datos para hacerlo
+  ya están: el descriptor vacío basta.
+- **Ver por qué el dongle se cae del bus.** Esta vez pasó una vez; si se repite,
+  es puerto, cable o calor, y conviene anotar cuándo.
