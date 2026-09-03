@@ -70,6 +70,30 @@ UBICACIONES: dict[str, tuple[float, float, float, str]] = {
     "san-isidro": (-34.4708, -58.5128, 10.0, "San Isidro"),
     "ypf": (-34.605378, -58.362517, 160.0, "Torre YPF (Puerto Madero)"),
     "aeroparque": (-34.551378, -58.437306, 3.0, "Aeroparque (1,15 km de la pista)"),
+    # LA UBICACION ACTUAL, desde el 2026-09-03 a la tarde. La antena se corrio
+    # 2235 m respecto de 'aeroparque' y quedo AL COSTADO DE LA PISTA, a mitad de
+    # campo: 266 m del eje, 1178 m del umbral 13 y 990 m del 31 (medido contra
+    # los umbrales reales de OurAirports que trae geografia.py). Es la mejor
+    # posicion que tuvo el proyecto.
+    #
+    # Se agrega como preset NUEVO en vez de corregir 'aeroparque' a proposito:
+    # el historico se grabo desde aquel punto y la base todavia no guarda desde
+    # donde se recibio cada fila (ver "Ideas que quedaron sin hacer"). Pisar el
+    # preset haria que todas las filas viejas se midieran desde aca, que es un
+    # error silencioso de 2,2 km sobre datos que ya no se pueden regrabar.
+    #
+    # Esta DETRAS DE UN DOBLE VIDRIO, o sea adentro. El vidrio atenua en 1090
+    # MHz, pero a esta distancia sobra: medido el 2026-09-03, mediana -25.4 dBFS
+    # y pico -2.7 sobre 1855 mensajes, con el 12.2% contra el techo del receptor.
+    # La atenuacion del vidrio no es el limite; si algun dia lo fuera, se veria
+    # como una mediana mucho mas baja, no como menos aeronaves.
+    #
+    # La altura sigue sin importar para la pregunta de si se ve la pista: con la
+    # antena a 1 m el horizonte al suelo ya son 4.1 km, 15 veces los 266 m al
+    # eje. Los 3.0 m son la misma suposicion de armado portatil que en el preset
+    # anterior y se pisan con ADSB_ANTENNA_M si alguien la mide con cinta.
+    "aeroparque-pista": (-34.56167115035011, -58.416347685490514, 3.0,
+                         "Aeroparque (266 m del eje de pista)"),
 }
 UBICACION_DEFAULT = "san-isidro"
 

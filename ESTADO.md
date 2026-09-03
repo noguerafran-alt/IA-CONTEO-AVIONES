@@ -1859,3 +1859,69 @@ archivos para que nadie lo "arregle" aflojando el filtro.
 `CLAUDE.md` ahora pide correr los test **también** con `ADSB_RECEIVER=aeroparque`.
 Un test que no se corre en la configuración de producción no está cubriendo la
 producción.
+
+---
+
+## Sesión 2026-09-03 (5): la antena se movió al costado de la pista
+
+Coordenada nueva: **−34.56167115035011, −58.416347685490514**, detrás de un doble
+vidrio.
+
+### Dónde quedó, medido contra los umbrales reales
+
+| | |
+|---|---|
+| al **eje de pista** | **266 m** (a mitad de campo, t = 0,55 entre umbrales) |
+| al umbral 13 | 1178 m |
+| al umbral 31 | 990 m |
+| a la referencia de SABE | 261 m |
+| se movió respecto del preset viejo | **2235 m** |
+
+Es la mejor posición que tuvo el proyecto. Para comparar: el preset `aeroparque`
+estaba a 2185 m de la referencia y a 1153 m del umbral 13.
+
+### Preset NUEVO, no corregir el viejo
+
+Se agregó `aeroparque-pista` en vez de cambiarle las coordenadas a `aeroparque`.
+El histórico se grabó desde el punto viejo y **la base todavía no guarda desde
+dónde se recibió cada fila** — sigue en "Ideas que quedaron sin hacer". Pisar el
+preset haría que todas las filas viejas se midieran desde acá: un error silencioso
+de 2,2 km sobre datos que ya no se pueden regrabar.
+
+`configuracion.bat` apunta al nuevo. El viejo queda definido y documentado como
+"desde acá se grabó el histórico hasta el 2026-09-03".
+
+### El doble vidrio no es el limitante
+
+Atenúa en 1090 MHz, pero a esta distancia sobra: medido, **mediana −25,4 dBFS y
+pico −2,7 sobre 1855 mensajes**. Si algún día el vidrio fuera el límite se vería
+como una mediana mucho más baja, no como menos aeronaves.
+
+### La altura sigue sin importar acá
+
+Con la antena a 1 m el horizonte al suelo ya son 4,1 km, **15 veces** los 266 m al
+eje. Los 3,0 m del preset son la misma suposición de armado portátil que antes y
+se pisan con `ADSB_ANTENNA_M` si alguien la mide con cinta. Es el opuesto de San
+Isidro, donde 13,3 km contra 13,0 km de horizonte hacía que 300 metros decidieran
+todo.
+
+### La ganancia: NO bajarla por el cartel
+
+El panel vuelve a decir *"bajá la ganancia, 12,2% contra el techo"*. **Esa
+recomendación ya se probó y estaba al revés**, medido el 2026-09-03 con
+`adsb_iq.py --medir`, que cuenta sólo CRC verificable: 49,6 dio 129 verificados
+contra 34 con ganancia 30 y 67 con AGC. El cartel mira el **pico**, no el conteo
+de verificados, y salió en las cuatro corridas incluso con ganancia 20 — o sea que
+ahí no discrimina nada.
+
+**Pero esa medición se hizo en el punto viejo**, 2235 m más lejos. Acá la señal
+llega unos 13 dB más fuerte, así que el resultado podría cambiar. Lo correcto no
+es bajarla por el cartel ni dejarla por la medición vieja, sino **volver a medir
+en esta ubicación**:
+
+```
+python adsb_iq.py --medir 30
+```
+
+comparando **verificados**, no la mediana ni el pico. Pendiente: necesita el
+dongle libre, y la grabación lo tiene tomado.

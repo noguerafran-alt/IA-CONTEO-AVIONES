@@ -10,7 +10,12 @@ Leerlo primero ahorra repetir errores ya cometidos. El más fácil de cometer es
 confundir **dónde está la antena** con el material de video, que se llama
 Aeroparque por todos lados:
 
-- **Desde el 2026-08-23 la antena está en Aeroparque**, a 1153 m del umbral 13.
+- **Desde el 2026-09-03 (tarde) la antena está al costado de la pista**, a 266 m
+  del eje y a mitad de campo, detrás de un doble vidrio. Preset
+  `aeroparque-pista`.
+- Entre el **2026-08-23 y el 2026-09-03** estuvo a 1153 m del umbral 13, preset
+  `aeroparque`. Ese preset se deja definido porque es desde donde se grabó ese
+  tramo del histórico.
 - **Todo el histórico anterior se grabó desde San Isidro**, a 13,3 km. Esos datos
   siguen medidos desde ahí y no se pueden reinterpretar.
 - **San Isidro sigue siendo el valor por defecto del código.** Un proceso que

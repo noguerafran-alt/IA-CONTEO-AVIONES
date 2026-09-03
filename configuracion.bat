@@ -26,7 +26,11 @@ REM   san-isidro   (por defecto en el codigo) antena a 10 m
 REM   aeroparque   1153 m del umbral 13, antena a 3 m
 REM   ypf          Torre YPF, Puerto Madero, antena a 160 m
 REM   -34.6054,-58.3625   o   SABE
-set ADSB_RECEIVER=aeroparque
+REM Desde el 2026-09-03 a la tarde la antena esta AL COSTADO DE LA PISTA, a
+REM 266 m del eje y a mitad de campo, detras de un doble vidrio. El preset
+REM 'aeroparque' viejo -a 1153 m del umbral 13- se deja definido porque es desde
+REM donde se grabo el historico, pero ya no es donde esta la antena.
+set ADSB_RECEIVER=aeroparque-pista
 
 REM ADSB_ANTENNA_M pisa la altura del preset. Descomentar solo si se midio con
 REM cinta: a esta distancia no cambia la conclusion -con la antena a 1 m el
