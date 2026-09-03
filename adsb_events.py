@@ -1382,7 +1382,11 @@ class LectorIncremental:
         estado = self.cil_estado or aeropuerto.nuevo_resumen()
         inf = aeropuerto.informe_desde_resumen(
             estado["por_pasada"], estado["posiciones"],
-            codigo or self.cilindro["codigo"], identidades)
+            codigo or self.cilindro["codigo"], identidades,
+            # Los inferidos salen del MISMO estado acumulado, asi que esta ruta
+            # y la de siempre no pueden divergir: es el mismo motivo por el que
+            # hay un solo acumular_en_cilindro().
+            aeropuerto.despegues_inferidos(estado))
         self._cache_informe = (clave, inf)
         return inf
 

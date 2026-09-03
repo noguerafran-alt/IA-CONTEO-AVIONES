@@ -529,6 +529,108 @@ with _tmp.TemporaryDirectory(ignore_cleanup_errors=True) as _dir:
     _conn.close()
 print()
 
+print("22. Despegue INFERIDO cruzando dos pasadas, y los falsos positivos")
+# El caso real: un despegue visto a ojo del que no entro ni una posicion al
+# cilindro. Ver aeropuerto.HUECO_INFERENCIA_MAX_S para los numeros medidos.
+import aeropuerto as _apt
+
+_cil = _apt.geometria_cilindro("SABE")
+if _cil is None:
+    print("       (sin SABE en pyModeS, se saltea)")
+else:
+    _LAT, _LON = _cil["lat"], _cil["lon"]
+
+    def _suelo(icao="e0abcd", n=28, t0=T0):
+        """Una carrera de aterrizaje sobre el campo: 90 -> 0 kt en superficie."""
+        return [Observation(timestamp=t0 + i * 10, icao24=icao, altitude_ft=0.0,
+                            latitude=_LAT + 0.001, longitude=_LON + 0.001,
+                            ground_speed_kt=90 - 90 * i / (n - 1))
+                for i in range(n)]
+
+    def _ascenso(icao="e0abcd", t0=T0 + 270 + 117 * 60, puntos=None):
+        """El ascenso, siempre FUERA del cilindro (empieza a 5425 ft y 14,85 km)."""
+        puntos = puntos or [(5425, 14.85), (12000, 35), (21000, 70), (33925, 128)]
+        return [Observation(timestamp=t0 + i * 180, icao24=icao, altitude_ft=float(a),
+                            latitude=_LAT + d / 111.0, longitude=_LON, track_deg=124.0)
+                for i, (a, d) in enumerate(puntos)]
+
+    def _inferidos(obs):
+        inf = _apt.informe(sorted(obs, key=lambda o: o.timestamp), "SABE")
+        return inf.inferidas, inf
+
+    _inf, _informe = _inferidos(_suelo() + _ascenso())
+    revisar("infiere el despegue que no dejó posiciones en el cilindro",
+            len(_inf) == 1, f"dio {len(_inf)}")
+    revisar("no lo mete entre los despegues medidos", _informe.despegues == 0,
+            f"despegues={_informe.despegues}")
+    revisar("el cuadre de categorías sigue dando", _informe.categorias_cuadran,
+            f"{_informe.suma_categorias} vs {_informe.pasadas_en_cilindro}")
+    if _inf:
+        revisar("queda marcado como inferido", _inf[0].get("inferida") is True)
+        revisar("dice la evidencia", bool(_inf[0].get("evidencia")))
+        print(f"       -> {_inf[0]['evidencia']}")
+
+    # --- los que NO tienen que inferirse ---
+    revisar("aterrizó y se quedó: no inventa un despegue",
+            len(_inferidos(_suelo())[0]) == 0)
+
+    _crucero = [Observation(timestamp=T0 + i * 180, icao24="e0bbbb", altitude_ft=35000.0,
+                            latitude=_LAT + (10 + i * 20) / 111.0, longitude=_LON)
+                for i in range(4)]
+    revisar("avión de paso que nunca estuvo en tierra: no infiere",
+            len(_inferidos(_crucero)[0]) == 0)
+
+    revisar("el ascenso empieza demasiado lejos: no infiere",
+            len(_inferidos(_suelo() + _ascenso(
+                puntos=[(5425, 60), (12000, 90), (33925, 150)]))[0]) == 0)
+
+    revisar("el ascenso llega demasiado tarde: no infiere",
+            len(_inferidos(_suelo() + _ascenso(t0=T0 + 270 + 9 * 3600))[0]) == 0)
+
+    revisar("sube pero NO se aleja (da vueltas): no infiere",
+            len(_inferidos(_suelo() + _ascenso(
+                puntos=[(5425, 20), (12000, 18), (21000, 15)]))[0]) == 0)
+
+    revisar("no gana altitud suficiente: no infiere",
+            len(_inferidos(_suelo() + _ascenso(
+                puntos=[(5425, 15), (5800, 30), (6000, 50)]))[0]) == 0)
+
+    revisar("una sola posición suelta no alcanza",
+            len(_inferidos(_suelo() + _ascenso(puntos=[(5425, 14.85)]))[0]) == 0)
+
+    # Volver a tocar tierra borra el ascenso acumulado: si aterrizo de nuevo, lo
+    # que hubiera antes ya no es "el despegue que sigue a este contacto".
+    _t_final = T0 + 270 + 117 * 60 + 4 * 180 + 600
+    revisar("un aterrizaje posterior descarta el ascenso previo",
+            len(_inferidos(_suelo() + _ascenso() + _suelo(t0=_t_final))[0]) == 0)
+
+    # EL FALSO POSITIVO QUE DE VERDAD PASO. Sin este filtro, sobre la base del
+    # 2026-09-03 salian 11 inferidos y los 11 eran duplicados de los 12
+    # despegues medidos: aviones cuyo ascenso SI se vio, apenas afuera de los
+    # 8 km. Un avion que acelera en pista y sigue subiendo DENTRO del cilindro
+    # ya tiene su despegue medido, y no puede aparecer ademas como deducido.
+    _acelera = [Observation(timestamp=T0 + i * 10, icao24="e0cccc", altitude_ft=0.0,
+                            latitude=_LAT + 0.001, longitude=_LON + 0.001,
+                            ground_speed_kt=5 + 85 * i / 19, track_deg=124.0)
+                for i in range(20)]
+    _sube_adentro = [Observation(timestamp=T0 + 200 + i * 20, icao24="e0cccc",
+                                 altitude_ft=float(500 + i * 700),
+                                 latitude=_LAT + (2 + i) / 111.0, longitude=_LON,
+                                 track_deg=124.0) for i in range(5)]
+    _sube_afuera = [Observation(timestamp=T0 + 320 + i * 180, icao24="e0cccc",
+                                altitude_ft=float(5000 + i * 7000),
+                                latitude=_LAT + (12 + i * 25) / 111.0, longitude=_LON,
+                                track_deg=124.0) for i in range(4)]
+    _inf2, _informe2 = _inferidos(_acelera + _sube_adentro + _sube_afuera)
+    revisar("un despegue YA MEDIDO no se deduce además", len(_inf2) == 0,
+            f"dio {len(_inf2)} duplicados")
+    revisar("y el descarte se publica, no se hace en silencio",
+            _informe2.inferidas_descartadas >= 1,
+            f"descartadas={_informe2.inferidas_descartadas}")
+    print(f"       -> {_informe2.despegues} medido, {len(_inf2)} deducido, "
+          f"{_informe2.inferidas_descartadas} deducción descartada por duplicada")
+print()
+
 print("=" * 55)
 print("TODO CORRECTO" if not fallos else f"FALLAS: {fallos}")
 raise SystemExit(1 if fallos else 0)

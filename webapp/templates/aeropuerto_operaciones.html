@@ -25,6 +25,15 @@
 
   .panel { background: #1a1d24; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
 
+  /* Deducidos: borde punteado y no un color de alarma. No hay nada malo con
+     estos datos -- la deducción es sólida-- pero son de OTRA clase de evidencia
+     que los medidos, y eso se tiene que ver antes de leer el primer número. Es
+     el mismo criterio que el punteado de la matrícula inferida. */
+  .panel.inferidas { border: 1px dashed #6b7280; background: #171a20; }
+  .panel.inferidas h2 { color: #c9ced6; }
+  .panel.inferidas .evidencia { color: #9aa0a6; font-size: 0.85rem; white-space: normal;
+                                min-width: 340px; }
+
   /* Glosario de columnas. En dos columnas cuando entra: son 21 entradas y en
      una sola tira queda una lista larguisima que nadie recorre. */
   #panel-glosario summary { cursor: pointer; list-style: none; }
@@ -112,6 +121,10 @@
     <input type="search" id="buscar" placeholder="filtrar por vuelo, matrícula, tipo, operador, pista…">
     <span class="cuenta" id="cuenta"></span>
   </div>
+
+  <!-- Los deducidos, ANTES de la tabla de los medidos y fuera de ella.
+       Ver pintarInferidas() para por qué no van como filas más. -->
+  <div id="inferidas"></div>
 
   <div class="table-wrap">
     <table>
@@ -389,6 +402,41 @@ function pintar() {
   pintarEncabezados();
 }
 
+// Los despegues DEDUCIDOS van en su propio bloque, arriba de la tabla y fuera de
+// ella. No es una decision estetica: la tabla son operaciones MEDIDAS dentro del
+// cilindro, y una fila inferida ahi adentro se leeria como una mas -- se
+// ordenaria junto a las otras, entraria en el filtro, y el que mira no tendria
+// como saber que esa no se vio. Separado, la diferencia de evidencia es lo
+// primero que se nota, y cada uno publica POR QUE se dedujo.
+function pintarInferidas(lista) {
+  const caja = document.getElementById("inferidas");
+  if (!caja) return;
+  if (!lista.length) { caja.innerHTML = ""; return; }
+  caja.innerHTML = `<div class="panel inferidas">
+    <h2>Deducidos, no medidos — ${lista.length}
+      ${lista.length === 1 ? "despegue" : "despegues"}</h2>
+    <p class="nota">De estos vuelos <b>no entró ni una posición al cilindro</b>: se
+      perdieron los primeros minutos del ascenso, que es justo el tramo que lo cruza.
+      Se deducen cruzando dos pasadas — la aeronave estaba en el campo y después
+      estaba subiendo y alejándose — y por eso <b>no se suman</b> a los despegues de
+      arriba. Cada uno dice la evidencia con la que se dedujo.</p>
+    <p class="nota"><b>No llevan pista.</b> El único rumbo que se conoce de estos
+      vuelos es el de la primera posición del ascenso, medida a 8–15 km del campo y
+      miles de pies arriba: ahí el avión ya viró a su ruta, y ese rumbo no dice nada
+      de la cabecera que usó.</p>
+    <div class="table-wrap"><table><thead><tr>
+      <th>ICAO24</th><th>Vuelo</th><th>Matrícula</th><th>Avión</th>
+      <th>Cuándo</th><th>Por qué se deduce</th>
+    </tr></thead><tbody>${lista.map(o => `<tr>
+      <td class="mono">${o.icao24}</td>
+      <td class="ident">${o.callsign || nada}</td>
+      <td class="matri">${o.registration || nada}</td>
+      <td>${o.aircraft_type || nada}</td>
+      <td class="mono">${hora(o.timestamp)}</td>
+      <td class="evidencia">${o.evidencia || nada}</td>
+    </tr>`).join("")}</tbody></table></div></div>`;
+}
+
 function pintarTarjetas(apt, fuera) {
   // Fila verde: lo unico que se puede afirmar que paso en esta pista, que es la
   // pregunta que el proyecto existe para contestar. "Confirmadas" NO va como
@@ -478,6 +526,7 @@ async function cargar() {
   pintarTarjetas(apt, d.excluidas);
 
   OPS = d.operaciones || [];
+  pintarInferidas(d.inferidas || []);
   // Los grupos y el glosario no dependen de los datos, solo de COLUMNAS: se
   // pintan una vez y no en cada reordenamiento como los encabezados.
   pintarGrupos();

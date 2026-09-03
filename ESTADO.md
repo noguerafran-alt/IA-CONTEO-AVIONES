@@ -1717,3 +1717,98 @@ funciona por las dos rutas.
 El grabador se reinició y `/api/adsb/status` ahora publica `error: None` con la
 grabación andando. Antes del arreglo de `last_error` ese campo se quedaba con el
 `usb_open error -3` para siempre. Los dos arreglos del commit b1ff14a están vivos.
+
+
+## Sesión 2026-09-03 (3): el despegue que no dejaba rastro ya se cuenta
+
+Quedaba pendiente de la sesión anterior: **el despegue que Fran vio con los ojos
+no se contaba**, porque no entró ni una posición al cilindro. Hecho.
+
+### Cómo se deduce, y por qué es sólido
+
+Con **una** pasada ese despegue es inclasificable, porque no hay pasada. Cruzando
+**dos** sí: la aeronave estaba demostrablemente en el campo (posiciones de
+superficie, velocidad cayendo a 0) y después estaba demostrablemente subiendo y
+alejándose. Lo único que hay entre esas dos cosas es un despegue.
+
+Es una **categoría de evidencia distinta** y se trata como tal: va marcada como
+inferida —igual que `registration_source`— y se cuenta **aparte**, en
+`Informe.inferidas`, nunca entre los despegues medidos. No entra en
+`operaciones`, así que el cuadre contra `pasadas_en_cilindro` sigue dando.
+
+Cuatro guardas, todas con su constante y su número:
+
+| guarda | valor | por qué |
+|---|---|---|
+| `HUECO_INFERENCIA_MAX_S` | 6 h | con el límite alto se uniría un contacto en tierra de hoy con un ascenso de pasado mañana. Holgado contra los 117 min medidos |
+| `RADIO_INFERENCIA_KM` | 40 km | el ascenso tiene que **empezar** cerca. Si la primera posición aérea ya está a 80 km, no salió de acá |
+| `ASCENSO_INFERIDO_FT` | 2000 ft | separa un despegue del ruido barométrico. Los casos reales ganan 5000–28 500 ft |
+| se aleja | `d1 > d0` | subir dando vueltas sobre el campo no es irse |
+
+Y volver a tocar tierra **borra** el ascenso acumulado: si aterrizó de nuevo, lo
+anterior ya no es "el despegue que sigue a este contacto".
+
+### El falso positivo que de verdad pasó
+
+La primera versión **duplicaba**: sobre la base del 2026-09-03 daba 11 inferidos y
+**los 11 eran los mismos** que 11 de los 12 despegues ya medidos — aviones cuyo
+ascenso sí se vio, apenas afuera de los 8 km. Se detectó cruzando las dos listas
+por ICAO24, no leyendo el código.
+
+El filtro descarta la deducción si el mismo avión tiene un despegue medido en una
+ventana de ±20 min alrededor del contacto en tierra. La ventana es generosa a
+propósito: el instante que publica una operación medida es el punto más bajo de su
+pasada, que no tiene por qué caer cerca del primer punto del ascenso. **Ante la
+duda se descarta la deducción**: perder una es barato, duplicarla no.
+
+Los descartes se publican en `inferidas_descartadas`, no se hacen en silencio: un
+número alto ahí significa que el ascenso casi siempre se ve y la deducción casi
+nunca hace falta, que es información sobre la antena.
+
+Y hubo un bug de orden en el camino: el filtro se había puesto **antes** del bucle
+que llena `inf.operaciones`, así que comparaba contra una lista vacía y no
+suprimía nada. Lo atrapó el test, no la lectura.
+
+### Los números, sobre el histórico completo (31 002 observaciones)
+
+| | |
+|---|---|
+| aterrizajes medidos | 28 |
+| despegues medidos | 40 |
+| **despegues deducidos** | **5** |
+| deducciones descartadas por duplicadas | 22 |
+| cuadre de categorías | da |
+
+Entre los 5 está **`JES3882` / CC-DIF con exactamente 117 minutos, 5425 → 33 925 ft,
+14,8 → 128,3 km**: el caso que quedó documentado como no contado. Ahora se cuenta.
+
+### No llevan pista, a propósito
+
+El único rumbo que se conoce de estos vuelos es el de la primera posición del
+ascenso, medida a 8–15 km del campo y miles de pies arriba: ahí el avión ya viró a
+su ruta y su rumbo no dice nada de la cabecera que usó. Alinearlo igual publicaría
+una pista que no se puede sostener, que es peor que no publicar ninguna.
+
+### En la página
+
+Van en su propio bloque, **antes** de la tabla y fuera de ella, con borde punteado.
+No como filas más: adentro de la tabla se ordenarían junto a las medidas, entrarían
+en el filtro, y el que mira no tendría cómo saber que esa no se vio.
+
+### Verificación
+
+Los cuatro test dan `TODO CORRECTO`. El escenario 22 agrega 15 chequeos: el caso
+real reconstruido, y **nueve falsos positivos que no tienen que inferirse** —
+aterrizó y se quedó, avión de paso, ascenso que empieza lejos, ascenso demasiado
+tarde, sube sin alejarse, no gana altitud, una posición suelta, aterrizaje
+posterior, y el duplicado de un despegue ya medido.
+
+### Pendiente que salió de acá
+
+- **Seis assertions del test suite fallan con `ADSB_RECEIVER=aeroparque`** y pasan
+  sin la variable: son las de distancias mínima/máxima/mediana/p95, escritas con
+  los números de San Isidro fijos. Verificado que **fallan igual en el commit
+  anterior**, así que no las rompió este cambio — pero significa que los test no
+  se están corriendo en la configuración en la que el sistema realmente opera.
+
+---

@@ -103,6 +103,43 @@ REASCENSO_FT = 800.0
 # distinguir.
 HUECO_PASADA_S = float(os.environ.get("ADSB_PASS_GAP_S", 600.0))
 
+# --- Inferir un despegue cruzando DOS pasadas -------------------------------
+#
+# Hay despegues de los que NO ENTRA NI UNA POSICION al cilindro. Medido el
+# 2026-09-03 con un despegue visto a ojo desde el campo: entre la ultima
+# posicion de superficie (14:05:51, detenido a 0 kt sobre el campo) y la primera
+# del ascenso (16:03:05, 5425 ft a 14,85 km) hay 117 minutos sin nada. Se
+# perdieron los primeros dos o tres minutos de la subida, que es justo el tramo
+# que cruza el cilindro. Causa probable: el bootstrap CPR de posiciones aereas
+# necesita 3 pares consistentes y arranca de cero al pasar de superficie a
+# aereo.
+#
+# Con UNA pasada ese despegue es inclasificable, porque no hay pasada. Cruzando
+# DOS si se puede afirmar: la aeronave estaba demostrablemente EN EL CAMPO y
+# despues estaba demostrablemente SUBIENDO Y ALEJANDOSE, y lo unico que hay
+# entre esas dos cosas es un despegue.
+#
+# ES UNA CATEGORIA DE EVIDENCIA DISTINTA y se trata como tal: va marcada como
+# inferida -igual que registration_source- y se cuenta APARTE, nunca entre los
+# despegues medidos. Meterla con los otros seria exactamente lo que este modulo
+# no hace: publicar como observado algo que se dedujo.
+#
+# Hasta cuanto despues del ultimo contacto en tierra se acepta el ascenso. Con
+# el limite muy alto se uniria un contacto en tierra de hoy con un ascenso de
+# pasado manana, cuando en el medio la aeronave pudo volar a otro lado y volver
+# sin que la antena la escuchara. 6 h es holgado contra los 117 min medidos.
+HUECO_INFERENCIA_MAX_S = float(os.environ.get("ADSB_INFER_GAP_S", 6 * 3600.0))
+
+# El ascenso tiene que EMPEZAR cerca del campo. Si la primera posicion aerea ya
+# esta a 80 km, no es evidencia de haber salido de aca. 40 km es mas del doble
+# de los 14,85 km medidos, y sigue muy por dentro del alcance de la antena.
+RADIO_INFERENCIA_KM = float(os.environ.get("ADSB_INFER_RADIUS_KM", 40.0))
+
+# Cuanto tiene que ganar entre la primera y la ultima posicion del ascenso para
+# llamarlo despegue y no ruido barometrico ni un avion de paso. 2000 ft esta muy
+# por encima de cualquier oscilacion y muy por debajo de los 28 500 ft medidos.
+ASCENSO_INFERIDO_FT = float(os.environ.get("ADSB_INFER_CLIMB_FT", 2000.0))
+
 # UNA CARRERA DE PISTA, NO UN RODAJE. Los mensajes de superficie (BDS 0,6) no
 # traen altitud pero SI traen velocidad respecto al suelo, y eso alcanza para
 # saber en que sentido fue la operacion sin depender de ninguna altitud:
@@ -235,6 +272,17 @@ class Informe:
     # Los sobrevuelos son el unico tipo que NO entra a self.operaciones (no se
     # dibujan como operacion), asi que su contador no puede ser _cuantas().
     sobrevuelos: int = 0           # entraron al cilindro sin subir ni bajar
+    # Despegues DEDUCIDOS cruzando dos pasadas, no medidos dentro del cilindro.
+    # Van en su propia lista y NO en `operaciones`: no tienen pasada -- ese es
+    # justo el motivo por el que hay que inferirlos-- asi que sumarlos alla
+    # rompería el cuadre contra pasadas_en_cilindro, que es el control que
+    # detecta que falta una categoría. Ver HUECO_INFERENCIA_MAX_S.
+    inferidas: list = field(default_factory=list)
+    # Deducciones que se descartaron por corresponder a un despegue YA medido.
+    # Se publica en vez de descartarse en silencio: un 0 acá con inferidas en 0
+    # significa "no hubo nada que deducir", y un número alto significa que el
+    # ascenso casi siempre se ve y la deducción casi nunca hace falta.
+    inferidas_descartadas: int = 0
 
     def _cuantas(self, tipo: str) -> int:
         return sum(1 for o in self.operaciones if o.tipo == tipo)
@@ -519,7 +567,10 @@ def geometria_cilindro(codigo: str | None = None) -> dict | None:
 
 def nuevo_resumen() -> dict:
     """El estado que acumula acumular_en_cilindro(). Ver esa funcion."""
-    return {"por_pasada": {}, "ultimo_t": {}, "pasada": {}, "posiciones": 0}
+    # "suelo" y "ascenso" son para inferir despegues que no dejaron ni una
+    # posicion en el cilindro. Ver HUECO_INFERENCIA_MAX_S e inferir_despegues().
+    return {"por_pasada": {}, "ultimo_t": {}, "pasada": {}, "posiciones": 0,
+            "suelo": {}, "ascenso": {}}
 
 
 def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
@@ -543,11 +594,16 @@ def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
 
     if o.altitude_ft is None or o.latitude is None or o.longitude is None:
         return False
-    if o.altitude_ft > cilindro["techo_ft"]:
-        return False
+    # La distancia se calcula ANTES de descartar por techo, y no despues como
+    # antes: lo que queda afuera del cilindro tambien se mira, para poder
+    # inferir un despegue del que no entro ni una posicion. Es una haversine mas
+    # por observacion aerea; el costo es despreciable al lado de decodificar.
     d = receiver.distance_km(o.latitude, o.longitude,
                              (cilindro["lat"], cilindro["lon"]))
-    if d is None or d > cilindro["radio_km"]:
+    if d is None:
+        return False
+    if o.altitude_ft > cilindro["techo_ft"] or d > cilindro["radio_km"]:
+        _anotar_ascenso(estado, o, d)
         return False
 
     estado["posiciones"] += 1
@@ -587,6 +643,12 @@ def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
     # todos. Se cuenta aparte, que es evidencia mas fuerte, no menos.
     if es_altitud_de_superficie(o.altitude_ft):
         r["superficie"] += 1
+        # Ultimo contacto en tierra SOBRE EL CAMPO: es el ancla de la
+        # inferencia. Un ascenso posterior se mide desde aca, y volver a tocar
+        # tierra borra el ascenso acumulado -- si aterrizo de nuevo, lo que
+        # hubiera pasado antes ya no es "el despegue que sigue a este contacto".
+        estado["suelo"][icao24] = o.timestamp
+        estado["ascenso"].pop(icao24, None)
         if o.ground_speed_kt is not None:
             v = float(o.ground_speed_kt)
             if r["sup_vel_primera"] is None:
@@ -613,6 +675,83 @@ def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
     if o.callsign:
         r["callsign"] = o.callsign.strip()
     return True
+
+
+def _anotar_ascenso(estado: dict, o: Observation, d: float) -> None:
+    """Registrar una posicion de AFUERA del cilindro, si sigue a un contacto en
+    tierra sobre el campo.
+
+    Solo se guardan dos puntos por aeronave -el primero y el ultimo- y no la
+    traza: la inferencia necesita saber si gano altitud y se alejo, y eso se
+    contesta con los extremos. Guardar la traza entera reintroduciria el consumo
+    de memoria que resumir_cilindro() existe para evitar (313 B/obs son 143 MB a
+    30 dias).
+    """
+    icao24 = o.icao24
+    suelo = estado["suelo"].get(icao24)
+    if suelo is None or o.timestamp <= suelo:
+        return                      # nunca estuvo en el campo, o esto es previo
+    if o.timestamp - suelo > HUECO_INFERENCIA_MAX_S:
+        return                      # demasiado tarde para atribuirlo a ese suelo
+    if es_altitud_de_superficie(o.altitude_ft):
+        return                      # superficie fuera del cilindro: no es ascenso
+
+    a = estado["ascenso"].get(icao24)
+    if a is None:
+        # El ascenso tiene que EMPEZAR cerca. Si la primera posicion aerea ya
+        # aparece lejos, no es evidencia de haber salido de este campo.
+        if d > RADIO_INFERENCIA_KM:
+            return
+        estado["ascenso"][icao24] = {
+            "t0": o.timestamp, "alt0": o.altitude_ft, "d0": d,
+            "t1": o.timestamp, "alt1": o.altitude_ft, "d1": d,
+            "n": 1, "suelo_t": suelo,
+            "callsign": (o.callsign or "").strip() or None,
+            "track": o.track_deg}
+        return
+    a["t1"], a["alt1"], a["d1"] = o.timestamp, o.altitude_ft, d
+    a["n"] += 1
+    if o.callsign:
+        a["callsign"] = o.callsign.strip()
+    if o.track_deg is not None and a["track"] is None:
+        a["track"] = o.track_deg
+
+
+def despegues_inferidos(estado: dict) -> list[dict]:
+    """Los despegues que se deducen cruzando dos pasadas, con su evidencia.
+
+    Devuelve dicts y no Operacion para que esta funcion no dependa del registro
+    ni de las pistas: quien arma el informe los completa. Cada uno lleva la
+    evidencia en texto, porque un numero inferido sin su razon no se puede
+    auditar despues -- y este es el unico numero del sistema que no se midio.
+    """
+    salida = []
+    for icao24, a in estado["ascenso"].items():
+        gano = a["alt1"] - a["alt0"]
+        if gano < ASCENSO_INFERIDO_FT:
+            continue                      # no subio lo suficiente
+        if a["d1"] <= a["d0"]:
+            continue                      # no se alejo: puede estar dando vueltas
+        if a["n"] < 2:
+            continue                      # un punto suelto no muestra tendencia
+        hueco_min = (a["t0"] - a["suelo_t"]) / 60.0
+        salida.append({
+            "icao24": icao24,
+            "timestamp": a["t0"],
+            # El instante del contacto en tierra que ancla la deduccion. Lo
+            # necesita quien filtra los que YA se midieron: sin esto no se puede
+            # saber si el despegue de la lista es este mismo.
+            "suelo_t": a["suelo_t"],
+            "callsign": a["callsign"],
+            "track_deg": a["track"],
+            "min_distance_km": a["d0"],
+            "min_altitude_ft": a["alt0"],
+            "evidencia": (
+                f"en tierra sobre el campo y {hueco_min:.0f} min despues "
+                f"subiendo de {a['alt0']:.0f} a {a['alt1']:.0f} ft mientras se "
+                f"alejaba de {a['d0']:.1f} a {a['d1']:.1f} km"),
+        })
+    return sorted(salida, key=lambda x: x["timestamp"], reverse=True)
 
 
 def sentido_de_carrera(r: dict) -> str | None:
@@ -651,12 +790,13 @@ def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[d
     estado = nuevo_resumen()
     for o in sorted(observations, key=lambda o: o.timestamp):
         acumular_en_cilindro(estado, o, cilindro)
-    return estado["por_pasada"], estado["posiciones"]
+    return estado["por_pasada"], estado["posiciones"], despegues_inferidos(estado)
 
 
 def informe_desde_resumen(por_icao: dict, posiciones: int,
                           codigo: str | None = None,
-                          identidades: dict | None = None) -> Informe | None:
+                          identidades: dict | None = None,
+                          inferidas: list | None = None) -> Informe | None:
     """La mitad de informe() que CLASIFICA. Ver resumir_cilindro()."""
     import aircraft_db
     import receiver
@@ -712,6 +852,9 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
     # que ninguno de los dos numeros solo dice.
     inf.pasadas_en_cilindro = len(por_icao)
     inf.aeronaves_en_cilindro = len({k[0] for k in por_icao})
+    # Los inferidos se completan con identidad y pista igual que los medidos
+    # -quien los mira necesita saber QUE avion fue- pero quedan en su propia
+    # lista y fuera de todos los conteos de categoria.
     inf.posiciones_en_superficie = sum(r.get("superficie", 0) for r in por_icao.values())
     inf.aeronaves_en_superficie = len({k[0] for k, r in por_icao.items() if r.get("superficie")})
     reales = [r["min_alt"] for r in por_icao.values() if r["min_alt"] is not None]
@@ -785,6 +928,44 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
             posiciones_superficie=r.get("superficie", 0),
         ))
 
+    for d in (inferidas or []):
+        # NO INFERIR LO QUE YA SE MIDIO. La deduccion existe para los despegues
+        # que no dejaron NI UNA posicion en el cilindro; si el mismo avion tiene
+        # un despegue medido alrededor de ese contacto en tierra, es el MISMO
+        # evento y publicarlo dos veces seria peor que no publicarlo.
+        #
+        # No es hipotetico: sin este filtro, sobre la base del 2026-09-03 salian
+        # 11 inferidos y los 11 eran duplicados de los 12 despegues medidos --
+        # aviones cuyo ascenso SI se vio, apenas afuera del radio de 8 km.
+        #
+        # La ventana es generosa (+-20 min) a proposito: el instante que publica
+        # una operacion medida es el punto mas bajo de su pasada, que no tiene
+        # por que caer cerca del primer punto del ascenso. Ante la duda, se
+        # descarta la deduccion: perder una es barato, duplicarla no.
+        margen = 2 * HUECO_PASADA_S
+        ya_medido = any(
+            op.icao24 == d["icao24"] and op.tipo in ("despegue", "frustrada")
+            and d["suelo_t"] - margen <= op.timestamp <= d["timestamp"] + margen
+            for op in inf.operaciones)
+        if ya_medido:
+            inf.inferidas_descartadas += 1
+            continue
+        ident = identidades.get(d["icao24"]) if identidades else None
+        # SIN PISTA a proposito. El unico rumbo que se conoce de estos vuelos es
+        # el de la primera posicion del ascenso, medida a 8-15 km del campo y
+        # miles de pies arriba: ahi el avion ya viro a su ruta y su rumbo no
+        # dice nada de la cabecera que uso. Alinearlo igual publicaria una pista
+        # que no se puede sostener, que es peor que no publicar ninguna.
+        inf.inferidas.append({
+            **d,
+            "tipo": "despegue inferido",
+            "inferida": True,
+            "callsign": (getattr(ident, "callsign", None) or d.get("callsign")),
+            "registration": getattr(ident, "registration", None),
+            "aircraft_type": getattr(ident, "aircraft_type", None),
+            "operator": getattr(ident, "operator", None),
+        })
+
     inf.operaciones.sort(key=lambda o: o.timestamp, reverse=True)
     return inf
 
@@ -800,10 +981,10 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     cilindro = geometria_cilindro(codigo)
     if cilindro is None:
         return None
-    por_icao, posiciones = resumir_cilindro(observations, cilindro)
+    por_icao, posiciones, inferidas = resumir_cilindro(observations, cilindro)
     import identidad
     return informe_desde_resumen(por_icao, posiciones, cilindro["codigo"],
-                                 identidad.resolver(observations))
+                                 identidad.resolver(observations), inferidas)
 
 
 def como_json(inf: Informe | None) -> dict | None:
@@ -839,6 +1020,11 @@ def como_json(inf: Informe | None) -> dict | None:
                                    - inf.posiciones_en_superficie),
         "aeronaves_en_cilindro": inf.aeronaves_en_cilindro,
         "pasadas_en_cilindro": inf.pasadas_en_cilindro,
+        # Aparte de "operaciones" a proposito: son deducidos, no medidos, y
+        # mezclarlos rompería tanto el cuadre como la promesa de no publicar
+        # como observado algo que no se observó.
+        "inferidas": inf.inferidas,
+        "inferidas_descartadas": inf.inferidas_descartadas,
         "advertencia": inf.advertencia,
         "operaciones": [
             {"icao24": o.icao24, "tipo": o.tipo, "timestamp": o.timestamp,
