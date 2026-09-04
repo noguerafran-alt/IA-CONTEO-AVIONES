@@ -90,6 +90,10 @@
                  border-radius: 6px; padding: 7px 13px; font-size: 0.85rem; cursor: pointer; }
   .tabs button.activo { background: #1e3a5f; color: #dbeafe; border-color: #3b82f6; }
   .cuenta { color: #6b7280; font-size: 0.85rem; }
+  button.excel { background: #14532d; color: #d1fae5; border: 1px solid #166534;
+                 border-radius: 6px; padding: 7px 14px; font-size: 0.85rem; cursor: pointer; }
+  button.excel:hover:not(:disabled) { background: #166534; }
+  button.excel:disabled { opacity: 0.5; cursor: default; }
 </style>
 </head>
 <body>
@@ -120,6 +124,7 @@
     </div>
     <input type="search" id="buscar" placeholder="filtrar por vuelo, matrícula, tipo, operador, pista…">
     <span class="cuenta" id="cuenta"></span>
+    <button id="bajar-excel" class="excel">Descargar Excel</button>
   </div>
 
   <!-- Los deducidos, ANTES de la tabla de los medidos y fuera de ella.
@@ -369,7 +374,11 @@ function pintarGlosario() {
   }).join("");
 }
 
-function pintar() {
+// El filtro y el orden viven ACA y no adentro de pintar(), porque los usan dos
+// cosas: la tabla y la descarga a Excel. Duplicarlos haria que el archivo bajado
+// pudiera traer otras filas que las que se estan viendo, que es peor que no
+// tener el boton.
+function filasVisibles() {
   const texto = document.getElementById("buscar").value.trim().toLowerCase();
   let filas = OPS.filter(o => !TIPO || o.tipo === TIPO);
   if (texto) {
@@ -380,7 +389,7 @@ function pintar() {
   const col = COLUMNAS.find(c => c.k === ORDEN) || COLUMNAS[0];
   // Los nulos van SIEMPRE al final, en los dos sentidos del orden: un null que
   // se ordena como 0 pone "sin dato" en el medio de los datos.
-  filas = filas.slice().sort((a, b) => {
+  return filas.slice().sort((a, b) => {
     const va = col.v(a), vb = col.v(b);
     const na = va === null || va === undefined || va === "";
     const nb = vb === null || vb === undefined || vb === "";
@@ -390,6 +399,11 @@ function pintar() {
     const s = typeof va === "string" ? va.localeCompare(vb) : (va - vb);
     return DESC ? -s : s;
   });
+}
+
+function pintar() {
+  const texto = document.getElementById("buscar").value.trim().toLowerCase();
+  const filas = filasVisibles();
 
   document.getElementById("cuenta").textContent =
     `${filas.length} de ${OPS.length} operaciones` + (TIPO || texto ? " (filtrado)" : "");
@@ -569,6 +583,54 @@ async function cargar() {
     altitud máxima, la velocidad máxima y las distancias a la antena casi siempre ocurren
     lejos del aeropuerto. Por eso van en su propio grupo de columnas.`;
 }
+
+// Baja EXACTAMENTE lo que se esta viendo: las mismas columnas (de COLUMNAS, la
+// unica lista), en el mismo orden, y solo las filas que pasaron el filtro y la
+// pestana. Por eso manda las columnas al servidor en vez de que el servidor
+// tenga su propia copia -- una segunda lista se desincroniza, que es lo que ya
+// paso con los colspan escritos a mano.
+//
+// Los valores van del JSON, no del texto de la tabla: en el Excel una altitud
+// tiene que ser el numero 950 y no la cadena "950 ft", o no se puede ordenar.
+document.getElementById("bajar-excel").addEventListener("click", async (e) => {
+  const boton = e.target;
+  const antes = boton.textContent;
+  boton.disabled = true; boton.textContent = "Generando…";
+  try {
+    const r = await fetch("/api/aeropuerto/excel", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        columnas: COLUMNAS.map(c => ({k: c.k, t: c.t, g: c.g, ayuda: c.ayuda})),
+        filas: filasVisibles(),
+        meta: {
+          titulo: document.getElementById("titulo").textContent,
+          receptor: (APT && APT.nombre) ? `${APT.nombre} (${APT.codigo})` : null,
+          filtro: [TIPO ? `solo ${TIPO}s` : "todas",
+                   document.getElementById("buscar").value.trim() || null,
+                   `ordenado por ${ORDEN}`].filter(Boolean).join(", "),
+        },
+      }),
+    });
+    if (!r.ok) throw new Error(`el servidor contesto ${r.status}`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1]
+                 || "operaciones.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    // Se dice que fallo y por que. Un boton que no hace nada se lee como que la
+    // pagina se colgo, y el que mira no tiene forma de saber que paso.
+    boton.textContent = "No se pudo: " + err.message;
+    setTimeout(() => { boton.textContent = antes; }, 4000);
+    return;
+  } finally {
+    boton.disabled = false;
+    if (boton.textContent === "Generando…") boton.textContent = antes;
+  }
+});
 
 document.getElementById("buscar").addEventListener("input", pintar);
 document.getElementById("tabs").addEventListener("click", e => {

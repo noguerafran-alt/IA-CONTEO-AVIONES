@@ -1934,3 +1934,68 @@ python adsb_iq.py --medir 30
 
 comparando **verificados**, no la mediana ni el pico. Pendiente: necesita el
 dongle libre, y la grabación lo tiene tomado.
+
+---
+
+## Sesión 2026-09-04: bajar la tabla de operaciones a Excel
+
+Botón **Descargar Excel** en `/aeropuerto`, al lado del filtro.
+
+### Las columnas las manda el navegador
+
+`COLUMNAS` vive en la plantilla y de ahí ya salen el encabezado, el orden, la
+celda, los grupos y el glosario. El endpoint **no tiene su propia lista**: recibe
+las que el navegador está mostrando. Escribir una segunda copia del lado del
+servidor es la duplicación que este repo ya pagó dos veces —los dos acumuladores
+del cilindro, y los `colspan` 7/7/7 a mano que se desalineaban sin que nada
+fallara—.
+
+Como efecto útil, la descarga **respeta el filtro, la pestaña y el orden
+activos**: lo que se ve es lo que se baja. El filtro y el orden salieron de
+adentro de `pintar()` a `filasVisibles()`, que ahora usan la tabla y la descarga.
+Verificado en el navegador: 27 filas enviadas contra 27 en la tabla.
+
+### Los valores van con su tipo
+
+Se toman del JSON de la API y no del texto de la tabla, así que una altitud es el
+número `225` y no la cadena `"225 ft"`. Verificado leyendo el archivo generado:
+
+| columna | valor | tipo en Excel |
+|---|---|---|
+| Cuándo | 2026-08-23 19:05:35 | `datetime` |
+| Alt. mín acá (ft) | 225 | `int` |
+| Dist. a la pista (km) | 1,71 | `float` |
+| Alineación | sí | `str` |
+
+Eso además **no tiene el problema del CSV** que documenta `CLAUDE.md`:
+`-34.6635` se ve como `-34.663.541.114.936.400` en un Excel en castellano porque
+el punto es separador de miles. Un `.xlsx` guarda el número, no su
+representación.
+
+`confirmada` sale como sí/no y no como 1/0: en Python un `bool` **es** un `int`,
+así que el caso va antes que el numérico o el booleano se cuela como número.
+
+### Qué más lleva el archivo
+
+- La **unidad en el encabezado** (`Alt. mín acá (ft)`), no repetida en cada celda:
+  repetirla convertiría la columna en texto y no se podría ordenar ni sumar.
+- La **ayuda de cada columna como comentario de celda** — el mismo texto que el
+  glosario y el tooltip de la página.
+- **De dónde salen los números**, en la segunda línea: desde qué receptor, con
+  qué filtro, cuántas operaciones y cuándo se bajó. Un Excel se manda por mail y
+  se abre tres semanas después: una distancia no significa nada sin saber desde
+  dónde se midió.
+- Autofiltro y panel congelado.
+
+### Por qué un módulo nuevo y no `adsb_decode_full.exportar_excel()`
+
+Ese vuelca **mensajes crudos** y está atado a ese dataset: arma su hoja de
+diccionario con `adsb_catalogo`, que conoce `nuc_p` pero no sabe nada de `pista`
+ni de `confirmada`. Compartir el escritor obligaría a parametrizarlo hasta que no
+explique nada.
+
+### Pendiente que salió de acá
+
+- **El servidor del puerto 8000 arrancó antes de la mudanza**: su franja dice
+  «Aeroparque (1,15 km de la pista), antena 3 m», que es el preset viejo. Hay que
+  reiniciarlo con `dashboard.bat` para que tome `aeroparque-pista` y los 6 m.

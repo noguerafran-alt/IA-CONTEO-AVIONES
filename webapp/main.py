@@ -1,12 +1,13 @@
 """Local dashboard showing landing/takeoff events from the SQLite DB."""
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -1011,3 +1012,30 @@ if __name__ == "__main__":
     print(f"[receptor] {_receiver.resumen_configuracion(__import__('aeropuerto').objetivo())}"
           f" | PID {os.getpid()} | {sys.executable}", flush=True)
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+
+@app.post("/api/aeropuerto/excel")
+async def api_aeropuerto_excel(request: Request):
+    """Bajar la tabla de /aeropuerto a Excel, con las columnas que se ven.
+
+    LAS COLUMNAS LLEGAN DEL NAVEGADOR y no se definen aca. La lista COLUMNAS
+    vive en la plantilla -- de ahi salen el encabezado, el orden, la celda, los
+    grupos y el glosario -- y escribir una segunda copia del lado del servidor
+    es la duplicacion que este repo ya pago dos veces. Ver excel_operaciones.py.
+
+    Como efecto util, la descarga respeta el filtro, la pestana y el orden
+    activos: lo que se ve es lo que se baja.
+    """
+    import excel_operaciones
+
+    cuerpo = await request.json()
+    columnas = cuerpo.get("columnas") or []
+    filas = cuerpo.get("filas") or []
+    if not columnas:
+        return JSONResponse({"error": "no llegaron columnas"}, status_code=400)
+
+    contenido = excel_operaciones.construir(columnas, filas, cuerpo.get("meta"))
+    nombre = f"operaciones-{datetime.now().strftime('%Y%m%d-%H%M')}.xlsx"
+    return Response(
+        content=contenido,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
