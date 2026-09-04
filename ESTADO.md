@@ -947,8 +947,9 @@ con el mismo gris que "todo bien". Las dos cosas están.
 ## Ideas que quedaron sin hacer
 
 - **Levantar la captura de arribos.** Es hoy el techo del sistema. Medido contra
-  los listados oficiales del 03/09 en la ventana 10:09–16:42: se capturan **30 de
-  61 partidas (49%) y solo 14 de 65 arribos (22%)**. Mientras siga así, la tabla
+  los listados oficiales del 03/09, **descontando los 56 min en que la antena no
+  grabó**: se capturan **30 de ~53 partidas (56–58%) y solo 14 de ~55 arribos
+  (25–26%)**. Mientras siga así, la tabla
   sirve para saber QUÉ vuelo fue cada operación pero **no para contar** ni para
   calcular market share. La asimetría es geométrica —el que despega sube sobre la
   antena y el que llega viene bajo y apantallado— así que se ataca con ubicación
@@ -2107,9 +2108,15 @@ tiempo, un tramo basura le puede ganar a uno bueno por estar más cerca.
 
 ### Lo que este arreglo NO toca
 
-- **La cobertura sigue siendo la que es.** En la ventana 10:09–16:42 del 03/09
-  los PDF listan 126 operaciones y la base tiene 53: **49% de las partidas
-  (30/61) y 22% de los arribos (14/65)**. Los arribos se pierden al doble de
+- **La cobertura sigue siendo la que es.** CUIDADO CON EL DENOMINADOR: la primera
+  versión de este párrafo comparaba contra las 126 operaciones de la ventana
+  10:09–16:42 y daba 49% / 22%, pero **la grabación no fue continua** — hay 56
+  min sin un solo mensaje, uno de 33,7 min (13:34→14:08, que el propio Excel
+  delata: sus operaciones saltan de 13:33 a 14:12). Contando solo lo que pasó
+  mientras la antena grababa: **56–58% de las partidas y 25–26% de los arribos**.
+  Ese número es el TECHO: un hueco sin mensajes no distingue «apagada» de
+  «prendida y sorda», y se le dio el beneficio de la duda al sistema. Los arribos
+  se pierden al doble de
   tasa, que es lo esperable —el que despega sube sobre la antena y el que llega
   viene bajo y apantallado—. El número de vuelo ahora es confiable; **el conteo
   no**, y no hay que usar esta tabla para market share.

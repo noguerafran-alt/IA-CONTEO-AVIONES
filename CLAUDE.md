@@ -87,13 +87,25 @@ pudo resolver el carácter, y está guardado así en la base para tres direccion
 
 ## Esta tabla no sirve para contar
 
-El número de vuelo ya es confiable; **el conteo no**. Medido contra los listados
-oficiales del 03/09, en la ventana 10:09–16:42 que es la única con datos: los
-listados traen 126 operaciones y el sistema 53. **49% de las partidas (30 de 61) y
-22% de los arribos (14 de 65).**
+El número de vuelo ya es confiable; **el conteo no**.
+
+**El denominador hay que armarlo con cuidado, o el número miente para el lado
+fácil.** La grabación no es continua: el 03/09, dentro de la ventana 10:09–16:42,
+hay **56 minutos sin un solo mensaje**, uno de ellos de 33,7 min. Comparar contra
+todas las operaciones de la ventana mete en el denominador tiempo en el que no
+grabamos, y eso ya se hizo mal una vez (daba 49% y 22%).
+
+Contando solo lo que ocurrió **mientras la antena grababa**: **56–58% de las
+partidas y 25–26% de los arribos.** El rango depende de dónde se corte un hueco,
+3 o 5 min; más allá de eso no se mueve.
+
+**Y ese número es el techo, no el valor.** Un hueco sin mensajes no distingue
+«la antena estaba apagada» de «estaba prendida y sorda». Se le da el beneficio de
+la duda al sistema porque es lo que más lo favorece; si en algún hueco estaba
+corriendo, esas operaciones son pérdidas reales y el porcentaje baja.
 
 Antes de publicar un total, un ranking o un market share desde acá, decí de qué
-porcentaje estás hablando. Un market share calculado sobre el 22% de los arribos
+porcentaje estás hablando. Un market share calculado sobre el 26% de los arribos
 no es un market share.
 
 ## Cómo se escribe acá
