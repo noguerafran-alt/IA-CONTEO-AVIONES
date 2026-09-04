@@ -47,6 +47,55 @@ Qué actualizar, según lo que se hizo:
 Va en el mismo commit que el cambio, no en uno aparte: separarlos es como se
 termina con un `ESTADO.md` que describe un sistema que ya no existe.
 
+## El número de vuelo se congela en la operación
+
+**No uses `ident.callsign` para decir qué vuelo fue una pierna.** Ese campo es
+*el último distintivo escuchado de esa dirección* en toda la base, sin noción de
+cuándo. En cuanto el avión vuelve a volar pasa a ser el de la **pierna
+siguiente** y le pisa el número a la operación anterior. Costó 16 de 41
+operaciones mal contra los listados oficiales del 03/09, y 14 de 17 en
+aterrizajes: es el caso peor porque después de aterrizar el avión casi siempre
+despega otra vez.
+
+Lo que vale es `Operacion.callsign`, que sale de `distintivo_en()`: el distintivo
+que la aeronave estaba transmitiendo **en el instante de la operación**, tomado
+de tramos fechados. Una pierna posterior escribe su propio tramo en vez de pisar
+el anterior.
+
+`ident.callsign` **sigue siendo correcto** para lo que no cambia entre piernas:
+matrícula y operador. Ahí la decisión del 2026-08 —resolver la identidad sobre el
+historial completo— sigue en pie.
+
+**El distintivo NO viaja con posición.** Medido: de **1261 mensajes con
+distintivo en la base, 0 tienen latitud**. Viene en mensajes de identificación,
+que no llevan lat/lon. De ahí salen dos reglas que parecen arbitrarias y no lo
+son:
+
+- `_anotar_distintivo()` se llama **antes** del filtro de posición de
+  `acumular_en_cilindro()`.
+- `LectorIncremental._absorber_cilindro()` se llama **antes** del filtro de
+  posición, no al final.
+
+**Si alguien mueve cualquiera de las dos después del filtro, el sistema se rompe
+en silencio** y ningún test lo atrapa: los datos sintéticos traen distintivo y
+posición en la misma observación, mientras que los reales nunca. El síntoma sería
+la página en vivo publicando un número y la descarga otro.
+
+**Un distintivo con `#` se descarta.** Es lo que deja el decodificador cuando no
+pudo resolver el carácter, y está guardado así en la base para tres direcciones.
+`########` llegó a publicarse como número de vuelo en el Excel del 03/09.
+
+## Esta tabla no sirve para contar
+
+El número de vuelo ya es confiable; **el conteo no**. Medido contra los listados
+oficiales del 03/09, en la ventana 10:09–16:42 que es la única con datos: los
+listados traen 126 operaciones y el sistema 53. **49% de las partidas (30 de 61) y
+22% de los arribos (14 de 65).**
+
+Antes de publicar un total, un ranking o un market share desde acá, decí de qué
+porcentaje estás hablando. Un market share calculado sobre el 22% de los arribos
+no es un market share.
+
 ## Cómo se escribe acá
 
 **Comentarios y docstrings en español sin tildes** (en la interfaz sí van, es
@@ -78,6 +127,25 @@ defecto: un test que no se corre en la configuración de producción no está
 cubriendo la producción. Las distancias esperadas ahora se **calculan** con el
 mismo `distance_km` que usa el código, así que lo que se afirma es la relación y
 no un número.
+
+**Hay una verdad externa, y es la única: los listados de Aeropuertos Argentina.**
+`aeropuertosargentina.com/es/vuelos?movtp=arribos|partidas&idarpt=Aeroparque,AEP&fecha=DD-MM-AAAA`
+publica hora real de aterrizaje y despegue por vuelo. Es lo que destapó el bug
+del distintivo, y ninguna comprobación interna lo habría encontrado: el sistema
+era **consistente consigo mismo** y estaba equivocado.
+
+Dos cosas al usarlo. El texto de las filas viene **rasterizado**, así que hay que
+transcribirlo (se renderiza la página con `pypdfium2` y se lee). Y el cruce se
+hace **por hora, no por número de vuelo**: emparejar por número da por buena
+justamente la columna que se quiere auditar. Con ±3 min alcanza — el desvío real
+medido es de 0,5 min en promedio y 2 min como máximo.
+
+**Cuando toques el acumulador, comprobá que las dos rutas no divergen.** La de
+siempre (`aeropuerto.informe()`) y la incremental (`LectorIncremental`) tienen
+que dar las mismas operaciones con el mismo distintivo y la misma procedencia,
+tanto de una carga como avanzando por lotes. Sobre la base real son 141
+operaciones idénticas. Es la comprobación que atrapó que `_absorber_cilindro()`
+se llamaba tarde.
 
 Para lo de ADS-B, verificar con **replay de mensajes hex** y no esperando que
 pase un avión. Hay vectores conocidos: el par CPR clásico

@@ -423,9 +423,10 @@ recién asignados. Se ve el **vuelo** (ARG1403) casi siempre; el **avión físic
 
 ## El glosario de columnas sale de la misma lista que las columnas
 
-`/aeropuerto` tiene 21 columnas en tres grupos, y varias no se entienden solas:
+`/aeropuerto` tiene 22 columnas en tres grupos, y varias no se entienden solas:
 una altitud **negativa** en la pista, una matrícula que no se transmite, una
-alineación «sin confirmar» que no significa que la operación no ocurrió.
+alineación «sin confirmar» que no significa que la operación no ocurrió, un
+número de vuelo que puede venir de otro momento del día.
 
 La explicación de cada una vive en el campo `ayuda` de `COLUMNAS`, junto al
 título y a la celda. De ahí salen **las tres cosas**: el `title` del encabezado
@@ -944,6 +945,14 @@ con el mismo gris que "todo bien". Las dos cosas están.
 ---
 
 ## Ideas que quedaron sin hacer
+
+- **Levantar la captura de arribos.** Es hoy el techo del sistema. Medido contra
+  los listados oficiales del 03/09 en la ventana 10:09–16:42: se capturan **30 de
+  61 partidas (49%) y solo 14 de 65 arribos (22%)**. Mientras siga así, la tabla
+  sirve para saber QUÉ vuelo fue cada operación pero **no para contar** ni para
+  calcular market share. La asimetría es geométrica —el que despega sube sobre la
+  antena y el que llega viene bajo y apantallado— así que se ataca con ubicación
+  y ganancia, no con código. Ver la sesión 2026-09-04 (2).
 
 - **Guardar en cada fila desde dónde se recibió.** Hoy la base no lo guarda, así
   que las distancias de todo el histórico se recalculan desde el receptor
