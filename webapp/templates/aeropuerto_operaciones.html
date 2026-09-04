@@ -223,8 +223,19 @@ const COLUMNAS = [
    ayuda: "La dirección única del transpondedor, en hexadecimal. Es lo <b>único que el avión transmite siempre</b>: todo lo demás de este grupo se deduce a partir de ella.",
    td: o => `<td class="mono">${o.icao24}</td>`},
   {k: "callsign",  t: "Vuelo",      g: "aeronave", v: o => o.callsign || "",
-   ayuda: "El distintivo que carga la tripulación. Es <b>el vuelo, no el avión</b>: mañana ese mismo número lo puede hacer otra aeronave.",
-   td: o => `<td class="ident">${o.callsign || nada}</td>`},
+   ayuda: "El distintivo que carga la tripulación. Es <b>el vuelo, no el avión</b>: mañana ese mismo número lo puede hacer otra aeronave. Se congela con <b>el que se escuchó en el instante de la operación</b>, porque el mismo avión cambia de distintivo apenas sale a la pierna siguiente. Si aparece con <b>?</b> y subrayado de puntos, durante la operación no se escuchó ninguno y éste viene de otro momento: la columna de al lado dice de cuál.",
+   td: o => `<td class="ident">${o.callsign
+        ? (o.callsign_source && !o.callsign_source.startsWith("transmitido")
+           ? `<span class="inferido" title="${o.callsign_source}. Durante la operación no se escuchó ningún distintivo, así que éste puede ser el de otra pierna del mismo avión.">${o.callsign} ?</span>`
+           : o.callsign)
+        : nada}</td>`},
+  // Columna propia y no solo el tooltip de la celda: "¿le puedo creer a este
+  // número de vuelo?" es justo la pregunta que hay que poder FILTRAR y ORDENAR
+  // cuando la tabla se baja a Excel, y un title= no viaja al .xlsx.
+  {k: "callsign_source", t: "Vuelo: de dónde sale", g: "aeronave",
+   v: o => o.callsign_source || "",
+   ayuda: "Cuándo se escuchó el distintivo que muestra <b>Vuelo</b>. <b>«transmitido en la operación»</b> es un dato observado y fechado: el avión lo estaba emitiendo mientras aterrizaba o despegaba. <b>«el más cercano, a N min»</b> es lo más próximo que hubo, y cuanto más grande el N menos vale: a 2 min es el mismo vuelo, a 90 min es probablemente otra pierna. <b>«el último escuchado de esta dirección»</b> es el peor caso: no se pudo fechar ninguno.",
+   td: o => `<td class="muted">${o.callsign_source || nada}</td>`},
   {k: "registration", t: "Matrícula", g: "aeronave", v: o => o.registration || "",
    ayuda: "La matrícula del avión. <b>No viaja por radio</b>: sale de buscar el ICAO24 en el registro local. Si aparece con <b>?</b> y subrayada de puntos, se dedujo del distintivo y no está confirmada por el registro.",
    td: o => `<td class="matri">${o.registration

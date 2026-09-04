@@ -1999,3 +1999,123 @@ explique nada.
 - **El servidor del puerto 8000 arrancó antes de la mudanza**: su franja dice
   «Aeroparque (1,15 km de la pista), antena 3 m», que es el preset viejo. Hay que
   reiniciarlo con `dashboard.bat` para que tome `aeroparque-pista` y los 6 m.
+
+## Sesión 2026-09-04 (2): el número de vuelo era el de la pierna siguiente
+
+**El Excel del 03/09 publicaba el vuelo equivocado en 16 de 41 operaciones
+verificables, y en los aterrizajes en 14 de 17.** Lo destapó cruzar
+`operaciones-20260904-0924.xlsx` contra los listados de arribos y partidas de
+Aeropuertos Argentina para AEP del 03-09-2026.
+
+### Qué pasaba
+
+`aeropuerto.py` publicaba `ident.callsign`, que `identidad.resolver()` define
+como **el último distintivo escuchado de esa dirección** en toda la base. Cuando
+el avión vuelve a volar, ese "último" es el de la **pierna siguiente**, y pisa al
+de la operación que ya había ocurrido.
+
+Por eso los aterrizajes eran los peores: después de aterrizar, el avión casi
+siempre despega otra vez y le sobrescribe el número.
+
+| dirección | operación | publicaba | era |
+|---|---|---|---|
+| `e08594` | despegue 10:24 | `JES3638` (voló a las 15:00) | `JES3102` |
+| `e0b14a` | aterrizaje 10:52 | `ARG1360` (despegó 13:14) | `ARG1823` |
+| `e082d5` | despegue 10:50 | `ARG1675` (volvió 15:56) | `ARG1674` |
+| `e8061d` | despegue 12:08 | `JES3021` (volvió 16:52) | `JES3020` |
+| `e0648b` | aterrizaje 14:50 | `ARG1786` (despegó 16:38) | `ARG1895` |
+
+El síntoma que lo delata **dentro** del propio Excel: la distancia entre
+`Última vez` y `Cuándo`. Las 22 filas con distancia ≤ 30 min estaban todas bien;
+las 8 con distancia > 30 min estaban 7 mal. Ese era el hueco durante el cual la
+dirección volvió a hablar con otro distintivo.
+
+### Por qué no alcanzaba con mirar el cilindro
+
+La idea obvia —preferir `r["callsign"]`, lo escuchado dentro del cilindro— **no
+sirve**: los mensajes de identificación **no traen posición**. Medido sobre la
+base: de **1261 mensajes con distintivo, 0 tienen latitud**. Nunca pasan el
+filtro de `acumular_en_cilindro()`, así que `r["callsign"]` estaba vacío en las
+**80 de 80** operaciones. La rama de respaldo era en realidad la única rama viva.
+
+### Cómo quedó
+
+Los distintivos ahora se **fechan**. `_anotar_distintivo()` corre **antes** del
+filtro de posición y guarda, por dirección, tramos `(t0, t1, distintivo)`
+fusionando repeticiones. `distintivo_en(distintivos, icao24, t)` devuelve el que
+la aeronave transmitía **en el instante de la operación**, y una pierna posterior
+escribe su propio tramo en vez de pisar el anterior: el dato queda congelado.
+
+Es barato: **7 tramos por dirección como máximo** en 13 días de base, así que no
+compromete el O(1) por pasada de `resumir_cilindro()`.
+
+**Medido contra los PDF oficiales: 41 de 41 correctas, contra 25 de 41 antes.**
+
+Procedencia sobre las 80 operaciones de la base:
+
+| de dónde sale el distintivo | operaciones |
+|---|---|
+| transmitido en la operación | 57 |
+| el más cercano, a ≤ 20 min | 20 |
+| el más cercano, a 61 / 94 / 102 min | 3 |
+| el último escuchado de esa dirección | 0 |
+
+Ninguna quedó sin distintivo, así que **no se pierde lo que ganó la decisión del
+2026-08** («la identidad se resuelve sobre el historial completo»): esa sigue
+valiendo para matrícula y operador, y el historial sigue de último recurso para
+el distintivo. Lo que cambió es que ya no le gana a un dato observado y fechado.
+
+### No se descarta por umbral: se publica la distancia
+
+No hay corte de "más de N minutos no vale". `Operacion.callsign_source` dice
+`transmitido en la operación` o `el más cercano, a N min`, y decide quien lee. Va
+como **columna propia** (`Vuelo: de dónde sale`) y no solo como tooltip, porque
+la pregunta "¿le creo a este número?" es la que hay que poder **filtrar y
+ordenar** cuando la tabla se baja a Excel, y un `title=` no viaja al `.xlsx`.
+
+### La trampa: el acumulador se llamaba tarde en la ruta incremental
+
+`LectorIncremental._absorber_cilindro()` se llamaba **al final**, después del
+filtro `o.latitude is None`. Como el distintivo viaja justamente en mensajes sin
+posición, esta ruta **nunca los habría visto**: la página en vivo y el mapa
+habrían seguido publicando el distintivo viejo mientras la ruta de siempre
+publicaba el de la operación. Es la divergencia entre las dos rutas que
+`_absorber_cilindro()` existe para evitar, y no la habría detectado ningún test:
+los datos sintéticos traen distintivo y posición en la misma observación.
+
+Ahora se llama **antes** del filtro de posición (`acumular_en_cilindro()` ya
+descarta por su cuenta lo que no la tiene). Verificado sobre la base real: las
+dos rutas dan **141 operaciones idénticas**, distintivo y procedencia incluidos,
+tanto de una sola carga como avanzando por lotes.
+
+### De yapa: `########` dejó de publicarse como número de vuelo
+
+`e0645a` salía con `########` en la columna Vuelo. No era el ancho de columna:
+es lo que deja el decodificador cuando **no pudo resolver el carácter**, y estaba
+guardado así en la base (también en `e06459` y `e07582`). `_anotar_distintivo()`
+descarta todo distintivo que contenga `#`. No es cosmético: con la elección por
+tiempo, un tramo basura le puede ganar a uno bueno por estar más cerca.
+
+### Lo que este arreglo NO toca
+
+- **La cobertura sigue siendo la que es.** En la ventana 10:09–16:42 del 03/09
+  los PDF listan 126 operaciones y la base tiene 53: **49% de las partidas
+  (30/61) y 22% de los arribos (14/65)**. Los arribos se pierden al doble de
+  tasa, que es lo esperable —el que despega sube sobre la antena y el que llega
+  viene bajo y apantallado—. El número de vuelo ahora es confiable; **el conteo
+  no**, y no hay que usar esta tabla para market share.
+- **El operador y la matrícula** siguen saliendo de `identidad.resolver()` sobre
+  el historial. Es correcto: las dos piernas del mismo avión son de la misma
+  aerolínea, así que el prefijo no cambia.
+
+### Ideas que quedaron sin hacer, de acá
+
+- **`ARG1043` en `e082d6` (despegue 11:27)** está *transmitido en la operación*,
+  o sea que el avión lo emitió, pero **no figura ningún AR1496 ni AR1043 en el
+  PDF de partidas** — y sí figura su vuelta AR1497 llegando de Salta. Puede ser
+  un hueco del listado oficial. Sin resolver.
+- El PDF de partidas trae **8 filas con el estado tapado** por el globo del chat
+  «ADA» (`AR1494`, `AR1590`, `WJ3181`, `AR1896`, `JJ8033`, `AR1512`, `AR1646`,
+  `AR1518`): el overlay es opaco y esas horas no se pueden verificar contra nada.
+- Las **altitudes negativas** (hasta −350 ft) siguen ahí en las filas del 23/08.
+  Es el problema de QNH ya documentado más arriba, no algo nuevo.

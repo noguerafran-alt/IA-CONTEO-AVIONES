@@ -1200,6 +1200,18 @@ class LectorIncremental:
             avion.track_deg = o.track_deg
 
         motivo = self.gate.feed(o)
+        # EL ACUMULADOR VE TAMBIEN LAS OBSERVACIONES SIN POSICION, y por eso se
+        # llama ACA y no al final. El distintivo viaja en mensajes de
+        # identificacion que no traen posicion -- medido: de 1261 mensajes con
+        # distintivo, 0 tienen latitud -- asi que llamandolo despues del filtro
+        # de abajo esta ruta nunca los veria: la pagina en vivo publicaria el
+        # distintivo viejo (el de la pierna siguiente) mientras la ruta de
+        # siempre publica el de la operacion. Es exactamente la divergencia
+        # entre las dos rutas que _absorber_cilindro existe para evitar.
+        # acumular_en_cilindro() descarta por su cuenta lo que no tiene
+        # posicion, asi que esto no mete nada de mas en el cilindro.
+        if motivo is None:
+            self._absorber_cilindro(o)
         if motivo is not None or o.latitude is None or o.longitude is None:
             return False
 
@@ -1213,7 +1225,6 @@ class LectorIncremental:
             avion.callsign = o.callsign.strip()
         if o.registration:
             avion.registration = o.registration
-        self._absorber_cilindro(o)
         return True
 
     def _absorber_cilindro(self, o: Observation) -> None:
@@ -1386,7 +1397,11 @@ class LectorIncremental:
             # Los inferidos salen del MISMO estado acumulado, asi que esta ruta
             # y la de siempre no pueden divergir: es el mismo motivo por el que
             # hay un solo acumular_en_cilindro().
-            aeropuerto.despegues_inferidos(estado))
+            aeropuerto.despegues_inferidos(estado),
+            # Los tramos de distintivo tambien: los anota el mismo acumulador, y
+            # sin pasarlos esta ruta publicaria el distintivo viejo -- el de la
+            # pierna siguiente -- mientras la otra publica el de la operacion.
+            estado["distintivos"])
         self._cache_informe = (clave, inf)
         return inf
 

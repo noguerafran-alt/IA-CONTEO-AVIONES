@@ -184,6 +184,11 @@ class Operacion:
     tipo: str
     timestamp: float               # el instante mas bajo dentro del cilindro
     callsign: str | None = None
+    # De donde sale el distintivo que se publica. Mismo criterio que
+    # registration_source: "ARG1674 (transmitido en la operacion)" y "ARG1674
+    # (lo mas cercano, a 94 min)" son afirmaciones de fuerza muy distinta. Ver
+    # distintivo_en() para por que un distintivo puede no ser el de esta pierna.
+    callsign_source: str | None = None
     registration: str | None = None
     aircraft_type: str | None = None
     # De donde salio cada dato de identidad. No es adorno: "LV-KEJ (registro)" y
@@ -570,7 +575,68 @@ def nuevo_resumen() -> dict:
     # "suelo" y "ascenso" son para inferir despegues que no dejaron ni una
     # posicion en el cilindro. Ver HUECO_INFERENCIA_MAX_S e inferir_despegues().
     return {"por_pasada": {}, "ultimo_t": {}, "pasada": {}, "posiciones": 0,
-            "suelo": {}, "ascenso": {}}
+            "suelo": {}, "ascenso": {}, "distintivos": {}}
+
+
+def _anotar_distintivo(estado: dict, o: Observation) -> None:
+    """Guardar QUE distintivo transmitia cada direccion y DESDE CUANDO HASTA CUANDO.
+
+    EL BUG QUE ARREGLA. Hasta el 2026-09-04 la operacion publicaba "el ultimo
+    distintivo escuchado de esa direccion", que es el de la pierna SIGUIENTE en
+    cuanto el avion vuelve a volar. Medido sobre la base del 03/09 contra los
+    listados de Aeropuertos Argentina: de 41 operaciones verificables, 16 salian
+    con el numero de otro vuelo. Los aterrizajes eran los peores -- 14 de 17 --
+    porque despues de aterrizar el avion casi siempre despega otra vez.
+    Ejemplo: e08594 despego a las 10:24 y se publicaba JES3638, que es el vuelo
+    que hizo a las 15:00; a las 10:24 estaba transmitiendo JES3102.
+
+    POR QUE NO ALCANZA CON MIRAR EL CILINDRO. Los mensajes de identificacion no
+    traen posicion -- medido: de 1261 mensajes con distintivo en la base, 0
+    tienen latitud -- asi que nunca pasan el filtro de acumular_en_cilindro() y
+    el distintivo "de la pasada" salia vacio en las 80 operaciones. Lo que si se
+    puede es fecharlos, y eso es lo que se guarda aca.
+
+    POR TRAMOS y no una lista de muestras: se fusionan las repeticiones
+    consecutivas del mismo distintivo. Medido sobre 13 dias de base, el maximo
+    son 7 tramos por direccion, asi que no compromete el O(1) por pasada que
+    resumir_cilindro() existe para sostener (ver 313 B/obs alli).
+    """
+    cs = (o.callsign or "").strip()
+    # '#' es lo que deja el decodificador cuando no pudo resolver el caracter.
+    # No es un filtro cosmetico: '########' se publico como numero de vuelo en
+    # el Excel del 03/09 (direccion e0645a), y con la eleccion por tiempo un
+    # tramo basura puede ganarle a uno bueno por estar mas cerca.
+    if not cs or "#" in cs:
+        return
+    tramos = estado["distintivos"].setdefault(o.icao24, [])
+    if tramos and tramos[-1][2] == cs:
+        tramos[-1][1] = max(tramos[-1][1], o.timestamp)
+    else:
+        tramos.append([o.timestamp, o.timestamp, cs])
+
+
+def distintivo_en(distintivos: dict | None, icao24: str,
+                  t: float) -> tuple[str | None, str | None]:
+    """(distintivo, de donde salio) para la direccion `icao24` en el instante `t`.
+
+    Si `t` cae DENTRO de un tramo, ese es el distintivo que la aeronave estaba
+    transmitiendo: es un dato observado y fechado, no una atribucion.
+
+    Si no cae en ninguno se devuelve el tramo mas cercano CON SU DISTANCIA EN
+    MINUTOS, que es lo que permite no creerle. Un tramo a 2 min es el mismo
+    vuelo; uno a 94 min es probablemente otra pierna. No se descarta por un
+    umbral inventado: se publica la distancia y decide quien lee, que es el
+    criterio de "nada se descarta en silencio" de CLAUDE.md.
+    """
+    tramos = (distintivos or {}).get(icao24) or []
+    if not tramos:
+        return None, None
+    for t0, t1, cs in tramos:
+        if t0 <= t <= t1:
+            return cs, "transmitido en la operación"
+    t0, t1, cs = min(tramos, key=lambda s: min(abs(s[0] - t), abs(s[1] - t)))
+    minutos = min(abs(t0 - t), abs(t1 - t)) / 60.0
+    return cs, f"el más cercano, a {minutos:.0f} min"
 
 
 def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
@@ -591,6 +657,11 @@ def acumular_en_cilindro(estado: dict, o: Observation, cilindro: dict) -> bool:
     importa mas, porque una fila fuera de orden puede abrir una pasada de mas.
     """
     import receiver
+
+    # ANTES del filtro de posicion, a proposito: el distintivo viaja en mensajes
+    # de identificacion que NO traen posicion, asi que si se anotara despues no
+    # se anotaria nunca. Ver _anotar_distintivo().
+    _anotar_distintivo(estado, o)
 
     if o.altitude_ft is None or o.latitude is None or o.longitude is None:
         return False
@@ -773,7 +844,8 @@ def sentido_de_carrera(r: dict) -> str | None:
     return None
 
 
-def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[dict, int]:
+def resumir_cilindro(observations: list[Observation],
+                     cilindro: dict) -> tuple[dict, int, list, dict]:
     """El estado O(1) por PASADA que la clasificacion necesita.
 
     Es la mitad de informe() que ACUMULA, separada de la que CLASIFICA. Las dos
@@ -790,13 +862,15 @@ def resumir_cilindro(observations: list[Observation], cilindro: dict) -> tuple[d
     estado = nuevo_resumen()
     for o in sorted(observations, key=lambda o: o.timestamp):
         acumular_en_cilindro(estado, o, cilindro)
-    return estado["por_pasada"], estado["posiciones"], despegues_inferidos(estado)
+    return (estado["por_pasada"], estado["posiciones"],
+            despegues_inferidos(estado), estado["distintivos"])
 
 
 def informe_desde_resumen(por_icao: dict, posiciones: int,
                           codigo: str | None = None,
                           identidades: dict | None = None,
-                          inferidas: list | None = None) -> Informe | None:
+                          inferidas: list | None = None,
+                          distintivos: dict | None = None) -> Informe | None:
     """La mitad de informe() que CLASIFICA. Ver resumir_cilindro()."""
     import aircraft_db
     import receiver
@@ -906,12 +980,23 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
         # transmite, lo resuelve. Medido: 133 operadores por distintivo contra 17
         # por registro.
         ident = identidades.get(icao24)
+        # EL DISTINTIVO SE CONGELA EN EL INSTANTE DE LA OPERACION. Es lo que la
+        # aeronave estaba transmitiendo cuando aterrizo o despego, fechado, y no
+        # se puede pisar despues: una pierna posterior escribe su propio tramo,
+        # no encima de este. Ver _anotar_distintivo() para el bug que arregla y
+        # los numeros que lo miden.
+        cs_operacion, cs_fuente = distintivo_en(distintivos, icao24, r["min_t"])
+        # El historial completo queda de ULTIMO recurso, no de primero: sigue
+        # cubriendo a la aeronave de la que no se fecho ningun distintivo -- que
+        # es el caso que resolvia la decision del 2026-08 -- pero ya no le gana
+        # a un dato observado en la operacion. Y va marcado como lo que es.
+        respaldo = (ident.callsign if ident else None) or r["callsign"]
         inf.operaciones.append(Operacion(
             icao24=icao24, tipo=tipo, timestamp=r["min_t"],
-            # El distintivo del historial completo, con el del cilindro como
-            # respaldo: r["callsign"] solo tiene lo que llego DENTRO del
-            # cilindro, y el distintivo viaja en el 3% de los mensajes.
-            callsign=((ident.callsign if ident else None) or r["callsign"]),
+            callsign=(cs_operacion or respaldo),
+            callsign_source=(cs_fuente if cs_operacion else
+                             ("el último escuchado de esta dirección"
+                              if respaldo else None)),
             registration=(ident.registration if ident else None),
             registration_source=(ident.registration_source if ident else None),
             aircraft_type=(ident.aircraft_type if ident else None),
@@ -956,11 +1041,16 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
         # miles de pies arriba: ahi el avion ya viro a su ruta y su rumbo no
         # dice nada de la cabecera que uso. Alinearlo igual publicaria una pista
         # que no se puede sostener, que es peor que no publicar ninguna.
+        # Mismo criterio que en las medidas: el distintivo fechado en el instante
+        # del despegue, y el historial solo si no hay ninguno.
+        cs_inf, cs_inf_fuente = distintivo_en(distintivos, d["icao24"], d["timestamp"])
         inf.inferidas.append({
             **d,
             "tipo": "despegue inferido",
             "inferida": True,
-            "callsign": (getattr(ident, "callsign", None) or d.get("callsign")),
+            "callsign": (cs_inf or getattr(ident, "callsign", None) or d.get("callsign")),
+            "callsign_source": (cs_inf_fuente if cs_inf
+                                else "el último escuchado de esta dirección"),
             "registration": getattr(ident, "registration", None),
             "aircraft_type": getattr(ident, "aircraft_type", None),
             "operator": getattr(ident, "operator", None),
@@ -981,10 +1071,11 @@ def informe(observations: list[Observation], codigo: str | None = None) -> Infor
     cilindro = geometria_cilindro(codigo)
     if cilindro is None:
         return None
-    por_icao, posiciones, inferidas = resumir_cilindro(observations, cilindro)
+    por_icao, posiciones, inferidas, distintivos = resumir_cilindro(observations, cilindro)
     import identidad
     return informe_desde_resumen(por_icao, posiciones, cilindro["codigo"],
-                                 identidad.resolver(observations), inferidas)
+                                 identidad.resolver(observations), inferidas,
+                                 distintivos)
 
 
 def como_json(inf: Informe | None) -> dict | None:
@@ -1028,7 +1119,8 @@ def como_json(inf: Informe | None) -> dict | None:
         "advertencia": inf.advertencia,
         "operaciones": [
             {"icao24": o.icao24, "tipo": o.tipo, "timestamp": o.timestamp,
-             "callsign": o.callsign, "registration": o.registration,
+             "callsign": o.callsign, "callsign_source": o.callsign_source,
+             "registration": o.registration,
              "aircraft_type": o.aircraft_type,
              "registration_source": o.registration_source,
              "operator": o.operator, "operator_source": o.operator_source,
