@@ -30,10 +30,13 @@ import csv
 import os
 import signal
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import adsb_uptime
+import receiver
 from adsb import Observation
 from adsb_events import PositionGate, imprimir_rechazos
 
@@ -173,7 +176,7 @@ class Recorder:
     """
 
     def __init__(self, min_interval_s: float = 5.0, csv_dir: Path = CSV_DIR,
-                 db_path: Path = DB_PATH):
+                 db_path: Path = DB_PATH, fuente: str = ""):
         self.min_interval_s = min_interval_s
         self.csv_dir = csv_dir
         self.csv_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +210,19 @@ class Recorder:
         self.conn.executescript(SCHEMA)
         self.conn.commit()
         self.schema_migrated = migrar_esquema(self.conn, db_path)
+
+        # El registro de uptime. Se abre ACA -- al construir el Recorder, no al
+        # recibir la primera observacion -- porque el arranque es un hecho
+        # independiente de que entre o no un avion: una sesion que arranca y no
+        # escucha nada es exactamente el caso que hay que poder distinguir de
+        # una que nunca arranco. Ver adsb_uptime.py.
+        adsb_uptime.crear_esquema(self.conn)
+        self.latido_cada_s = adsb_uptime.LATIDO_CADA_S
+        self.sesion_id = adsb_uptime.abrir_sesion(
+            self.conn, receptor=receiver.RECEIVER_NAME, fuente=fuente,
+            latido_cada_s=self.latido_cada_s)
+        self._ultimo_latido = time.monotonic()
+        self._sesion_cerrada = False
 
         # El filtro corre en ingestion pero NO rechaza: escribe el motivo y la
         # fila se guarda igual, con su lat/lon intactos. Borrar antes de
@@ -380,15 +396,64 @@ class Recorder:
             self._last_commit = time.monotonic()
             self.pending = 0
 
+    def cerrar_uptime(self, motivo: str = "detenido") -> bool:
+        """Cerrar la sesion de uptime sin cerrar la base. Idempotente.
+
+        Idempotente a proposito, y el orden importa: cuando el hilo lector
+        revienta, cierra la sesion con el motivo REAL, y despues stop() llama a
+        close(), que cerraria otra vez. Si el segundo cierre escribiera, el
+        motivo verdadero -"error: OSError: ..."- quedaria reemplazado por
+        "detenido", o sea que la falla se veria como un apagado normal. Gana el
+        primero, que es el que sabe por que se murio.
+        """
+        if self._sesion_cerrada:
+            return False
+        try:
+            adsb_uptime.cerrar_sesion(self.conn, self.sesion_id, motivo)
+        except sqlite3.Error as exc:
+            # No se traga: si no se pudo anotar el cierre, el proximo resumen
+            # lee esta sesion como una caida, y el motivo tiene que estar a la
+            # vista de quien mire la consola.
+            print(f"  aviso: no se pudo cerrar la sesion de uptime: {exc}",
+                  file=sys.stderr)
+            return False
+        self._sesion_cerrada = True
+        return True
+
+    def latir(self, ahora: float | None = None) -> bool:
+        """Marcar que el grabador sigue vivo. Devuelve True si escribio.
+
+        SE LLAMA DESDE EL BUCLE, NO DESDE record(). Es la unica forma de que el
+        registro distinga "apagada" de "prendida y sorda": si el latido
+        dependiera de que llegue una observacion, un cielo vacio -o una antena
+        que no recibe nada- dejaria de latir y quedaria indistinguible de una
+        maquina apagada, que es justo lo que hay que poder separar.
+
+        Se autolimita por tiempo, asi que el llamador puede invocarla en cada
+        vuelta de su bucle de 1 s sin pensar en la frecuencia.
+        """
+        ahora_mono = time.monotonic() if ahora is None else ahora
+        if ahora_mono - self._ultimo_latido < self.latido_cada_s:
+            return False
+        self._ultimo_latido = ahora_mono
+        adsb_uptime.latir(self.conn, self.sesion_id)
+        return True
+
     def seconds_since_commit(self) -> float:
         """Cuanto hace que nadie confirma. Lo publica status() para que el
         atraso sea un numero en pantalla y no una advertencia en prosa."""
         return time.monotonic() - self._last_commit
 
-    def close(self) -> None:
+    def close(self, motivo: str = "detenido") -> None:
         self.conn.commit()
         self.pending = 0
         self._last_commit = time.monotonic()
+        # Cerrar la sesion de uptime ANTES del checkpoint y del close: dejarlo
+        # para despues de cerrar la conexion es garantizar que nunca se
+        # escriba. Una sesion sin cierre no es un bug -- significa "se cayo" --
+        # asi que no escribirlo equivale a inventar una caida en cada apagado
+        # normal.
+        self.cerrar_uptime(motivo)
         # TRUNCATE y no PASSIVE: en WAL el .db se queda ATRAS del -wal hasta el
         # checkpoint (el automatico recien salta a las 1 000 paginas), y
         # adsb_log.db esta TRACKEADA en git -- `git ls-files --error-unmatch
@@ -535,7 +600,7 @@ def main() -> None:
     print(f"Fuente: {descripcion}")
 
     try:
-        recorder = Recorder(min_interval_s=args.min_interval)
+        recorder = Recorder(min_interval_s=args.min_interval, fuente=descripcion)
     except (RuntimeError, ValueError) as exc:
         # Base bloqueada por otra grabacion, o ADSB_SURFACE_REF mal escrito.
         # Las dos son de configuracion y las dos tienen que salir como un
@@ -561,6 +626,10 @@ def main() -> None:
     try:
         while corriendo:
             time.sleep(1.0)
+            # Antes de mirar el snapshot, no despues: si la fuente esta muda o
+            # tira una excepcion, igual queda constancia de que estabamos
+            # escuchando. Es todo el punto del registro.
+            recorder.latir()
 
             for observation in source.snapshot():
                 if observation.timestamp > visto_hasta:

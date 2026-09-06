@@ -85,28 +85,71 @@ la página en vivo publicando un número y la descarga otro.
 pudo resolver el carácter, y está guardado así en la base para tres direcciones.
 `########` llegó a publicarse como número de vuelo en el Excel del 03/09.
 
-## Esta tabla no sirve para contar
+## El 56% NO era la cobertura, y hasta tener uptime no se publica ninguno
 
-El número de vuelo ya es confiable; **el conteo no**.
+El número de vuelo ya es confiable. El conteo tampoco es el problema que se creía:
+**el problema es que no sabemos cuándo el grabador estuvo arriba.**
 
-**El denominador hay que armarlo con cuidado, o el número miente para el lado
-fácil.** La grabación no es continua: el 03/09, dentro de la ventana 10:09–16:42,
-hay **56 minutos sin un solo mensaje**, uno de ellos de 33,7 min. Comparar contra
-todas las operaciones de la ventana mete en el denominador tiempo en el que no
-grabamos, y eso ya se hizo mal una vez (daba 49% y 22%).
+**CORRECCIÓN 2026-09-06 — el 56–58% de partidas / 25–26% de arribos que decía acá
+NO es una medida de la antena, y no hay que repetirlo.** Verificado a mano por el
+operador, partida por partida contra los listados de AA2000: **con el grabador
+prendido, las partidas entran todas.** El 03/09 la antena se prendió y se apagó
+muchas veces para probar ganancias y ubicaciones, así que ese porcentaje mide
+cuántas veces se apagó, no lo que la antena recibe.
 
-Contando solo lo que ocurrió **mientras la antena grababa**: **56–58% de las
-partidas y 25–26% de los arribos.** El rango depende de dónde se corte un hueco,
-3 o 5 min; más allá de eso no se mueve.
+**Por qué el descuento de huecos no alcanzó para arreglarlo.** El párrafo viejo ya
+descontaba los 56 min sin mensajes y aun así daba 56–58%: parecía un denominador
+honesto y no lo era. Los huecos se reconstruyen **desde el silencio**, con un corte
+de 3–5 min, así que **toda parada más corta que el corte queda dentro del
+denominador** como si hubiéramos estado escuchando. En un día de pruebas, con
+muchos arranques y paradas cortas, eso solo puede subestimar el tiempo apagado y
+castigar al sistema.
 
-**Y ese número es el techo, no el valor.** Un hueco sin mensajes no distingue
-«la antena estaba apagada» de «estaba prendida y sorda». Se le da el beneficio de
-la duda al sistema porque es lo que más lo favorece; si en algún hueco estaba
-corriendo, esas operaciones son pérdidas reales y el porcentaje baja.
+**Regla: no se publica ningún porcentaje de cobertura hasta que exista el registro
+de uptime.** Ni el viejo, ni uno nuevo sacado del silencio. Lo único afirmable hoy
+es lo verificado a mano, y se dice así: *con el grabador prendido no se perdió
+ninguna partida*.
 
-Antes de publicar un total, un ranking o un market share desde acá, decí de qué
-porcentaje estás hablando. Un market share calculado sobre el 26% de los arribos
-no es un market share.
+**El registro de uptime YA EXISTE** (`adsb_uptime.py`, tabla `grabador_sesion`,
+2026-09-06): el grabador anota cuándo arrancó, late cada 30 s y anota cuándo se
+detuvo y por qué. Con eso el silencio ya no es la única señal, y «apagada» se
+distingue de «prendida y sorda».
+
+Dos cosas al usarlo. **El latido lo maneja el reloj, no los datos** — se llama
+desde el bucle de 1 s y nunca desde `record()`, porque si dependiera de que llegue
+una observación, una antena sorda dejaría de latir y el registro diría «apagada»
+justo en el caso que hay que detectar. Y **`cobertura` es `None`, no `0.0`**, cuando
+no hay con qué calcularla: un cero ahí afirma que no grabó nada.
+
+**La cobertura ya está a la vista** (2026-09-06): una banda debajo de la franja del
+receptor, en las cinco páginas, desde `webapp/static/franja_receptor.js`. Se pinta
+sola al pintar la franja, así que **ninguna página se puede olvidar de mostrarla**,
+y como la del receptor **la versión ruidosa es la que avisa**: rojo si hubo caídas o
+si no hay registro, ámbar si no hubo caídas pero la ventana no está completa, azul
+solo con cobertura ≥ 99%. Vive además en `/api/adsb/uptime`, en
+`/api/adsb/status` → `uptime` y en `estado.json` → `uptime_24h`.
+
+**Lo que todavía falta para levantar la regla de arriba:** la banda publica las
+**últimas 24 h**, y un share habla de **su propia ventana**. Son dos ventanas
+distintas y hoy solo existe la segunda. Hasta que el tablero muestre la cobertura
+*de la franja que está contando*, la regla sigue en pie.
+
+**Al tocar `franja_receptor.js`, acordate de que 100 % es una afirmación.** Un
+redondeo a un decimal dibujaba «100,0 %» con un hueco de 12 s: el mismo cartel
+afirmaba que no hubo hueco y decía al lado que sí. Se corta a 99,9 % salvo que la
+cobertura sea exactamente 1.
+
+**Los arribos siguen siendo el lado flojo, y eso no lo cambia esta corrección.** La
+asimetría es geométrica: el que despega sube sobre la antena, el que llega viene
+bajo y apantallado, y su tramo final no manda altitud. Se ataca con ubicación y
+ganancia, no con código. Pero **el porcentaje de arribos también estaba contaminado
+por el mismo denominador**, así que tampoco se publica hasta tener uptime.
+
+Para market share: **el alcance son las partidas** — es la mitad medible y, para
+combustible, la que importa, porque el avión carga antes de irse. Numerador y
+denominador salen de la misma lista de despegues, así que ninguno se puede mover sin
+el otro; lo que va al lado del número es **de qué ventana horaria habla y si el
+grabador estuvo arriba toda esa ventana**.
 
 ## Cómo se escribe acá
 

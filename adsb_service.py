@@ -13,10 +13,12 @@ recordings would both try to open the same RTL-SDR device and fight over it.
 """
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
 
+import adsb_uptime
 from adsb import Observation
 from adsb_events import PositionGate
 from adsb_record import CSV_DIR, DB_PATH, Recorder, build_source
@@ -79,7 +81,8 @@ class AdsbService:
             # con el motivo en el log del servidor: es un error de
             # configuracion y quien lo cometio esta mirando esta pantalla.
             try:
-                self._recorder = Recorder(min_interval_s=kwargs.get("min_interval", 5.0))
+                self._recorder = Recorder(min_interval_s=kwargs.get("min_interval", 5.0),
+                                          fuente=self.description)
                 self._gate = PositionGate()
             except ValueError as exc:
                 self._source.stop()
@@ -119,6 +122,10 @@ class AdsbService:
         try:
             while not self._stop.is_set():
                 time.sleep(1.0)
+                # Antes de pedir el snapshot, no despues: si la fuente esta
+                # muda o revienta, igual tiene que quedar constancia de que
+                # estabamos escuchando. Ver adsb_uptime.py.
+                self._recorder.latir()
                 snapshot = self._source.snapshot()
                 for observation in snapshot:
                     # Solo las nuevas. snapshot() devuelve la ventana ENTERA
@@ -147,6 +154,15 @@ class AdsbService:
             # that failed to start.
             with self._lock:
                 self.start_error = f"{type(exc).__name__}: {exc}"
+            # Y queda anotado en el registro de uptime con el motivo real. Sin
+            # esto, un hilo que reventó a las 03:00 dejaba la sesion abierta y
+            # el resumen la contaba como una caida sin causa, indistinguible de
+            # un corte de luz. El try es porque este camino ya es el de la
+            # falla: no puede fallar mas fuerte que el error que esta contando.
+            try:
+                self._recorder.cerrar_uptime(f"error: {type(exc).__name__}: {exc}")
+            except Exception:
+                pass
 
     def status(self) -> dict:
         recorder = self._recorder
@@ -193,6 +209,11 @@ class AdsbService:
             # que 'delete' aca significa que el commit por tiempo esta corriendo
             # 5.5x mas caro de lo previsto.
             "journal_mode": getattr(recorder, "journal_mode", None),
+            # El uptime de las ultimas 24 h, del REGISTRO y no de la memoria.
+            # uptime_s de arriba es cuanto hace que corre ESTA sesion y se
+            # pierde en cada reinicio; esto sobrevive al corte de luz y es lo
+            # unico con lo que se puede afirmar cobertura. Ver adsb_uptime.py.
+            "uptime": self._uptime_24h(recorder, now),
             "csv_dir": str(CSV_DIR),
             "db_path": str(DB_PATH),
             # Los contadores del filtro, con el cero explicito: un contador
@@ -262,6 +283,10 @@ class AdsbService:
             "historico": self._resumen_historico(),
             "senal": self._salud_de_senal(),
         }
+
+    def _uptime_24h(self, recorder, now: float) -> dict | None:
+        """El resumen de uptime para status(). Delega en uptime_24h()."""
+        return uptime_24h(now)
 
     def _registro_acumulado(self, now: float, ref) -> list[dict]:
         """Una fila por aeronave con TODO lo que se sabe de ella, no su ultimo mensaje.
@@ -371,4 +396,44 @@ class AdsbService:
 
 # One instance per process, shared by every request the dashboard handles --
 # see the module docstring for why this must not be per-request state.
+def uptime_24h(now: float | None = None) -> dict | None:
+    """El resumen de uptime de las ultimas 24 h, o None si no se pudo leer.
+
+    None y no un dict vacio: la pagina tiene que poder decir "no se pudo leer el
+    registro" en vez de dibujar un 0% de cobertura, que es una afirmacion sobre
+    la antena y seria falsa.
+
+    Se abre una conexion de SOLO LECTURA aparte y no se usa la del Recorder:
+    status() corre en un hilo de request y la del grabador es del hilo de
+    grabacion. Ya hubo que documentar ese cruce una vez (check_same_thread) y no
+    conviene apoyarse mas en el.
+
+    ES FUNCION DE MODULO y no metodo porque tiene DOS llamadores con necesidades
+    distintas: status(), que ya arma la foto entera del grabador, y
+    /api/adsb/uptime, que es el endpoint barato que pide la franja de las cinco
+    paginas y no puede pagar un status() completo para mostrar un porcentaje. No
+    depende del estado del servicio -- lee la base, no la memoria -- asi que
+    serlo no cuesta nada.
+
+    VA DESPUES DE LA CLASE a proposito. Definida entre dos metodos, cierra el
+    cuerpo de la clase y todo lo que sigue deja de ser metodo: al moverla aca la
+    primera vez, _registro_acumulado y _salud_de_senal quedaron como funciones
+    de modulo y status() reventaba con AttributeError.
+    """
+    now = time.time() if now is None else now
+    try:
+        conexion = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        return adsb_uptime.resumen(conexion, desde=now - 86400, hasta=now,
+                                   ahora=now)
+    except sqlite3.Error:
+        # La tabla no existe: base grabada antes de que este registro
+        # existiera. No es un error, es una base vieja.
+        return None
+    finally:
+        conexion.close()
+
+
 service = AdsbService()

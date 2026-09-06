@@ -135,11 +135,27 @@ def _estado(base: Path, filas: int) -> dict:
     """
     import receiver
 
+    import adsb_uptime
+
     conexion = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
     try:
         primero, ultimo, aeronaves = conexion.execute(
             "SELECT MIN(epoch), MAX(epoch), COUNT(DISTINCT icao24) FROM adsb_log"
         ).fetchone()
+        # El uptime de las ultimas 24 h va EN EL MANIFIESTO y no solo dentro de
+        # la base. Torre lee esta foto sin saber si el grabador estuvo arriba
+        # todo el dia, y esa es justamente la diferencia entre "no despego
+        # nadie" y "no estabamos escuchando". Un share publicado sin este dato
+        # al lado no se puede sostener.
+        #
+        # None si la tabla no existe -- base grabada antes de que el registro
+        # existiera -- y no un cero, que se leeria como "no grabo nada".
+        ahora = datetime.now(timezone.utc).timestamp()
+        try:
+            uptime = adsb_uptime.resumen(conexion, desde=ahora - 86400,
+                                         hasta=ahora, ahora=ahora)
+        except sqlite3.Error:
+            uptime = None
     finally:
         conexion.close()
 
@@ -154,6 +170,7 @@ def _estado(base: Path, filas: int) -> dict:
         "aeronaves": aeronaves,
         "primer_dato": cuando(primero),
         "ultimo_dato": cuando(ultimo),
+        "uptime_24h": uptime,
         "receptor": {
             "nombre": receiver.RECEIVER_NAME,
             "lat": receiver.RECEIVER_LAT,

@@ -10,7 +10,15 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-03, con las operaciones segmentadas por pasada y la carrera de pista.
+Última actualización: 2026-09-06, con el **registro de uptime del grabador**
+(`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
+arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
+silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
+partidas, 25–26% de arribos): no medían la antena sino las veces que se apagó.**
+Con el grabador prendido las partidas entran todas, verificado a mano contra
+AA2000. El registro ya existe, pero **hasta que el tablero publique la cobertura
+al lado del número sigue en pie la regla de no publicar porcentajes**. Antes de
+eso: las operaciones segmentadas por pasada y la carrera de pista (2026-09-03).
 
 ---
 
@@ -106,6 +114,7 @@ Todas documentadas en `.env.example`. Ninguna es secreta (no van en `.env`).
 | `ADSB_ANTENNA_M` | del preset | altura de la antena. **Decide si se ven aviones en pista** |
 | `ADSB_DB` | `C:\adsb-datos\adsb_log.db` | dónde graba. **En disco local, nunca en OneDrive** |
 | `ADSB_COMPARTIDO` | `%OneDrive%\ADSB-AEROPARQUE` | carpeta donde se **publica** la copia para las otras PC |
+| `ADSB_LATIDO_S` | `30` | cada cuánto late el grabador en el registro de uptime. Es la **cota de incertidumbre** sobre el instante de una caída: subirla afloja esa cota, bajarla solo cuesta un commit más seguido (0,45 ms en WAL) |
 | `ADSB_GAIN` | `49.6` | ganancia del receptor, o `auto`. Solo para la fuente IQ |
 | `ADSB_AIRPORT` | `SABE` | qué aeropuerto contar. `NINGUNO` apaga el apartado |
 | `ADSB_AIRPORT_RADIUS_KM` | `8` | radio del cilindro de operaciones |
@@ -654,6 +663,7 @@ de base OpenSky, los binarios del dongle y 1 MB de Plotly. Se bajan con
 | `webapp/bajar_plotly.py` | baja Plotly una vez |
 | `webapp/static/franja_receptor.js` | la franja de «desde dónde se mide», igual en las cinco páginas |
 | `configuracion.bat` | **único** lugar donde se define dónde está la antena y dónde viven los datos |
+| `adsb_uptime.py` | **cuándo estuvo arriba el grabador**: sesiones, latidos, caídas y cobertura de una ventana |
 | `publicar_datos.py` | publica un volcado quieto (base + CSV + manifiesto) a la carpeta compartida |
 | `mostrar_publicado.py` | lee el manifiesto: de cuándo son los datos y desde dónde se midieron |
 
@@ -946,14 +956,17 @@ con el mismo gris que "todo bien". Las dos cosas están.
 
 ## Ideas que quedaron sin hacer
 
-- **Levantar la captura de arribos.** Es hoy el techo del sistema. Medido contra
-  los listados oficiales del 03/09, **descontando los 56 min en que la antena no
-  grabó**: se capturan **30 de ~53 partidas (56–58%) y solo 14 de ~55 arribos
-  (25–26%)**. Mientras siga así, la tabla
-  sirve para saber QUÉ vuelo fue cada operación pero **no para contar** ni para
-  calcular market share. La asimetría es geométrica —el que despega sube sobre la
-  antena y el que llega viene bajo y apantallado— así que se ataca con ubicación
-  y ganancia, no con código. Ver la sesión 2026-09-04 (2).
+- ~~Registrar el uptime del grabador.~~ **HECHO el 2026-09-06**, en
+  `adsb_uptime.py` y la tabla `grabador_sesion`. Lo que queda pendiente de eso es
+  chico y está listado en la sesión del 2026-09-06: mostrarlo en las páginas y
+  usarlo como denominador del share.
+
+- **Levantar la captura de arribos.** Sigue siendo el lado flojo, por geometría: el
+  que despega sube sobre la antena, el que llega viene bajo y apantallado, y su
+  tramo final no manda altitud. Se ataca con ubicación y ganancia, no con código.
+  **Los porcentajes que había acá (56–58% de partidas, 25–26% de arribos) están
+  retirados**: no medían la antena. Ver la corrección 2026-09-06. Ver también la
+  sesión 2026-09-04 (2).
 
 - **Guardar en cada fila desde dónde se recibió.** Hoy la base no lo guarda, así
   que las distancias de todo el histórico se recalculan desde el receptor
@@ -2108,18 +2121,20 @@ tiempo, un tramo basura le puede ganar a uno bueno por estar más cerca.
 
 ### Lo que este arreglo NO toca
 
-- **La cobertura sigue siendo la que es.** CUIDADO CON EL DENOMINADOR: la primera
-  versión de este párrafo comparaba contra las 126 operaciones de la ventana
-  10:09–16:42 y daba 49% / 22%, pero **la grabación no fue continua** — hay 56
-  min sin un solo mensaje, uno de 33,7 min (13:34→14:08, que el propio Excel
-  delata: sus operaciones saltan de 13:33 a 14:12). Contando solo lo que pasó
-  mientras la antena grababa: **56–58% de las partidas y 25–26% de los arribos**.
-  Ese número es el TECHO: un hueco sin mensajes no distingue «apagada» de
-  «prendida y sorda», y se le dio el beneficio de la duda al sistema. Los arribos
-  se pierden al doble de
-  tasa, que es lo esperable —el que despega sube sobre la antena y el que llega
-  viene bajo y apantallado—. El número de vuelo ahora es confiable; **el conteo
-  no**, y no hay que usar esta tabla para market share.
+- **La cobertura.** Este párrafo estuvo mal dos veces y quedó **RETIRADO** el
+  2026-09-06; se deja escrito para que nadie reintente la cuenta. Primero comparó
+  contra las 126 operaciones de la ventana 10:09–16:42 y dio 49% / 22%, sin ver
+  que la grabación no fue continua. Después descontó los 56 min sin mensajes —uno
+  de 33,7 min, 13:34→14:08, que el propio Excel delata: sus operaciones saltan de
+  13:33 a 14:12— y dio **56–58% de partidas y 25–26% de arribos**. Ese segundo
+  número tampoco mide la antena: los huecos se reconstruyen **desde el silencio**
+  con un corte de 3–5 min, así que **toda parada más corta que el corte se quedó en
+  el denominador**, y el 03/09 fue un día de prender y apagar para probar ganancias
+  y ubicaciones. Verificado a mano por el operador, partida por partida contra
+  AA2000: **con el grabador prendido, las partidas entran todas.** Hasta que exista
+  el registro de uptime **no se publica ningún porcentaje de cobertura**. Lo que
+  sigue en pie es la asimetría —los arribos se pierden mucho más, por geometría— y
+  que el alcance del market share son **las partidas**.
 - **El operador y la matrícula** siguen saliendo de `identidad.resolver()` sobre
   el historial. Es correcto: las dos piernas del mismo avión son de la misma
   aerolínea, así que el prefijo no cambia.
@@ -2135,3 +2150,379 @@ tiempo, un tramo basura le puede ganar a uno bueno por estar más cerca.
   `AR1518`): el overlay es opaco y esas horas no se pueden verificar contra nada.
 - Las **altitudes negativas** (hasta −350 ft) siguen ahí en las filas del 23/08.
   Es el problema de QNH ya documentado más arriba, no algo nuevo.
+
+---
+
+## Sesión 2026-09-06: dónde va la PC, qué comprar, y el pitch para YPF
+
+Esta sesión no tocó código. Definió el **despliegue** y produjo el documento con
+el que se pide el equipo: `pitch-market-share-despegues.html`, en la raíz del
+repo. Es HTML autocontenido, abre con doble clic. Lo único que sale a internet
+son las tipografías; sin conexión cae a las de sistema y se lee igual.
+
+### El alcance del tablero son las PARTIDAS, y por qué
+
+Ya está en `CLAUDE.md` la corrección de los porcentajes de cobertura. Lo que
+define el alcance es lo otro: el despegue deja un ascenso largo y limpio, a
+8-15 km y miles de pies, y se ve entero; el aterrizaje termina en el suelo, donde
+la señal se apaga y las tramas de superficie (TC 5-8) **no traen altitud**, así
+que la confirmación por altitud no puede dispararse.
+
+Para combustible es además la mitad que importa: el avión carga antes de irse.
+
+Numerador y denominador del market share salen de **la misma lista de despegues**,
+así que ninguno se puede mover sin el otro. Lo que va publicado al lado del
+número: **de qué ventana horaria habla y si el grabador estuvo arriba toda esa
+ventana**.
+
+### Dónde va la PC: la oficina de plataforma de Aeroparque
+
+Confirmado por el usuario: **adentro, ambiente de oficina.** Eso descarta el
+equipo industrial con rango de temperatura declarado, que triplicaba el costo, y
+deja un mini PC fanless común. Es coherente con la configuración que ya funciona,
+que mide desde adentro detrás de un doble vidrio.
+
+### El criterio de compra sale del software, no del catálogo
+
+`rtl_sdr` entrega 2 MS/s complejos = **4 MB/s continuos** por USB, y `adsb_iq.py`
+calcula magnitud y busca preámbulos **en un solo hilo** (numpy vectoriza, pero el
+bucle por candidato es Python). Entonces **importa el reloj por núcleo, no la
+cantidad de núcleos.** Y no hace falta GPU: sin la cámara no queda nada que
+acelerar -- tampoco hay que instalar `ultralytics`/`opencv`, que son 1,7 GB
+del `.venv`.
+
+El disco no es criterio: la base son **2,2 MB** para 31 002 observaciones y un día
+pegado a la pista deja ~**1,2 MB** de CSV.
+
+| requisito | por qué |
+|---|---|
+| Intel N100/N150 o Ryzen equivalente | single-thread sobrado; ~3x un J4125 en un núcleo |
+| **BIOS con arranque tras corte de energía** | tiene que arrancar sola; no se arregla con software |
+| 16 GB RAM, SSD 256-512 GB | 8 GB alcanzan; el disco sobra siempre |
+| Ethernet **además** de WiFi | hoy es WiFi, pero no comprar sin puerto de red |
+| un puerto **USB 2.0** libre | el dongle va ahí: USB 3 radia ruido de banda ancha en 1090 |
+| fanless | sirve en oficina; **no meterla en un cajón cerrado**, disipa por la carcasa |
+
+**Dos accesorios que no son opcionales:** un **dummy plug HDMI** (~USD 5; muchos
+mini PC sin monitor no inicializan video y la sesión remota queda inutilizable) y
+un **alargue USB** para sacar el dongle de la caja. Lo segundo no es comodidad: ya
+está medido que en un entorno de RF sucio el sistema informa 34 684 mensajes con
+**cero** CRC válido.
+
+**NO comprar:** Celeron N4020/N4120/J4125 ni Atom (single-thread flojo, que es lo
+que este software usa); Raspberry Pi ni ningún ARM (no hay `rtl_sdr.exe` para
+Windows-on-ARM y los lanzadores son `.bat`); nada sin arranque automático en BIOS.
+
+### Las tres opciones, de más barata a más cara
+
+**1. Una PC de rezago que YPF ya tenga -- costo cero, y es la primera que hay que
+mirar.** Un desktop corporativo de 2016+ (un i5-6500) tiene **mejor single-thread
+que un N100**. Y resuelve gratis dos ítems del pedido a IT: ya está en el dominio
+y en la red (se cae el problema del WiFi con portal) y la imagen corporativa es
+**Windows Pro** (el Escritorio Remoto funciona sin pagar upgrade). Hay que
+verificar tres cosas: BIOS con *AC Recovery / After Power Loss* en **Power On**;
+un puerto **USB 2.0**; y una **excepción de GPO** para suspensión y para el
+reinicio por Windows Update -- ese es el riesgo real de una máquina del dominio,
+porque una política que la duerme a las 20:00 o la reinicia a las 3 AM reintroduce
+exactamente el agujero que estamos tratando de eliminar. Costo escondido: ~70 W
+contra ~8 W, unos USD 10/mes contra USD 1, así que **el mini PC se paga solo a
+partir del año**. Trade-off, no ganadora automática: la del dominio trae red y
+licencia resueltas pero IT controla las políticas; la comprada la controlás vos
+entera pero IT tiene que dejarla entrar a la red.
+
+**2. Comprada barata: N100/N95, 8 GB, 256 GB, con ventilador -- USD 120-160.**
+Los dos recortes están medidos y no atan nada. Viene con Home, así que se
+administra por OpenSSH en vez de RDP.
+
+**3. Comprada recomendada: MeLE Quieter4C** (N100, 16 GB, 512 GB, fanless),
+~USD 200, porque **viene con Windows 11 Pro de fábrica**. Alternativa: Quieter DL.
+La barata de marca conocida es el Beelink S12 Pro, pero **viene con Home**.
+
+**Lo que no hay que bajar:** un thin client usado (HP t630, Dell Wyse 5070) sale
+USD 40-90 pero son J4105/J5005, la clase que hay que evitar. No es que seguro
+falle: es que si no da, **pierde muestras y hoy la pantalla no lo informa** (ver
+abajo). Solo si ya está disponible y se puede medir antes.
+
+### Windows 11 Home NO puede recibir Escritorio Remoto
+
+Solo puede iniciarlo. Verificado el 2026-09-06: el Beelink S12 Pro, que es el mini
+PC N100 más vendido, viene con **Home**. Sin pantalla eso importa.
+
+Dos salidas, las dos válidas: comprar un modelo **con Pro**, o quedarse con Home y
+administrarla por **OpenSSH Server**, que sí existe en Home como característica
+opcional y da una consola de PowerShell -- que es todo lo que necesita un grabador
+headless. El monitoreo visual, aparte, entra por `http://<IP>:8000` desde
+cualquier navegador de la red.
+
+### LA TRAMPA DEL DESPLIEGUE: SharePoint necesita una sesión de usuario abierta
+
+**Las tareas programadas van «al iniciar sesión» con autologon, NO «corra el
+usuario o no».** El cliente de sincronización de SharePoint/OneDrive no corre sin
+una sesión interactiva.
+
+Configurado como servicio sin nadie logueado, el grabador graba, el publicador
+escribe el volcado en la carpeta local y **nada sube nunca**. Es una falla
+silenciosa perfecta: los dos procesos se ven sanos, no hay error en ningún log, y
+Torre queda mirando una foto congelada. Anotado antes de cometerlo.
+
+Corolario para verificar la puesta en marcha: **la prueba no es que los procesos
+estén vivos, es abrir el volcado desde Torre y ver la hora de hace cinco
+minutos.** Es lo único que ejercita la cadena completa.
+
+### Cuatro cosas de la oficina que hay que resolver, y no cuestan plata
+
+- **Un tomacorriente que no dependa de la llave general** que baja el último que
+  se va. Si se corta de noche, no se graba el pico de partidas de la mañana.
+- **Aire alrededor del gabinete.** Fanless disipa por la carcasa.
+- **Etiquetada y fuera de paso.** Una caja chica sin pantalla parece basura o
+  parece disponible; el cartel evita el desenchufón bienintencionado.
+- **La antena contra la ventana que da al sector 104°-117°**, que es la dirección
+  de la pista. Si ese vidrio tiene película metalizada atenúa, y ahí la salida es
+  pasar el cable afuera -- pero **se decide midiendo** con `adsb_iq.py --medir 30`,
+  no de antemano.
+
+### Lo que hay que pedirle a YPF
+
+1. **La PC dedicada** -- o el rezago, ver las tres opciones arriba.
+2. **La carpeta de SharePoint**: escritura para la antena, lectura para Torre. Un
+   solo destino, por `ADSB_COMPARTIDO`, nunca escrito en el código.
+3. **La tabla de contratos por operador** -- quién carga con YPF y quién no. Es el
+   único insumo del cálculo que el sistema **no puede medir ni modelar**. Sin eso
+   hay volumen por aerolínea, pero no hay share.
+4. **De IT: la máquina registrada en la red y una cuenta que sincronice.** Un WiFi
+   con portal que pida login después de cada reinicio es incompatible con
+   «desatendida», y sin sesión abierta no sube nada (ver la trampa de arriba).
+
+### Ideas que quedaron sin hacer, de acá
+
+- **La pérdida de muestras por CPU lenta no se ve en vivo.** `rtl_sdr` avisa por
+  stderr cuando el consumidor no le sigue el ritmo (`lost at least N bytes`), y
+  `escuchar()` **sí** captura ese stderr -- pero lo imprime recién **al terminar
+  el proceso**, no durante la grabación. O sea que con una CPU insuficiente se
+  pierden muestras y ninguna pantalla lo dice, que es justo lo que este repo trata
+  de no hacer. Debería salir en `/api/adsb/status` al lado de `lag_s`. Es también
+  lo que haría auditable comprar hardware barato.
+- ~~El registro de uptime del grabador.~~ **Hecho en esta misma sesión**, ver la
+  sección que sigue.
+- **El módulo del tablero de share**, en Torre. Recorre los despegues del día del
+  volcado, resuelve operador y tipo, aplica el coeficiente de consumo por tipo (el
+  de `MAPA-NEGOCIO/consumo_rutas.json`, calibrado contra OpenAP: `b_kg_km` 3,77
+  para el A320, 88 muestras para el 737-800), cruza contra la tabla de contratos y
+  publica el share. A 0,8 kg/L, un A320 a Córdoba -645 km- son ~2430 kg = 3040 L.
+  **Los litros son modelados, no medidos**: sirven para comparar operadores entre
+  sí, no reemplazan un remito.
+- **Las tareas programadas y el autologon**, que hoy son dos ventanas que alguien
+  deja abiertas.
+- **Segunda antena (fase 3, opcional).** Se evaluó y **se descartó** la idea de que
+  una antena "avise" a la otra cuándo hay un despegue: todo transmite en 1090 MHz
+  sin turno, un receptor no puede apuntar ni prestar más atención a un avión, y el
+  dongle es exclusivo de un proceso -- dos no comparten antena sin divisor. **Lo
+  que sí paga** son dos receptores independientes en lugares distintos, los dos
+  grabando todo y publicando al mismo SharePoint en su propia subcarpeta, con
+  fusión en Torre por ICAO24 + hora: cubre sombras de edificio y caídas de una PC.
+  Y una **directiva al sector 104°-117°** como *segunda* antena, dejando la primera
+  omnidireccional. No es requisito de nada anterior.
+
+---
+
+## Sesión 2026-09-06 (2): el registro de uptime, para poder afirmar cobertura
+
+Módulo nuevo `adsb_uptime.py` y tabla nueva `grabador_sesion` en la misma base.
+Cierra el agujero que dejó la corrección de los porcentajes: **el silencio de
+`adsb_log` no distingue «la antena estaba apagada» de «estaba prendida y
+sorda»**, y sin esa distinción no se puede publicar ninguna cobertura. Ahora el
+sistema puede probar solo lo que se había verificado a mano.
+
+### La decisión central: el latido lo maneja el RELOJ, no los datos
+
+`Recorder.latir()` se llama desde el bucle de 1 s -- el del `_loop` del servicio
+y el del `main()` del CLI -- y **antes** de pedir el snapshot, no desde
+`record()`.
+
+Si el latido dependiera de que llegue una observación, un cielo vacío o una
+antena sorda dejarían de latir, y el registro diría «apagada» **justo en el caso
+que el módulo existe para detectar**. Es el bug que habría hecho todo esto
+inútil, y está cubierto por un test que afirma cobertura 100% con **cero filas**
+en `adsb_log`.
+
+Se autolimita por tiempo (`ADSB_LATIDO_S`, 30 s por defecto), así que el
+llamador puede invocarlo en cada vuelta sin pensar en la frecuencia.
+
+### Cómo se lee una fila: tres estados, no dos
+
+| `cierre` | último latido | qué significa |
+|---|---|---|
+| NOT NULL | — | cerró ordenado. El final es **exacto**, y `motivo` dice por qué |
+| NULL | fresco | está **corriendo ahora** |
+| NULL | viejo | **se cayó** sin cerrar: corte de luz, cuelgue, `taskkill` |
+
+«Fresco» es `latido_cada_s * 2`. Sin esa segunda condición, la sesión que está
+corriendo -- que también tiene `cierre IS NULL` -- se contaría como caída
+siempre.
+
+**El intervalo del latido se guarda EN LA FILA** (`latido_cada_s`) y no se lee
+de la constante de hoy: si mañana se cambia, las filas viejas tienen que seguir
+siendo interpretables. Una cota leída de una constante que cambió es una cota
+inventada.
+
+**Y el final de una caída se toma en el último latido, no en latido + intervalo.**
+Dar el beneficio de la duda al sistema es exactamente cómo se infla una
+cobertura: más corto y honesto antes que más largo y favorable.
+
+### Tres decisiones más, con su motivo
+
+**Vive en la misma base**, no en un archivo aparte. `publicar_datos.py` copia la
+base entera con la API de backup, así que la tabla **viaja a Torre sola**, sin un
+segundo archivo que sincronizar ni que se pueda desparejar del `.db`.
+
+**`latir()` commitea siempre**, y no se apoya en el commit por tiempo de las
+observaciones. Lo único que este dato tiene que sobrevivir es exactamente el
+corte de luz que impide cerrar la sesión: un latido sin confirmar no existe
+cuando más se lo necesita. Cuesta un commit cada 30 s = 0,45 ms en WAL, o sea
+1,3 ms por hora.
+
+**`cerrar_uptime()` es idempotente y gana el primero que escribe.** Cuando el
+hilo lector revienta, cierra la sesión con el motivo real (`error: OSError:
+...`); después `stop()` llama a `close()`, que cerraría otra vez. Si el segundo
+escribiera, el motivo verdadero quedaría reemplazado por `detenido` y **la falla
+se vería como un apagado normal**.
+
+### `cobertura` es `None` y no `0.0` cuando no hay con qué calcularla
+
+Sin ventana, o con la tabla vacía porque la grabación es anterior al módulo. Un
+cero ahí se leería como «no grabó nada», que es una afirmación, y no tenemos con
+qué hacerla. Lo mismo en `status()`: `uptime` es `None` si no se pudo leer el
+registro, para que la página pueda decir «no se pudo leer» en vez de dibujar 0%.
+
+Los intervalos se **unen** antes de sumar. No debería haber dos sesiones
+solapadas -- el dongle es exclusivo de un proceso -- pero si las hay, sumar por
+separado contaría el mismo segundo dos veces y podría dar **cobertura > 100%**,
+que es como se publica un número imposible sin que nadie lo note. Cuando pasa
+sale en `solapamientos`, no se tapa.
+
+### Dónde se ve
+
+- **`/api/adsb/status` → `uptime`**: resumen de las últimas 24 h, del registro y
+  no de la memoria. El `uptime_s` que ya estaba es cuánto hace que corre *esta*
+  sesión y se pierde en cada reinicio; esto sobrevive al corte de luz.
+- **`estado.json` → `uptime_24h`**: en el manifiesto que publica a SharePoint, así
+  que **Torre lo lee sin abrir la base**. Es la diferencia entre «no despegó
+  nadie» y «no estábamos escuchando».
+- **`hueco_max_s`**: el hueco más largo sin grabar dentro de la ventana. Es el
+  número que decide si un share por franja horaria se puede publicar: 20 min
+  sueltos repartidos no es lo mismo que 20 min seguidos sobre el pico de una
+  aerolínea.
+
+### Verificado ejecutando
+
+Los **cuatro** archivos de test pasan, con el default y con
+`ADSB_RECEIVER=aeroparque` (ocho corridas). `test_adsb.py` tiene un bloque 10
+nuevo con nueve comprobaciones sobre marcas de tiempo fijas -- no `time.time()`,
+así que no dependen de cuándo se corren.
+
+Y de punta a punta con el `Recorder` real:
+
+- Sesión abierta al construirlo, con receptor y fuente; **5 latidos escritos sin
+  una sola observación cargada**; cierre ordenado con `motivo=detenido` y
+  `fin_exacto=True`; y `adsb_log` con **0 filas** dando cobertura igual.
+- Camino de caída: se cierra la conexión sin cerrar la sesión, y **la misma fila**
+  se lee `corriendo=true` mirada al instante y `caidas=1` mirada 10 s después,
+  con `fin_exacto=False` y `motivo=None` -- nadie pudo decir por qué.
+- `publicar_datos._estado()` devuelve el bloque `uptime_24h` completo.
+
+### Ideas que quedaron sin hacer, de acá
+
+- ~~**Mostrarlo en las páginas.**~~ **HECHO** — ver la sesión 2026-09-06 (3).
+- **Usarlo como denominador del share.** Es la dependencia real: el tablero tiene
+  que publicar la cobertura de la ventana al lado del número, y hasta que eso
+  esté, sigue en pie la regla de `CLAUDE.md` de no publicar porcentajes.
+- ~~**`mostrar_publicado.py` no lo imprime todavía.**~~ **HECHO** — ídem.
+- **La pérdida de muestras por CPU lenta sigue invisible en vivo** (`rtl_sdr`
+  avisa por stderr y se imprime al cerrar). Es un pendiente distinto, del mismo
+  espíritu: el uptime dice que estábamos escuchando, no que no se cayeron
+  muestras.
+
+## Sesión 2026-09-06 (3): el uptime se ve en las cinco páginas
+
+Continúa la sesión (2). El registro ya existía y estaba en la API, pero **ninguna
+pantalla lo dibujaba**: el dato existía y no lo veía quien lee los números, que es
+justo lo que la regla de `CLAUDE.md` protege.
+
+### Una banda debajo de la franja del receptor, y ninguna plantilla tocada
+
+Todo vive en `webapp/static/franja_receptor.js`, por el mismo motivo por el que ya
+vivía ahí la franja: son **cinco páginas** y cuatro copias se desincronizan.
+
+La banda se pinta **desde `pintarFranjaReceptor()`**, así que aparece sola en las
+cinco sin que ninguna plantilla cambie ni se pueda olvidar de mostrarla. Las
+cuatro páginas que ya tenían el receptor cargado siguen sin pedirlo de nuevo; el
+uptime sí se pide siempre, porque es barato -una fila por sesión- y porque el
+alternativo era que cada página decidiera, que es como se desincronizan.
+
+### La versión ruidosa avisa cuando hubo caídas, igual que la del receptor
+
+Cinco estados, y el tranquilizador es **uno solo**:
+
+| Estado | Cómo se ve |
+|---|---|
+| Sin registro (`uptime` null) | rojo: no se puede sostener ningún porcentaje |
+| Con sesiones pero sin cobertura calculable | rojo |
+| Hubo caídas, o sesiones solapadas | rojo, con el detalle y cuántas |
+| Sin caídas pero cobertura < 99% | **ámbar**: la ventana no está completa |
+| Cobertura ≥ 99% sin caídas | azul, el único tranquilizador |
+
+El ámbar es el que faltaba en el diseño original: **un 78% sin caídas sigue siendo
+una ventana con agujeros**, y el conteo de esa ventana los hereda. Pintarlo igual
+que un 100% habría dejado pasar exactamente el error que el registro existe para
+evitar.
+
+**Y 100 % solo si de verdad no faltó un segundo.** Con redondeo a un decimal, una
+cobertura de 99,95% con un hueco de 12 s se dibujaba «100,0 %»: el mismo cartel
+afirmaba que no hubo hueco y decía al lado que sí lo hubo. Se corta a 99,9 %.
+
+### `/api/adsb/uptime`, endpoint propio
+
+No es un campo de `/api/receptor`: ese sale de `_ESTATICOS`, se calcula una vez
+por proceso y **no toca la base**, y esto cambia cada 30 s. Tampoco se reusa
+`/api/adsb/status`, que trae la foto entera del grabador: sería pedir el histórico
+y la señal para mostrar un porcentaje.
+
+Va aparte además **para que falle aparte**: si el registro no se puede leer, la
+franja del receptor se pinta igual y solo la banda de uptime dice que no se pudo.
+
+Lo único compartido es la lectura: `AdsbService._uptime_24h` pasó a delegar en
+`adsb_service.uptime_24h()`, función de módulo, que usan los dos.
+
+### El bug que me comí al mover esa función
+
+`uptime_24h` quedó definida **entre dos métodos** de `AdsbService`. Eso cierra el
+cuerpo de la clase, y `_registro_acumulado` y `_salud_de_senal` dejaron de ser
+métodos: `/api/adsb/status` reventaba con `AttributeError`. Los cuatro test
+seguían pasando -ninguno llama a `status()`- y lo agarró la prueba de endpoints.
+La función ahora va **después de la clase** y el docstring lo dice.
+
+### Verificado ejecutando
+
+- Los **cuatro** archivos de test, con el default, `aeroparque` y
+  `aeroparque-pista` (doce corridas).
+- **Endpoint contra sesiones sintéticas**: una cerrada, una caída y una viva.
+  Esperado 10 000 s arriba, medido 9 995 -los 5 s son el criterio de la sesión
+  (2): el fin de una caída es el último latido, no latido + intervalo-; 1 caída,
+  `corriendo=true`.
+- **En el navegador**, en `/aeropuerto` y en `/adsb/mapa`, que son los dos caminos
+  de entrada distintos (`pintarFranjaReceptor` y `cargarFranjaReceptor`): la banda
+  aparece en las dos.
+- **Los cinco estados**, forzados desde la consola del navegador.
+- `/api/receptor` sigue devolviendo solo `receptor` y `proceso`: no se le agregó
+  la consulta a la base.
+
+### Ideas que quedaron sin hacer, de acá
+
+- **Sigue faltando lo del denominador del share.** Que la banda esté no alcanza:
+  el tablero tiene que publicar la cobertura **de la ventana del share**, no la de
+  las últimas 24 h. Son dos ventanas distintas y hoy solo existe la segunda.
+- **La banda pide 24 h fijas.** `resumen()` acepta cualquier ventana, pero el
+  endpoint no toma parámetros. Cuando el tablero filtre por franja horaria va a
+  necesitar pasarle esa franja.
+- **Una página que no tenga `#franja-receptor` no muestra nada**, en silencio. Hoy
+  las cinco lo tienen; una sexta que se olvide no se va a enterar.

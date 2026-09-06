@@ -102,6 +102,70 @@ revisar("interpreta 'ground' como suelo", parsed[1].is_on_ground)
 revisar("detecta descenso", parsed[0].is_descending)
 print()
 
+print("10. Registro de uptime del grabador")
+import sqlite3 as _sqlite3
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+import adsb_uptime
+
+_tmp = _Path(_tempfile.mkdtemp()) / "uptime.db"
+_conn = _sqlite3.connect(_tmp)
+adsb_uptime.crear_esquema(_conn)
+
+# T0 es una marca fija: todo se afirma en relacion a T0 y no con time.time(),
+# asi que el test no depende de cuando se corre.
+T0 = 1_757_000_000.0
+
+# Una sesion que cerro ordenada: 10 min arriba.
+s1 = adsb_uptime.abrir_sesion(_conn, receptor="aeroparque-pista", fuente="iq",
+                              latido_cada_s=30.0, ahora=T0)
+adsb_uptime.cerrar_sesion(_conn, s1, "detenido", ahora=T0 + 600)
+
+# Una que se CAYO: late hasta T0+1800 y nunca cierra.
+s2 = adsb_uptime.abrir_sesion(_conn, receptor="aeroparque-pista", fuente="iq",
+                              latido_cada_s=30.0, ahora=T0 + 1200)
+adsb_uptime.latir(_conn, s2, ahora=T0 + 1800)
+
+# La ventana es la hora entre T0 y T0+3600, mirada desde T0+3600.
+r = adsb_uptime.resumen(_conn, desde=T0, hasta=T0 + 3600, ahora=T0 + 3600)
+
+revisar("suma los dos intervalos (600 + 600 s)",
+        r["segundos_arriba"] == 1200.0, f"dio {r['segundos_arriba']}")
+revisar("la cobertura es 1200/3600",
+        r["cobertura"] == round(1200 / 3600, 4), f"dio {r['cobertura']}")
+# La que se cayo cuenta como caida; la que cerro ordenada NO.
+revisar("cuenta una sola caida", r["caidas"] == 1, f"dio {r['caidas']}")
+revisar("no cree que algo este corriendo", r["corriendo"] is False)
+# El hueco mas largo es T0+1800 -> T0+3600 = 1800 s, mas largo que el de
+# 600->1200. Es el numero que decide si un share por franja se puede publicar.
+revisar("el hueco maximo son 1800 s", r["hueco_max_s"] == 1800.0,
+        f"dio {r['hueco_max_s']}")
+
+# EL CASO QUE JUSTIFICA TODO EL MODULO: prendida y sorda. Una sesion con
+# latidos y CERO filas en adsb_log tiene que dar cobertura completa -- el
+# silencio de datos no la puede borrar del registro.
+_conn.execute("DELETE FROM grabador_sesion")
+s3 = adsb_uptime.abrir_sesion(_conn, latido_cada_s=30.0, ahora=T0)
+adsb_uptime.latir(_conn, s3, ahora=T0 + 3600)
+sorda = adsb_uptime.resumen(_conn, desde=T0, hasta=T0 + 3600, ahora=T0 + 3600)
+revisar("prendida y sorda: cobertura 100% aunque no entro un solo mensaje",
+        sorda["cobertura"] == 1.0, f"dio {sorda['cobertura']}")
+revisar("y la reconoce corriendo, no caida",
+        sorda["corriendo"] is True and sorda["caidas"] == 0,
+        f"corriendo={sorda['corriendo']} caidas={sorda['caidas']}")
+
+# Sin sesiones, la cobertura es None y NO 0.0: un cero seria afirmar que no
+# grabo nada, y con la tabla vacia no hay con que afirmarlo.
+_conn.execute("DELETE FROM grabador_sesion")
+vacio = adsb_uptime.resumen(_conn, desde=T0, hasta=T0 + 3600, ahora=T0 + 3600)
+revisar("tabla vacia: cobertura None, no 0.0", vacio["cobertura"] is None,
+        f"dio {vacio['cobertura']!r}")
+revisar("y el hueco es la ventana entera", vacio["hueco_max_s"] == 3600.0,
+        f"dio {vacio['hueco_max_s']}")
+_conn.close()
+print()
+
 print("=" * 55)
 print("TODO CORRECTO" if not fallos else f"FALLAS: {fallos}")
 raise SystemExit(1 if fallos else 0)

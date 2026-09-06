@@ -47,7 +47,33 @@ def describir(estado: dict) -> list[str]:
         lugar += "   <-- POR DEFECTO, nadie lo configuro alla"
     lineas.append(f"     medido desde: {lugar}")
     lineas.append(f"     grabado en  : {estado.get('origen', '?')}")
+    lineas.append(f"     grabador    : {_uptime(estado.get('uptime_24h'))}")
     return lineas
+
+
+def _uptime(up: dict | None) -> str:
+    """Cuanto estuvo arriba el grabador, para quien lee la foto desde Torre.
+
+    Va en la misma lista que "medido desde" y por el mismo motivo: quien abre
+    estos datos no tiene manera de saber si un hueco es que no volo nadie o que
+    no estabamos escuchando, y esa diferencia decide si un conteo se puede usar.
+
+    SIN REGISTRO SE DICE QUE NO LO HAY, no se imprime 0%. Un cero seria una
+    afirmacion sobre la antena que nadie midio. Ver adsb_uptime.resumen().
+    """
+    if not up:
+        return "sin registro de uptime (base anterior al registro)"
+    if up.get("cobertura") is None:
+        return f"{up.get('sesiones', 0)} sesion(es), sin cobertura calculable"
+    partes = [f"arriba el {up['cobertura'] * 100:.1f}% de las ultimas 24 h"]
+    hueco = up.get("hueco_max_s")
+    if hueco is not None:
+        partes.append(f"hueco maximo {hueco / 60:.0f} min")
+    # Las caidas van al final y con flecha, igual que el receptor por defecto:
+    # es el dato que cambia como se lee todo lo de arriba.
+    if up.get("caidas"):
+        partes.append(f"<-- {up['caidas']} caida(s) sin cierre")
+    return ", ".join(partes)
 
 
 def exportar_receptor(estado: dict, destino: Path) -> bool:

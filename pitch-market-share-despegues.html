@@ -1,0 +1,722 @@
+<title>Market Share de Despegues</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#E9EDEF;
+    --surface:#FAFCFC;
+    --surface-2:#F1F5F6;
+    --ink:#0F1A21;
+    --ink-soft:#4C5D68;
+    --ink-faint:#7A8C96;
+    --rule:#C9D4D9;
+    --rule-soft:#DDE5E8;
+    --petrol:#0F5375;
+    --warm:#A8681A;
+    --alert:#A0322A;
+    --ok:#1B6B50;
+    --display:"Archivo","Helvetica Neue",Arial,sans-serif;
+    --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+    --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#0A1216;
+      --surface:#121D24;
+      --surface-2:#17252D;
+      --ink:#E2EAEE;
+      --ink-soft:#98ABB5;
+      --ink-faint:#6E828D;
+      --rule:#26363F;
+      --rule-soft:#1D2C34;
+      --petrol:#68B6D6;
+      --warm:#DFA847;
+      --alert:#E58274;
+      --ok:#63C39B;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0A1216;
+    --surface:#121D24;
+    --surface-2:#17252D;
+    --ink:#E2EAEE;
+    --ink-soft:#98ABB5;
+    --ink-faint:#6E828D;
+    --rule:#26363F;
+    --rule-soft:#1D2C34;
+    --petrol:#68B6D6;
+    --warm:#DFA847;
+    --alert:#E58274;
+    --ok:#63C39B;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--body);
+    font-size:17px;
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .sheet{
+    max-width:940px;
+    margin:0 auto;
+    padding:clamp(20px,4vw,56px) clamp(16px,4vw,48px) 96px;
+  }
+  .col{max-width:66ch}
+
+  h1,h2,h3,.eyebrow,.label,.stage-num{font-family:var(--display)}
+  h1{
+    font-size:clamp(2.1rem,5.4vw,3.5rem);
+    line-height:1.02;
+    font-weight:700;
+    letter-spacing:-.022em;
+    text-wrap:balance;
+    margin:.15em 0 .5em;
+  }
+  h2{
+    font-size:clamp(1.25rem,2.6vw,1.6rem);
+    font-weight:600;
+    letter-spacing:-.012em;
+    line-height:1.15;
+    text-wrap:balance;
+    margin:0;
+  }
+  h3{
+    font-size:1.02rem;
+    font-weight:600;
+    letter-spacing:.005em;
+    margin:0 0 .35em;
+  }
+  p{margin:0 0 1em}
+  a{color:var(--petrol)}
+  strong{font-weight:600}
+  .eyebrow{
+    font-size:.7rem;
+    text-transform:uppercase;
+    letter-spacing:.16em;
+    font-weight:600;
+    color:var(--petrol);
+  }
+  .lede{font-size:1.17rem;line-height:1.5;color:var(--ink-soft)}
+  .lede strong{color:var(--ink)}
+  .mono{font-family:var(--mono);font-size:.86em;font-variant-numeric:tabular-nums}
+  .fig{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:500}
+
+  header{border-top:3px solid var(--ink);padding-top:18px}
+  .meta{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 26px;
+    font-family:var(--mono);
+    font-size:.74rem;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    color:var(--ink-faint);
+    margin-top:28px;
+    padding-top:12px;
+    border-top:1px solid var(--rule-soft);
+  }
+  .meta b{color:var(--ink-soft);font-weight:500}
+
+  section{margin-top:64px}
+  .sec-head{
+    display:flex;
+    align-items:baseline;
+    gap:16px;
+    padding-bottom:10px;
+    margin-bottom:22px;
+    border-bottom:1px solid var(--rule);
+  }
+  .sec-head .n{
+    font-family:var(--mono);
+    font-size:.78rem;
+    font-weight:600;
+    color:var(--petrol);
+    letter-spacing:.06em;
+    flex:none;
+  }
+
+  .flow{
+    margin:26px 0 8px;
+    padding:22px 18px 14px;
+    background:var(--surface);
+    border:1px solid var(--rule-soft);
+    overflow-x:auto;
+  }
+  .flow svg{display:block;min-width:660px;width:100%;height:auto}
+  .flow-note{
+    font-family:var(--mono);
+    font-size:.72rem;
+    color:var(--ink-faint);
+    letter-spacing:.03em;
+    margin:10px 0 0;
+  }
+  .sv-box{fill:var(--surface-2);stroke:var(--rule)}
+  .sv-title{fill:var(--ink);font-family:var(--display);font-size:13px;font-weight:600}
+  .sv-sub{fill:var(--ink-soft);font-family:var(--mono);font-size:10.5px}
+  .sv-tag{fill:var(--petrol);font-family:var(--mono);font-size:9.5px;letter-spacing:.08em}
+  .sv-arrow{stroke:var(--petrol);stroke-width:1.6;fill:none}
+  .sv-arrow-head{fill:var(--petrol)}
+  .sv-edge{fill:var(--ink-faint);font-family:var(--mono);font-size:10px}
+  .sv-rule{stroke:var(--rule);stroke-width:1}
+
+  .stages{display:flex;flex-direction:column;margin-top:8px}
+  .stage{
+    display:grid;
+    grid-template-columns:64px 1fr;
+    gap:0 20px;
+    padding:20px 0;
+    border-top:1px solid var(--rule-soft);
+  }
+  .stage:first-child{border-top:1px solid var(--rule)}
+  .stage-num{
+    font-family:var(--mono);
+    font-size:.95rem;
+    font-weight:600;
+    color:var(--warm);
+    letter-spacing:.02em;
+    padding-top:.15em;
+  }
+  .stage-body{max-width:60ch}
+  .stage-body p:last-child{margin-bottom:0}
+  .where{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:.7rem;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+    color:var(--ink-faint);
+    margin-bottom:.5em;
+  }
+
+  .bars{
+    display:flex;
+    flex-direction:column;
+    gap:18px;
+    margin:26px 0 10px;
+    padding:24px;
+    background:var(--surface);
+    border:1px solid var(--rule-soft);
+    border-left:3px solid var(--petrol);
+  }
+  .bar-row{display:grid;grid-template-columns:132px 1fr 76px;gap:14px;align-items:center}
+  .bar-name{font-family:var(--display);font-weight:600;font-size:.95rem}
+  .bar-track{height:16px;background:var(--surface-2);border:1px solid var(--rule-soft)}
+  .bar-fill{height:100%;background:var(--petrol);display:block}
+  .bar-fill.thin{background:var(--alert);opacity:.8}
+  .bar-val{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.95rem;font-weight:600;text-align:right}
+  .bar-cap{font-family:var(--mono);font-size:.72rem;color:var(--ink-faint);letter-spacing:.03em;margin:0}
+
+  .scroll{overflow-x:auto;margin:22px 0 8px;border:1px solid var(--rule-soft)}
+  table{border-collapse:collapse;width:100%;min-width:520px;background:var(--surface)}
+  caption{
+    caption-side:bottom;
+    text-align:left;
+    font-family:var(--mono);
+    font-size:.72rem;
+    color:var(--ink-faint);
+    padding:10px 14px;
+    letter-spacing:.03em;
+  }
+  th,td{
+    text-align:left;
+    padding:10px 14px;
+    border-bottom:1px solid var(--rule-soft);
+    font-size:.93rem;
+    vertical-align:top;
+  }
+  thead th{
+    font-family:var(--display);
+    font-size:.72rem;
+    text-transform:uppercase;
+    letter-spacing:.1em;
+    font-weight:600;
+    color:var(--ink-soft);
+    background:var(--surface-2);
+    border-bottom:1px solid var(--rule);
+    white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  td.k{font-family:var(--mono);font-size:.85rem;white-space:nowrap}
+
+  .tag{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:.68rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:2px 7px;
+    border:1px solid currentColor;
+    white-space:nowrap;
+  }
+  .tag.med{color:var(--ok)}
+  .tag.mod{color:var(--warm)}
+  .tag.ypf{color:var(--petrol)}
+
+  .caveat{
+    margin:26px 0;
+    padding:20px 24px;
+    background:var(--surface);
+    border:1px solid var(--rule-soft);
+    border-left:3px solid var(--alert);
+    max-width:68ch;
+  }
+  .caveat h3{color:var(--alert)}
+  .caveat p:last-child{margin-bottom:0}
+
+  .verdict{
+    margin:24px 0 8px;
+    padding:20px 24px;
+    background:var(--surface);
+    border:1px solid var(--rule-soft);
+    border-left:3px solid var(--ok);
+    max-width:68ch;
+  }
+  .verdict h3{color:var(--ok)}
+  .verdict p:last-child{margin-bottom:0}
+
+  .ask{
+    display:grid;
+    gap:1px;
+    background:var(--rule-soft);
+    border:1px solid var(--rule-soft);
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    margin-top:22px;
+  }
+  .ask > div{background:var(--surface);padding:20px 22px}
+  .ask h3{color:var(--petrol)}
+  .ask p{font-size:.95rem;margin:0;color:var(--ink-soft)}
+
+  footer{
+    margin-top:72px;
+    padding-top:16px;
+    border-top:3px solid var(--ink);
+    font-family:var(--mono);
+    font-size:.74rem;
+    color:var(--ink-faint);
+    letter-spacing:.03em;
+  }
+  @media (max-width:560px){
+    body{font-size:16px}
+    .stage{grid-template-columns:1fr;gap:6px}
+    .stage-num{padding-top:0}
+    .bar-row{grid-template-columns:1fr 60px;grid-template-areas:"name val" "track track"}
+    .bar-name{grid-area:name}
+    .bar-val{grid-area:val}
+    .bar-track{grid-area:track}
+  }
+</style>
+
+<style>
+  .stat{
+    display:inline-block;
+    font-family:var(--mono);
+    font-size:.68rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:2px 7px;
+    white-space:nowrap;
+    border:1px solid currentColor;
+  }
+  .stat.listo{color:var(--ok)}
+  .stat.hacer{color:var(--warm)}
+  .stat.ypf{color:var(--petrol)}
+  .phase{
+    display:grid;
+    grid-template-columns:auto 1fr;
+    gap:0 22px;
+    padding:22px 0;
+    border-top:1px solid var(--rule-soft);
+  }
+  .phase:first-of-type{border-top:1px solid var(--rule)}
+  .phase-tag{
+    font-family:var(--mono);
+    font-size:.72rem;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--warm);
+    padding-top:.35em;
+    white-space:nowrap;
+  }
+  .phase-body{max-width:60ch}
+  .phase-body p:last-child{margin-bottom:0}
+  .cmd{
+    font-family:var(--mono);
+    font-size:.82rem;
+    background:var(--surface-2);
+    border:1px solid var(--rule-soft);
+    padding:10px 13px;
+    margin:.7em 0;
+    overflow-x:auto;
+    white-space:pre;
+    color:var(--ink);
+  }
+  @media (max-width:560px){
+    .phase{grid-template-columns:1fr;gap:6px}
+    .phase-tag{padding-top:0}
+  }
+</style>
+
+<div class="sheet">
+  <header>
+    <div class="eyebrow">Propuesta de implementación · ADS-B Aeroparque</div>
+    <h1>El market share se mide sobre los despegues</h1>
+    <p class="lede col"><strong>Una PC dedicada con la antena al costado de la pista escucha lo que despega de Aeroparque, publica cada 5 minutos un volcado quieto a SharePoint, y desde Torre se lee ese volcado para calcular el share de JET&nbsp;A-1 del día en curso.</strong> Sin cámara, sin red compartida entre las dos puntas, y sin nadie que tenga que abrir una ventana a la mañana.</p>
+    <div class="meta">
+      <span><b>Alcance</b> solo partidas</span>
+      <span><b>Cadencia</b> 5 min</span>
+      <span><b>Recepción</b> todas las partidas mientras graba</span>
+      <span><b>Hardware</b> desde USD 0 con una PC de rezago</span>
+      <span><b>Falta</b> dashboard MS + tabla de contratos</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head"><span class="n">01</span><h2>Por qué solo despegues</h2></div>
+    <div class="col">
+      <p><strong>Mientras el grabador está prendido, las partidas entran todas.</strong> Está verificado una por una contra los listados de Aeropuertos Argentina: no hay despegue que ocurra con la antena grabando y que el sistema no vea. La recepción no es el límite, y cualquier porcentaje de cobertura que ande dando vueltas sale de días en que la antena se prendió y se apagó a mano para probar ganancias y ubicaciones — eso mide las veces que la apagué, no la antena.</p>
+      <p>El límite real está en el otro lado de la operación. Un despegue deja un ascenso largo y limpio, con posiciones a 8–15&nbsp;km y miles de pies: se ve entero. Un aterrizaje termina en el suelo, donde la señal se apaga y el protocolo deja de mandar altitud — la mayoría queda sin confirmar, sin pista asignable.</p>
+      <p>Así que el alcance no es un recorte de conveniencia: la mitad medible de la operación son los despegues, y para un share de combustible es justo la mitad que importa, porque el avión carga antes de irse.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">02</span><h2>Cómo queda montado</h2></div>
+    <div class="col">
+      <p>La PC de la antena y la PC de Torre <strong>nunca se hablan directamente</strong>. Entre las dos hay un buzón: una carpeta de SharePoint donde una escribe y la otra lee. Es lo que hace que esto funcione sin abrir puertos, sin VPN, y sin que un reinicio de un lado apague el tablero del otro.</p>
+    </div>
+
+    <div class="flow" role="img" aria-label="Diagrama: la PC de la antena en Aeroparque publica a SharePoint; la PC de Torre lee de SharePoint y sirve el dashboard de market share.">
+      <svg viewBox="0 0 700 208" xmlns="http://www.w3.org/2000/svg">
+        <rect class="sv-box" x="8" y="34" width="176" height="98" rx="2"/>
+        <text class="sv-tag" x="22" y="56">PC DEDICADA · AEROPARQUE</text>
+        <text class="sv-title" x="22" y="82">Antena + grabador</text>
+        <text class="sv-sub" x="22" y="101">RTL-SDR · 266 m del eje</text>
+        <text class="sv-sub" x="22" y="117">clasifica la partida</text>
+
+        <path class="sv-arrow" d="M188 84 H256"/>
+        <polygon class="sv-arrow-head" points="258,84 249,79 249,89"/>
+        <text class="sv-edge" x="196" y="74">escribe</text>
+        <text class="sv-edge" x="192" y="105">cada 5 min</text>
+
+        <rect class="sv-box" x="262" y="34" width="176" height="98" rx="2"/>
+        <text class="sv-tag" x="276" y="56">SHAREPOINT</text>
+        <text class="sv-title" x="276" y="82">Volcado quieto</text>
+        <text class="sv-sub" x="276" y="101">adsb_log.db · .csv</text>
+        <text class="sv-sub" x="276" y="117">estado.json</text>
+
+        <path class="sv-arrow" d="M442 84 H510"/>
+        <polygon class="sv-arrow-head" points="512,84 503,79 503,89"/>
+        <text class="sv-edge" x="456" y="74">lee</text>
+        <text class="sv-edge" x="446" y="105">copia local</text>
+
+        <rect class="sv-box" x="516" y="34" width="176" height="98" rx="2"/>
+        <text class="sv-tag" x="530" y="56">TORRE YPF</text>
+        <text class="sv-title" x="530" y="82">Dashboard MS</text>
+        <text class="sv-sub" x="530" y="101">despegue → litros</text>
+        <text class="sv-sub" x="530" y="117">share del día</text>
+
+        <line class="sv-rule" x1="8" y1="160" x2="692" y2="160"/>
+        <text class="sv-sub" x="8" y="180">sin cámara</text>
+        <text class="sv-sub" x="262" y="180">nadie tiene el archivo abierto</text>
+        <text class="sv-sub" x="516" y="180">solo lectura</text>
+      </svg>
+      <p class="flow-note">La cámara y el modelo de video quedan fuera: no aportan al conteo de partidas y son lo único que pide una PC con GPU.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Todo lo marcado «listo» ya corre hoy y está verificado punta a punta entre dos PC. Lo que falta es el tablero y el dato de negocio.</caption>
+        <thead><tr><th>Pieza</th><th>Dónde corre</th><th>Qué se ejecuta</th><th>Estado</th></tr></thead>
+        <tbody>
+          <tr><td>Grabador ADS-B</td><td>PC antena</td><td class="k">MEDIR-EN-AEROPARQUE.bat</td><td><span class="stat listo">listo</span></td></tr>
+          <tr><td>Clasificador de partidas</td><td>PC antena</td><td class="k">aeropuerto.py</td><td><span class="stat listo">listo</span></td></tr>
+          <tr><td>Publicador a SharePoint</td><td>PC antena</td><td class="k">PUBLICAR-DATOS.bat</td><td><span class="stat listo">listo</span></td></tr>
+          <tr><td>Arranque desatendido</td><td>PC antena</td><td class="k">Programador de tareas</td><td><span class="stat hacer">a hacer</span></td></tr>
+          <tr><td>Registro de <i>uptime</i></td><td>PC antena</td><td class="k">módulo nuevo, chico</td><td><span class="stat hacer">a hacer</span></td></tr>
+          <tr><td>Lectura del volcado</td><td>Torre</td><td class="k">VER-DATOS-COMPARTIDOS.bat</td><td><span class="stat listo">listo</span></td></tr>
+          <tr><td>Dashboard de share</td><td>Torre</td><td class="k">módulo nuevo</td><td><span class="stat hacer">a hacer</span></td></tr>
+          <tr><td>Tabla de contratos</td><td>—</td><td class="k">dato de YPF</td><td><span class="stat ypf">YPF</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">03</span><h2>Puesta en marcha, en el orden en que se hace</h2></div>
+
+    <div class="stages">
+      <div class="stage">
+        <div class="stage-num">01</div>
+        <div class="stage-body">
+          <span class="where">PC antena · una vez</span>
+          <h3>Dongle, driver y energía</h3>
+          <p>Se enchufa el dongle <strong>antes</strong> de arrancar nada y se instala el driver WinUSB con <span class="mono">INSTALAR-ADSB.bat</span>. Después, tres cosas de Windows que son las que en la práctica cortan una grabación de un día entero: suspensión en <em>nunca</em>, <strong>suspensión selectiva de USB desactivada</strong>, y reinicio automático tras corte de energía. La PC no necesita monitor ni que nadie se loguee, pero sí que no se duerma.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-num">02</div>
+        <div class="stage-body">
+          <span class="where">PC antena · una vez</span>
+          <h3>Fijar la configuración en un solo lugar</h3>
+          <p>Todo sale de <span class="mono">configuracion.bat</span>, que es el único archivo donde se define, para que ninguna ruta ni coordenada quede escrita en el código. Lo importante es el preset del receptor: <strong>el valor por defecto del código es San Isidro</strong>, y un proceso que arranque sin él mide desde el lugar equivocado sin fallar.</p>
+          <div class="cmd">ADSB_RECEIVER=aeroparque-pista
+ADSB_SOURCE=iq
+ADSB_GAIN=49.6
+ADSB_COMPARTIDO=&lt;carpeta de SharePoint&gt;</div>
+          <p>La antena queda a 266 m del eje, a mitad de campo, con el sector <strong>104°–117°</strong> despejado: es la dirección de la pista y lo único que hace falta despejar.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-num">03</div>
+        <div class="stage-body">
+          <span class="where">PC antena · queda corriendo</span>
+          <h3>Autologon y dos tareas programadas, no dos ventanas abiertas</h3>
+          <p>Hoy el grabador y el publicador se arrancan a mano y se dejan abiertos. Para una PC dedicada eso pasa a ser <strong>dos tareas con reinicio automático si el proceso muere</strong>. Es el cambio que convierte «lee todo mientras está prendida» en «está prendida siempre».</p>
+          <p><strong>Pero las tareas van «al iniciar sesión», con autologon — no «corra el usuario o no».</strong> Y es por SharePoint: el cliente de sincronización <strong>necesita una sesión de usuario abierta</strong>. Configurado como servicio sin nadie logueado, el grabador graba, el publicador escribe el volcado en la carpeta local… y nada sube nunca. Es una falla silenciosa perfecta: los dos procesos se ven sanos y Torre queda mirando una foto congelada.</p>
+          <p>El otro detalle a respetar: <strong>el dongle es exclusivo de un proceso</strong>. Si queda una grabación vieja corriendo, la nueva no lo puede tomar. La tarea tiene que ser única y no permitir instancias en paralelo.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-num">04</div>
+        <div class="stage-body">
+          <span class="where">PC antena → SharePoint</span>
+          <h3>Publicar una copia quieta cada 5 minutos</h3>
+          <p>No se sincroniza la base viva. Se consolida con la API de backup de SQLite —hay filas que viven solo en el <span class="mono">-wal</span> y una copia de archivo no las ve—, se escribe a un <span class="mono">.parcial</span> y recién ahí se renombra, que es atómico. Torre ve la copia anterior completa o la nueva completa, nunca una a medias. Quedan tres archivos: la base, un CSV que abre con Excel sin instalar nada, y <span class="mono">estado.json</span> con <strong>de cuándo son los datos y desde dónde se midieron</strong>.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-num">05</div>
+        <div class="stage-body">
+          <span class="where">Torre</span>
+          <h3>Leer y calcular</h3>
+          <p>Torre tiene la carpeta sincronizada y corre <span class="mono">VER-DATOS-COMPARTIDOS.bat</span>, que copia el volcado a disco local —no se lee nunca desde la carpeta sincronizada— y levanta el tablero. La ubicación del receptor la toma del manifiesto y no de su propio valor por defecto: si usara el suyo, mostraría distancias medidas desde un lugar donde nunca hubo una antena.</p>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="stage-num">06</div>
+        <div class="stage-body">
+          <span class="where">Torre · a construir</span>
+          <h3>El tablero de share</h3>
+          <p>Es el módulo nuevo, y es chico porque se apoya en lo que ya está: recorre los despegues del día del volcado, resuelve operador y tipo de avión, aplica el coeficiente de consumo por tipo, cruza contra la tabla de contratos y publica el share. Arriba del número, dos cosas fijas: <strong>de qué ventana horaria habla</strong> y <strong>si el grabador estuvo arriba toda esa ventana</strong>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">04</span><h2>De un despegue a un litro de JET A-1</h2></div>
+    <div class="col">
+      <p>La antena entrega operaciones, no litros. El cálculo son seis pasos, y cada uno tiene un origen distinto que conviene tener separado en el código y a la vista en la pantalla: lo que se <span class="tag med">mide</span>, lo que se <span class="tag mod">modela</span> y lo que <span class="tag ypf">aporta YPF</span>.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>El coeficiente de consumo sale del modelo ya calibrado contra OpenAP que se usa en el mapa de negocio. A 0,8 kg/L, un A320 a Córdoba —645 km— son unos 2.430 kg ≈ 3.040 L.</caption>
+        <thead><tr><th>Paso</th><th>De dónde sale</th><th>Origen</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Despegue</td><td>pasada clasificada, con hora real</td><td><span class="tag med">medido</span></td></tr>
+          <tr><td class="k">Aerolínea</td><td>distintivo congelado en la operación <span class="mono">(ARG1403 → Aerolíneas)</span></td><td><span class="tag med">medido</span></td></tr>
+          <tr><td class="k">Tipo de avión</td><td>ICAO24 cruzado contra el registro</td><td><span class="tag med">medido</span></td></tr>
+          <tr><td class="k">Litros cargados</td><td>coeficiente por tipo —<span class="mono">3,77 kg/km</span> en el A320— por la distancia de la ruta</td><td><span class="tag mod">modelado</span></td></tr>
+          <tr><td class="k">Proveedor</td><td>tabla de contratos por operador</td><td><span class="tag ypf">YPF</span></td></tr>
+          <tr><td class="k">Share</td><td>litros de operadores YPF ÷ litros totales de la ventana</td><td><span class="tag mod">derivado</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <p>Una decisión de implementación que vale marcar: el número de vuelo se toma del <strong>distintivo que la aeronave transmitía en el instante de la operación</strong>, no del último escuchado de esa dirección. Suena a detalle y no lo es — en cuanto el avión vuelve a volar, el distintivo nuevo le pisa el número a la operación anterior, y el share terminaría atribuyendo litros a la aerolínea equivocada.</p>
+      <p>Numerador y denominador salen de la <strong>misma</strong> lista de despegues, así que no hay forma de mover uno sin el otro. El único caso en que el share se corre es si el proceso se cae justo en una franja horaria dominada por un operador — y para eso está el registro de <em>uptime</em> al lado del número.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">05</span><h2>Dos antenas: la idea, y la versión que sí funciona</h2></div>
+    <div class="col">
+      <p>La propuesta era usar dos: una que capte todo y le avise a la otra cuándo hay un despegue, para que la segunda se concentre en eso y el ruido no haga perder vuelos. <strong>El disparo no sirve, pero el instinto de poner dos receptores sí.</strong></p>
+      <p>Por qué el disparo no cambia nada: todo el tráfico transmite en <span class="mono">1090 MHz</span>, en la misma frecuencia y sin turno. Un receptor no puede «apuntar» a un avión ni prestarle más atención a uno que a otro — decodifica el mensaje que le llega o no le llega, y avisarle que viene un despegue no mejora en nada la señal de ese avión. Además <strong>el dongle es exclusivo de un proceso</strong> y dos no comparten antena sin un divisor, así que esa segunda punta suma hardware sin sumar recepción.</p>
+    </div>
+
+    <div class="verdict">
+      <h3>La versión que sí paga: dos receptores independientes, y se fusionan los mensajes</h3>
+      <p>Dos PC con su dongle, cada una en un lugar distinto —una al costado de la pista, otra en la torre o en el otro extremo del campo—, <strong>las dos grabando todo y publicando al mismo SharePoint</strong> en su propia subcarpeta. Torre une los dos flujos por ICAO24 y hora. Lo que una pierde por un edificio o por un lóbulo muerto de la antena, la otra lo tiene; y si una PC se cuelga o se reinicia por una actualización, la ventana no queda con un agujero.</p>
+      <p>La otra mejora, si se quiere ir más lejos: una <strong>antena directiva apuntada al sector 104°–117°</strong>, que es donde está la pista. Eso sí «concentra» la recepción en los despegues, pero se hace con el hierro y no con software, y conviene que sea la <em>segunda</em> antena — la primera se queda omnidireccional para no perder de vista el resto del campo.</p>
+      <p>Costo: un dongle y una PC más, y en Torre una fusión por clave que ya tiene con qué hacerse, porque cada fila trae ICAO24, hora y receptor. <strong>Es fase 3</strong>: la primera antena funciona sola y el tablero no depende de esto para arrancar.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">06</span><h2>Plan, y qué hace falta de cada lado</h2></div>
+
+    <div class="phase">
+      <div class="phase-tag">Fase 1 · semana 1</div>
+      <div class="phase-body">
+        <h3>Dejarlo prendido y desatendido</h3>
+        <p>PC dedicada en la oficina de plataforma, autologon y dos tareas programadas, carpeta de SharePoint creada con escritura para la antena y lectura para Torre, y el registro de <em>uptime</em> andando. La prueba de que la fase cerró no es que los procesos estén vivos: es <strong>abrir el volcado desde Torre y ver la hora de hace cinco minutos</strong>. Al final de la semana se cruza contra el listado de AA2000 con el grabador prendido de corrido: ahí la comparación es justa, y queda por escrito lo que hoy es una verificación a mano.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="phase-tag">Fase 2 · con la tabla de contratos</div>
+      <div class="phase-body">
+        <h3>El tablero de share en Torre</h3>
+        <p>Se construye el módulo de cálculo y la pantalla. Depende de un solo dato externo, y es el único que el sistema no puede medir ni modelar: <strong>qué operador carga con YPF y qué operador no</strong>. Sin eso hay volumen por aerolínea, pero no hay share.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="phase-tag">Fase 3 · opcional</div>
+      <div class="phase-body">
+        <h3>Segundo receptor y antena directiva</h3>
+        <p>Redundancia real contra caídas y contra sombras de edificio, fusionando los dos flujos en Torre. No es requisito de nada de lo anterior.</p>
+      </div>
+    </div>
+
+    <div class="ask">
+      <div>
+        <h3>Una PC dedicada</h3>
+        <p>Puede ser <strong>una de rezago</strong> y salir cero, o un mini PC N100 fanless de ~USD 200. Sin GPU, sin pantalla, sin periféricos. Las cinco opciones ordenadas por precio están en la sección 07.</p>
+      </div>
+      <div>
+        <h3>Una carpeta de SharePoint</h3>
+        <p>Sincronizada en las dos PC. Escritura para la antena, lectura para Torre. Un solo destino, fijado por variable de entorno.</p>
+      </div>
+      <div>
+        <h3>La tabla de contratos</h3>
+        <p>Qué operador carga con YPF. Es el único insumo del cálculo que no sale de la antena ni del modelo.</p>
+      </div>
+      <div>
+        <h3>Una cuenta y el WiFi de la oficina</h3>
+        <p>De IT: la máquina registrada en la red —sin portal que pida login después de cada reinicio— y una cuenta con la que la sesión quede abierta sincronizando la carpeta.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">07</span><h2>La PC que hay que comprar</h2></div>
+    <div class="col">
+      <p>Lo que decide la compra es una medición del propio software, no el catálogo: <span class="mono">rtl_sdr</span> entrega <strong>2 MS/s complejos, 4 MB/s continuos</strong> por USB, y el demodulador calcula magnitud y busca preámbulos <strong>en un solo hilo</strong> de Python con numpy. Entonces lo que importa es <strong>reloj por núcleo</strong>, no cantidad de núcleos, y no hace falta GPU: al salir la cámara no queda nada que acelerar.</p>
+      <p>El disco tampoco es un criterio. La base entera son <span class="fig">2,2 MB</span> para 31.000 observaciones, y un día completo pegado a la pista deja ~<span class="fig">1,2 MB</span> de CSV: llenar 256 GB llevaría décadas.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Presupuesto de la clase «mini PC N100»: del orden de USD 150–300 según sea con ventilador o fanless. Verificar precio al comprar.</caption>
+        <thead><tr><th>Requisito</th><th>Por qué, concretamente</th></tr></thead>
+        <tbody>
+          <tr><td>Intel <strong>N100 / N150</strong> (o Ryzen equivalente)</td><td>Single-thread sobrado para el demodulador. Un N100 rinde cerca del triple que un Celeron J4125 en un solo núcleo, que es el que se usa.</td></tr>
+          <tr><td><strong>BIOS con «restore on AC power loss»</strong></td><td>Después de un corte tiene que arrancar sola. Si la BIOS no lo trae, la máquina no sirve para esto y no se arregla con software.</td></tr>
+          <tr><td>16 GB RAM · SSD 256–512 GB</td><td>8 GB alcanzan; la diferencia de precio es mínima. El disco sobra en cualquier configuración.</td></tr>
+          <tr><td>Ethernet <strong>además</strong> de WiFi</td><td>Aunque hoy sea WiFi, no comprar una sin puerto de red: el día que haya un cable es la diferencia entre estable y «se cae los martes».</td></tr>
+          <tr><td>Un puerto <strong>USB 2.0</strong> libre</td><td>El dongle va ahí y no en USB 3: los puertos USB 3 radian ruido de banda ancha justo donde escuchamos.</td></tr>
+          <tr><td>Fanless, si el ambiente lo permite</td><td>Sin partes móviles y mejor contra el polvo. Pero corre más caliente: si la sala pasa de 35 °C, conviene una con ventilador y filtro.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="caveat">
+      <h3>El detalle que cambia la compra: casi todas vienen con Windows 11 Home</h3>
+      <p>Sin pantalla la máquina se administra en remoto, y <strong>Home no puede recibir Escritorio Remoto</strong> — solo puede iniciarlo. Los modelos más baratos y populares, el Beelink S12 Pro entre ellos, vienen con Home.</p>
+      <p>Hay dos salidas y las dos sirven: <strong>comprar un modelo que ya traiga Windows 11 Pro</strong> —los fanless de tipo industrial suelen traerlo—, o quedarse con Home y administrarla por <strong>OpenSSH Server</strong>, que sí está disponible en Home como característica opcional y da una consola de PowerShell. Para un grabador headless una consola es todo lo que hace falta: arrancar, parar y mirar el log. El monitoreo visual, aparte, se hace entrando al dashboard por <span class="mono">http://&lt;IP&gt;:8000</span> desde cualquier navegador de la red.</p>
+    </div>
+
+    <div class="col">
+      <h3>Las opciones, de la más barata a la más cara</h3>
+      <p>La primera sale <strong>cero pesos</strong> y es la que hay que mirar antes de pedir presupuesto. La última es la recomendada si se compra.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <caption>Precios de referencia en USD al 2026-09-06, orden de magnitud y a verificar al comprar. El mismo modelo se vende en varias configuraciones: confirmar N100, la RAM, y si dice Pro o Home.</caption>
+        <thead><tr><th>Opción</th><th>Precio</th><th>Qué tiene a favor y en contra</th><th>Dónde</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>1 · Una PC de rezago de YPF</strong><br>desktop corporativo 2016+ (i5-6500 o mejor)</td>
+            <td class="num"><strong>USD 0</strong></td>
+            <td>Un i5 de esa época tiene <strong>mejor single-thread que un N100</strong>. Y ya está en el dominio: se caen de un saque el WiFi con portal y la licencia, porque la imagen corporativa es Pro. En contra: consume ~70 W contra 8 W (unos USD 10/mes contra 1), y las <strong>políticas de dominio las controla IT</strong> — hay que pedir excepción de suspensión y de reinicio por Windows Update.</td>
+            <td>pedirla adentro</td>
+          </tr>
+          <tr>
+            <td><strong>2 · Thin client usado</strong><br>HP t630, Dell Wyse 5070</td>
+            <td class="num">USD 40–90</td>
+            <td><strong>No recomendado.</strong> Son J4105/J5005, la clase de CPU que hay que evitar. Puede que ande, pero si no da <strong>pierde muestras y hoy ninguna pantalla lo avisa</strong>. Solo si ya lo tenés y lo podés medir antes de comprometerlo.</td>
+            <td>usado</td>
+          </tr>
+          <tr>
+            <td><strong>3 · Mini PC N100/N95 básico</strong><br>8 GB · 256 GB · con ventilador</td>
+            <td class="num">USD 120–160</td>
+            <td>La compra barata que sí sirve: los dos recortes están medidos y no atan nada. Viene con <strong>Home</strong>, así que se administra por SSH en vez de Escritorio Remoto.</td>
+            <td><a href="https://listado.mercadolibre.com.ar/mini-pc-n100">buscar en ML</a></td>
+          </tr>
+          <tr>
+            <td><strong>4 · Beelink S12 Pro</strong><br>N100 · 16 GB · 500 GB · con ventilador</td>
+            <td class="num">USD 170–200</td>
+            <td>Marca conocida y soporte real. <strong>Pero viene con Home</strong>: o SSH, o pagar el upgrade a Pro, que borra la diferencia de precio con la opción 5.</td>
+            <td><a href="https://www.amazon.com/Beelink-Intel-N100-Computer-Desktop-Display/dp/B0BVFS94J5">Amazon</a></td>
+          </tr>
+          <tr>
+            <td><strong>5 · MeLE Quieter4C</strong> ★<br>N100 · 16 GB · 512 GB · <strong>fanless</strong></td>
+            <td class="num">USD 200–280</td>
+            <td><strong>La recomendada si se compra.</strong> Fanless —sin partes móviles, mejor contra el polvo— pensada para cartelería y automatización 24/7, y trae <strong>Windows 11 Pro de fábrica</strong>: resuelve el Escritorio Remoto sin pagar upgrade. Alternativa equivalente: Quieter DL, con doble LAN.</td>
+            <td><a href="https://www.mercadolibre.com.ar/mele-fanless-mini-pc-quieter4cn10016gb512gbwins11-pro/p/MLA2016460249">Mercado Libre AR</a> · <a href="https://www.amazon.com/MeLE-Quieter4C-Fanless-Computer-Business/dp/B0DZXKHQ3S">Amazon</a> · <a href="https://www.mercadolibre.com.ar/mele-quieter-dl-n100-mini-pc-16gb-512gb-windows-11/up/MLAU3089744224">Quieter DL</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <p><strong>Cómo elegir entre la 1 y la 5, que es la decisión real.</strong> Si hay una máquina de rezago disponible, empezá con esa: arranca hoy, no espera una compra y trae la red resuelta. El mini PC se paga solo <strong>a partir del año</strong> por la diferencia de consumo, así que si esto va a quedar prendido para siempre, la compra tiene sentido igual — pero como reemplazo planificado, no como requisito para empezar.</p>
+    </div>
+
+    <div class="col">
+      <h3>Dos accesorios que no son opcionales</h3>
+      <p><strong>Un dummy plug HDMI</strong>, unos USD 5. Muchos mini PC sin monitor conectado no inicializan el video, y la sesión remota queda en 640×480 o directamente no levanta.</p>
+      <p><strong>Un alargue USB para el dongle.</strong> No es comodidad: la fuente conmutada y los puertos USB 3 hacen ruido en la banda que escuchamos, y ya sabemos que el sistema es sensible al entorno de RF — desde la torre reportaba 34.684 mensajes con <strong>cero</strong> CRC válido, o sea ruido al 100%. El dongle va en USB 2.0 y lejos de la caja.</p>
+      <p>Y si en la plataforma hay microcortes, una <strong>UPS chica</strong>: la PC arranca sola, pero cada arranque es un agujero en la ventana del día.</p>
+    </div>
+
+    <div class="col">
+      <h3>Lo que no hay que comprar</h3>
+      <p><strong>Celeron N4020 / N4120 / J4125 ni Atom</strong> — single-thread flojo, que es justo lo que este software usa. <strong>Raspberry Pi ni ningún ARM</strong>: no hay <span class="mono">rtl_sdr.exe</span> para Windows-on-ARM y los lanzadores son <span class="mono">.bat</span>. Y <strong>ninguna máquina sin arranque automático tras corte de energía</strong> en la BIOS.</p>
+    </div>
+
+    <div class="verdict">
+      <h3>Va adentro, en la oficina de plataforma — así que alcanza un mini PC común</h3>
+      <p>Confirmado: ambiente de oficina. Eso descarta el equipo industrial con rango de temperatura declarado, que habría triplicado el costo, y deja el <strong>fanless de USD 200</strong> como la compra correcta. También es coherente con la configuración que ya funciona, que mide <strong>desde adentro, detrás de un doble vidrio</strong>.</p>
+      <p>Cuatro cosas de oficina que sí hay que resolver, y ninguna cuesta plata:</p>
+      <p><strong>Un tomacorriente que no se corte de noche.</strong> Hay oficinas donde la última persona que sale baja una llave general. Si el enchufe depende de eso, el sistema no graba a la mañana temprano, que es cuando arranca el pico de partidas.</p>
+      <p><strong>Aire alrededor del gabinete.</strong> Fanless significa que el calor sale por la carcasa: adentro de un cajón cerrado se estrangula. Va sobre un mueble o colgada con soporte VESA detrás de algo, no en un cajón.</p>
+      <p><strong>Etiquetada y fuera de paso.</strong> Es una caja chica y sin pantalla, o sea que parece basura o parece disponible. Un cartel con qué es y a quién avisar evita el desenchufón bienintencionado.</p>
+      <p><strong>La ventana que da al sector 104°–117°.</strong> La antena va contra ese vidrio, que es la dirección de la pista. Si el vidrio es de los que tienen película metalizada, atenúa, y ahí la solución es pasar el cable y sacar la antena afuera — pero eso se decide midiendo con <span class="mono">adsb_iq.py --medir 30</span>, no de antemano.</p>
+    </div>
+
+    <div class="col">
+      <p>Y un orden de prioridades: <strong>la PC es la parte fácil y barata de esto.</strong> Lo que decide si el sistema mide bien es el dongle con filtro de 1090 MHz y, sobre todo, qué tiene despejado la antena en el sector 104°–117°. Ahí sí vale gastar.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="n">08</span><h2>Lo que este sistema no promete</h2></div>
+
+    <div class="caveat">
+      <h3>«Tiempo real» son 5 minutos, no un segundo</h3>
+      <p>SharePoint entrega una foto republicada cada 5 minutos, más lo que tarde en sincronizar. Para el share del día en curso alcanza y sobra. Si hiciera falta latencia de segundos, el camino es otro y está identificado: la PC de la antena sirve el tablero en la red y Torre entra por HTTP, sin copiar nada. Requiere red común o VPN, y no está armado.</p>
+    </div>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Límite</th><th>Qué significa para el número</th></tr></thead>
+        <tbody>
+          <tr><td>Los litros son modelados, no medidos</td><td>Salen del coeficiente de consumo por tipo y la distancia de la ruta. Sirven para comparar operadores entre sí; no reemplazan un remito.</td></tr>
+          <tr><td>La matrícula no viaja por radio</td><td>Se resuelve cruzando el ICAO24 contra el registro, y buena parte del tráfico local no está ahí. El <em>vuelo</em> se ve casi siempre; el <em>avión</em> no. El share depende del vuelo, no de la matrícula.</td></tr>
+          <tr><td>No se publica pista</td><td>El único rumbo conocido está a 8–15 km del campo, donde el avión ya viró a su ruta. Publicar una cabecera que no se puede sostener es peor que no publicar ninguna.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    Antena a 266 m del eje de la pista 13/31 · receptor <span class="mono">aeroparque-pista</span> · publicación cada 5 min a SharePoint · alcance del tablero: partidas
+  </footer>
+</div>

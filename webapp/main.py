@@ -19,6 +19,7 @@ import db
 # archivo y el grabador escribiendo otro.
 from adsb_record import DB_PATH as ADSB_DB_PATH
 from adsb_service import service as adsb_service
+from adsb_service import uptime_24h as _uptime_24h
 
 ROOT = Path(__file__).resolve().parent.parent
 THUMBNAILS_DIR = ROOT / "output" / "thumbnails"
@@ -403,6 +404,28 @@ def api_receptor():
     """
     return JSONResponse({"receptor": _receptor_publicado(),
                          "proceso": _proceso_publicado()})
+
+
+@app.get("/api/adsb/uptime")
+def api_adsb_uptime():
+    """Cuanto estuvo ARRIBA el grabador en las ultimas 24 h, para la franja.
+
+    Endpoint propio y no un campo de /api/receptor: ese se sirve de _ESTATICOS,
+    se calcula una vez por proceso y NO TOCA LA BASE, y esto cambia cada 30 s.
+    Meterlo ahi convertiria el endpoint barato que pinta hasta la portada en uno
+    que consulta SQLite en cada carga.
+
+    Tampoco se reusa /api/adsb/status, que trae la foto entera del grabador
+    -historico, senal, contadores del filtro-: seria pedir todo eso para mostrar
+    un porcentaje. Lo unico compartido es la lectura, adsb_service.uptime_24h()
+    -- importada como _uptime_24h porque el nombre `adsb_service` en este archivo
+    es la INSTANCIA del servicio, no el modulo.
+
+    Va aparte tambien para que FALLE APARTE: si el registro no se puede leer, la
+    franja del receptor se pinta igual y solo la banda de uptime dice que no se
+    pudo. Son dos afirmaciones distintas y ninguna deberia tapar a la otra.
+    """
+    return JSONResponse({"uptime": _uptime_24h()})
 
 
 def _coverage_mapa(lector) -> dict:
