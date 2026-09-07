@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-06, con la API de AA2000, el poller de verdad externa y la página /oficial.
+Última actualización: 2026-09-06, con el cruce automático ADS-B vs AA2000 por hora.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2757,3 +2757,101 @@ notó solo porque los dos números estaban a la vista al mismo tiempo.
 - **No es una API pública documentada.** Se entra con el `Origin` del sitio: puede
   cambiar o cerrarse sin aviso. Si esto va a sostener algo que se le muestra a
   YPF, conviene pedirle a Aeropuertos Argentina un acceso formal.
+
+---
+
+## Sesión 2026-09-06 (9): el cruce automático ADS-B vs AA2000
+
+`cruce.py`. Es la **única medición externa** que tiene el sistema: todo lo demás
+se compara contra sí mismo, y eso ya dejó pasar un bug con el sistema
+perfectamente consistente y equivocado.
+
+### Se cruza por HORA, y el número de vuelo se audita
+
+Emparejar por número daría por buena justamente la columna que se quiere
+auditar: si el número está mal —y estuvo mal— un cruce por número no empareja
+nada y **parece** que el sistema no detectó el vuelo, cuando lo detectó y le puso
+otro nombre.
+
+Así que el emparejamiento es por hora, ±180 s, y la coincidencia del número se
+publica **como resultado**. Si se usara para emparejar, ese porcentaje sería
+100 % por construcción y no diría nada.
+
+Para comparar se usa solo la **parte numérica**: la antena escucha `ARG1243` y
+AA2000 publica `AR 1243`. `ARG` es el código OACI de tres letras y `AR` el IATA
+de dos, así que comparar los prefijos daría 0 % siempre.
+
+El emparejamiento es **uno a uno y codicioso por cercanía**: todos los pares
+dentro de la tolerancia, ordenados por diferencia absoluta, tomando de menor a
+mayor. No es óptimo y es a propósito: cada acierto se justifica diciendo «es el
+más cercano que quedaba libre». Un óptimo por costo total puede mover un par para
+mejorar la suma, y entonces un acierto deja de tener explicación local.
+
+Y **no cruza tipos**: un despegue nuestro solo empareja con una partida oficial.
+Permitirlo haría que un aterrizaje detectado a la misma hora que una partida
+contara como acierto.
+
+### El denominador excluye el tiempo apagado
+
+Es lo que hace que el número se pueda publicar. Las oficiales sin par se parten
+en dos usando los intervalos de `adsb_uptime`:
+
+- **con el grabador arriba** → es una **pérdida** del sistema;
+- **con el grabador caído** → **no** es una pérdida, y se cuenta aparte.
+
+Nunca se descarta en silencio: los cuatro conteos (aciertos, pérdidas, fuera de
+ventana, nuestras sin par) se publican siempre.
+
+### Un defecto que encontró el test, y era el peor posible
+
+Con 2 aciertos, 2 oficiales sin par y **ningún** intervalo de uptime, `cobertura`
+devolvía **1.0**. La lógica: sin intervalos, todas las oficiales sin par se van a
+«fuera de ventana», `perdidas` queda en cero y el cociente sale 100 %.
+
+La página y el CLI ya filtraban por `hay_uptime`, así que en pantalla nunca se
+vio — **pero el campo mentía solo**, y cualquiera que leyera el JSON se llevaba
+un 100 % inventado. Es exactamente el error que el módulo existe para no
+repetir. Ahora `cobertura` es `None` en dos casos: denominador cero, **y** sin
+intervalos de uptime.
+
+### Lo que dio sobre los datos reales, y por qué está bien que no dé nada
+
+```
+ventana            2026-09-07T08:50Z .. 13:14Z
+operaciones nuestras en esa ventana: 0
+ACIERTOS 0 · PERDIDAS 0 · fuera de ventana 193 · nuestras sin par 0
+SIN REGISTRO DE UPTIME: no se puede afirmar cobertura
+```
+
+No hay solape: el poller arrancó hoy y el grabador no estuvo arriba en esa
+ventana. El cruce **se niega a publicar un porcentaje** en vez de dibujar un 0 %,
+que es el comportamiento correcto.
+
+### Y un hallazgo que bloquea todo lo demás
+
+**`grabador_sesion` NO existe en `C:dsb-datosdsb_log.db`**, aunque
+`CLAUDE.md` afirma que el registro de uptime ya existe y que la cobertura está a
+la vista en las cinco páginas.
+
+El cableado sí está: `adsb_record.py:219` llama a `adsb_uptime.crear_esquema()` y
+`:221` a `abrir_sesion()`. O sea que **la tabla se crea en el próximo arranque del
+grabador**, y hasta entonces no hay uptime que consultar. Para tener el primer
+número de cobertura real hacen falta las dos cosas corriendo a la vez:
+`GRABAR-ADSB.bat` y `GRABAR-OFICIAL.bat`.
+
+### Dónde se ve
+
+Panel «Cruce contra lo que detectó la antena» arriba de la tabla en `/oficial`,
+más el endpoint `/api/cruce`. Cuando falta el uptime la tarjeta dice **«sin
+uptime — no se puede afirmar todavía»** en ámbar, no un porcentaje en verde.
+
+Diez aserciones nuevas en `test_adsb_incremental.py`, sección 9, con datos
+construidos: en la base real todavía no hay solape, así que un test contra ella
+no probaría nada.
+
+### Lo que falta
+
+- **El cruce no está en el entregable.** `cruce.py`, el endpoint y el panel están
+  solo en el repo de trabajo.
+- **Falta la primera medición con solape.** Es lo único que separa esto de una
+  cobertura publicable.

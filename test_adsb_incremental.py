@@ -554,6 +554,71 @@ else:
           f"de pista resuelve el caso sin altitud")
 print()
 
+# ---------------------------------------------------------------------------
+# 9. Cruce ADS-B vs AA2000: por hora, y el denominador sin el tiempo apagado
+#
+# Con datos construidos, porque lo que hay que fijar es el CRITERIO. En la base
+# real todavia no hay solape: el poller arranco el 2026-09-06 y el grabador no
+# estuvo arriba en esa ventana, asi que el cruce real da 0 aciertos y -- bien --
+# se niega a publicar un porcentaje.
+# ---------------------------------------------------------------------------
+print("9. Cruce ADS-B vs AA2000")
+
+import cruce as _cru
+
+_T = 1_788_000_000.0
+_ARRIBA = [(_T - 3600, _T + 3600)]
+_NUESTRAS = [
+    {"tipo": "despegue",   "timestamp": _T + 100,  "callsign": "ARG1243", "registration": "LV-HKV"},
+    {"tipo": "aterrizaje", "timestamp": _T + 900,  "callsign": "JES3020", "registration": None},
+    {"tipo": "despegue",   "timestamp": _T + 5000, "callsign": "ARG9999", "registration": None},
+]
+def _of(mov, t, nro):
+    return {"movimiento": mov, "real_epoch": t, "numero": nro, "matricula": None,
+            "otro_aeropuerto": "COR", "pasajeros": None, "programada": "x",
+            "estado": "ok"}
+_OFI = [_of("D", _T + 160, "AR 1243"), _of("A", _T + 940, "WJ 3777"),
+        _of("D", _T + 2000, "AR 1500"), _of("D", _T + 9e4, "AR 1600")]
+
+_r = _cru.cruzar(_NUESTRAS, _OFI, _ARRIBA)
+revisar("empareja por hora dentro de la tolerancia", _r["n_aciertos"] == 2,
+        f"dio {_r['n_aciertos']}")
+revisar("una oficial sin par CON el grabador arriba es una perdida",
+        _r["n_perdidas"] == 1, f"dio {_r['n_perdidas']}")
+revisar("una oficial con el grabador CAIDO no cuenta como perdida",
+        _r["n_sin_ventana"] == 1 and _r["n_perdidas"] == 1,
+        f"perdidas={_r['n_perdidas']} fuera={_r['n_sin_ventana']}")
+revisar("cobertura = aciertos / (aciertos + perdidas), sin el tiempo apagado",
+        abs(_r["cobertura"] - 2 / 3) < 1e-9, f"dio {_r['cobertura']}")
+revisar("las nuestras sin par se cuentan aparte", _r["n_sobrantes"] == 1)
+
+# El numero de vuelo se AUDITA y no se usa para emparejar: si se usara, este
+# numero seria 100% por construccion y no diria nada.
+revisar("audita el numero sin emparejar por el: 1 de 2 coincide",
+        _r["vuelo_coincide"] == 1 and _r["vuelo_comparable"] == 2,
+        f"coincide={_r['vuelo_coincide']} comparables={_r['vuelo_comparable']}")
+revisar("ARG1243 y 'AR 1243' se reconocen iguales por la parte numerica",
+        _cru._coincide("ARG1243", "AR 1243") is True)
+revisar("y no se compara cuando falta un lado",
+        _cru._coincide(None, "AR 1243") is None and _cru._coincide("ARG1", None) is None)
+
+# LA REGLA QUE IMPORTA: sin uptime no hay porcentaje. Un 0.0 ahi afirmaria que
+# el sistema no detecto nada, cuando lo que pasa es que no hay con que comparar.
+_sin = _cru.cruzar(_NUESTRAS, _OFI, [])
+revisar("SIN uptime no se publica cobertura y todo cae en 'fuera de ventana'",
+        _sin["cobertura"] is None and _sin["hay_uptime"] is False
+        and _sin["n_perdidas"] == 0 and _sin["n_sin_ventana"] == 2,
+        f"cob={_sin['cobertura']} perdidas={_sin['n_perdidas']} fuera={_sin['n_sin_ventana']}")
+
+# Un despegue no puede emparejar con un arribo aunque coincida la hora.
+_cruz = _cru.cruzar([{"tipo": "despegue", "timestamp": _T, "callsign": "X"}],
+                    [_of("A", _T, "AR 1")], _ARRIBA)
+revisar("no cruza tipos: un despegue no empareja con un arribo",
+        _cruz["n_aciertos"] == 0 and _cruz["n_perdidas"] == 1)
+print(f"       -> cobertura {_r['cobertura']*100:.0f}% sobre {_r['n_aciertos']}"
+      f"+{_r['n_perdidas']}, con {_r['n_sin_ventana']} excluida por grabador caido")
+print()
+
 conn.close(); conn2.close(); conn3.close(); conn4.close(); conn5.close()
 carpeta.cleanup()
 print("=" * 55)

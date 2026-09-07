@@ -666,6 +666,34 @@ def api_oficial(movimiento: str = "", solo_reales: bool = False):
         conn.close()
 
 
+@app.get("/api/cruce")
+def api_cruce(horas: float = 0):
+    """El cruce POR HORA entre lo que detectamos y lo que AA2000 publica.
+
+    Es la unica medicion externa que tiene el sistema: todo lo demas se compara
+    contra si mismo, y eso ya dejo pasar un bug -- el numero de vuelo de la
+    pierna siguiente -- con el sistema perfectamente consistente y equivocado.
+
+    El porcentaje solo sale si hay registro de uptime, porque el denominador
+    tiene que excluir el tiempo apagado. Ver cruce.py y la regla de CLAUDE.md.
+    """
+    import aa2000
+    import cruce as _cruce
+    r = _cruce.desde_bases(str(ADSB_DB_PATH), str(aa2000.DB_PATH),
+                           horas=(horas or None))
+    if r is None:
+        return JSONResponse({"cruce": None, "receptor": _receptor_publicado(),
+                             "empty_reason": "falta una de las dos bases: la "
+                             "grabacion ADS-B o la del poller de AA2000."})
+    # Las listas largas no viajan enteras: con 193 oficiales por dia el JSON
+    # crece rapido y la pagina solo muestra las primeras. Los CONTEOS van
+    # completos, que es lo que sostiene el porcentaje.
+    for k in ("aciertos", "perdidas", "sin_ventana", "sobrantes"):
+        if isinstance(r.get(k), list):
+            r[k] = r[k][:200]
+    return JSONResponse({"cruce": r, "receptor": _receptor_publicado()})
+
+
 @app.get("/oficial")
 def oficial_page(request: Request):
     return templates.TemplateResponse(request, "oficial.html", {})

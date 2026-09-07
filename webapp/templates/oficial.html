@@ -50,6 +50,8 @@
      demorado- pero el numero queda a la vista igual, no solo el color. */
   .tarde { color: #fca5a5; }
   .temprano { color: #93c5fd; }
+  .card.cobertura .n { color: #34d399; }
+  .card.cobertura.sinbase .n { color: #fbbf24; font-size: 1.15rem; line-height: 2.4rem; }
   .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.77rem; }
 </style>
 </head>
@@ -78,6 +80,13 @@
   <div id="contenido" style="display:none">
     <div class="cards" id="tarjetas"></div>
     <p class="nota" id="ventana"></p>
+
+    <div class="panel" id="panel-cruce" style="display:none">
+      <h2>Cruce contra lo que detectó la antena</h2>
+      <div class="cards" id="cruce-tarjetas"></div>
+      <p class="nota" id="cruce-nota"></p>
+      <div id="cruce-perdidas"></div>
+    </div>
 
     <div class="controles" style="margin-top:20px">
       <h2 style="margin:0">Vuelos acumulados</h2>
@@ -231,6 +240,62 @@ $("buscar").addEventListener("input", e => { BUSCA = e.target.value; pintar(); }
 
 // El filtro viaja al servidor: es lo unico que garantiza que el limite de filas
 // recorte DENTRO del conjunto pedido y no antes de filtrarlo.
+async function cargarCruce() {
+  let r;
+  try { r = await (await fetch("/api/cruce")).json(); } catch (e) { return; }
+  const c = r && r.cruce;
+  if (!c || c.vacio) return;
+  $("panel-cruce").style.display = "";
+  const pct = v => (v === null || v === undefined) ? null : (v * 100).toFixed(1) + " %";
+  // Sin registro de uptime NO se dibuja un porcentaje. Es la regla del
+  // proyecto: sin saber cuando el grabador estuvo arriba, una oficial sin par
+  // puede ser una perdida del sistema o simplemente la antena apagada, y
+  // publicar un numero que no distingue las dos cosas ya paso dos veces.
+  const cob = (c.hay_uptime && c.cobertura !== null)
+    ? `<div class="card cobertura"><div class="n">${pct(c.cobertura)}</div>
+         <div class="label">Cobertura</div>
+         <div class="sub">${c.n_aciertos} de ${c.n_aciertos + c.n_perdidas} con el grabador arriba</div></div>`
+    : `<div class="card cobertura sinbase"><div class="n">sin uptime</div>
+         <div class="label">Cobertura</div>
+         <div class="sub">no se puede afirmar todavía</div></div>`;
+  $("cruce-tarjetas").innerHTML = cob + `
+    <div class="card real"><div class="n">${c.n_aciertos}</div>
+      <div class="label">Aciertos</div><div class="sub">emparejados por hora, ±${c.tolerancia_s} s</div></div>
+    <div class="card gris"><div class="n">${c.n_perdidas}</div>
+      <div class="label">Pérdidas</div><div class="sub">oficiales que no detectamos</div></div>
+    <div class="card gris"><div class="n">${c.n_sin_ventana}</div>
+      <div class="label">Grabador caído</div><div class="sub">NO cuentan como pérdida</div></div>
+    <div class="card gris"><div class="n">${c.n_sobrantes}</div>
+      <div class="label">Nuestras sin par</div><div class="sub">el poller pudo no haberlas visto</div></div>`;
+
+  let nota = `Se empareja <b>por hora y no por número de vuelo</b>: emparejar por número daría
+    por buena justamente la columna que se quiere auditar. `;
+  if (c.vuelo_comparable) {
+    nota += `De los ${c.vuelo_comparable} aciertos donde los dos lados traen número,
+      <b>coincide en ${c.vuelo_coincide}</b> — y eso es un resultado del cruce, no su criterio. `;
+  }
+  if (!c.hay_uptime) {
+    nota += `<br><br><b>No hay registro de uptime en esta grabación</b>, así que las
+      ${c.n_sin_ventana} oficiales sin par cayeron todas en «grabador caído» y no se puede
+      calcular cobertura. La tabla <code>grabador_sesion</code> se crea en el próximo arranque
+      del grabador; hasta entonces este panel cuenta pares pero no publica porcentaje.`;
+  }
+  $("cruce-nota").innerHTML = nota;
+
+  if ((c.perdidas || []).length) {
+    $("cruce-perdidas").innerHTML =
+      `<h2 style="margin-top:18px">Las que se perdieron</h2><div class="table-wrap"><table>
+        <thead><tr><th>Mov.</th><th>Hora real</th><th>Vuelo</th><th>Matrícula</th><th>Dest./Orig.</th></tr></thead>
+        <tbody>` + c.perdidas.slice(0, 40).map(p => `<tr>
+          <td>${p.movimiento === "D" ? "despegue" : "arribo"}</td>
+          <td class="mono">${(p.utc || "").slice(11, 16)}</td>
+          <td class="ident">${p.vuelo || nada}</td>
+          <td class="matri">${p.matricula || nada}</td>
+          <td class="mono">${p.destino || nada}</td></tr>`).join("") +
+      `</tbody></table></div>`;
+  }
+}
+
 async function cargar() {
   const p = new URLSearchParams();
   if (FILTRO === "D" || FILTRO === "A") p.append("movimiento", FILTRO);
@@ -254,6 +319,7 @@ async function cargar() {
 }
 
 cargar();
+cargarCruce();
 </script>
 </body>
 </html>
