@@ -182,6 +182,16 @@ class Identidad:
     registration: str | None = None
     registration_source: str | None = None      # 'registro' | 'distintivo (probable)'
     aircraft_type: str | None = None
+    # El numero de serie del FUSELAJE, del registro de OpenSky. No lleva
+    # procedencia como la matricula porque no se puede inferir de ninguna otra
+    # cosa: o esta en el registro o no esta, y nunca se deduce.
+    #
+    # Vale la pena aunque no llegue a todos porque es MAS ESTABLE que la
+    # matricula: la matricula cambia de dueno y hasta de pais, el numero de serie
+    # no cambia nunca. Es lo que permite decir si el LV-XXX de hoy es el mismo
+    # avion de la semana pasada. Medido el 2026-09-06 sobre las 58 aeronaves que
+    # aterrizaron o despegaron de Aeroparque: lo tienen 31, o sea el 53%.
+    serial_number: str | None = None
     operator: str | None = None
     operator_source: str | None = None          # 'registro' | 'distintivo'
     operator_code: str | None = None
@@ -286,6 +296,7 @@ def resolver_desde_conteo(conteo: dict[str, int], distintivo: dict[str, str],
                 pass
         if entrada:
             ident.registration = entrada.get("registration") or None
+            ident.serial_number = entrada.get("serial_number") or None
             ident.aircraft_type = aircraft_db.describe_type(entrada)
             ident.operator = (entrada.get("operator") or entrada.get("owner") or None)
             if ident.registration:

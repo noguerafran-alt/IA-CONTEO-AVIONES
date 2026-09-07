@@ -195,6 +195,10 @@ class Operacion:
     # "LV-KDI (probable, del distintivo)" son afirmaciones de fuerza muy distinta,
     # y mostrarlas iguales hace que la buena pierda credibilidad con la dudosa.
     registration_source: str | None = None
+    # El numero de serie del fuselaje, del registro. Sin procedencia: no se
+    # infiere de nada, o el registro lo tiene o no. Medido el 2026-09-06: lo
+    # tienen 31 de las 58 aeronaves que operaron en Aeroparque, el 53%.
+    serial_number: str | None = None
     # El operador es lo que MAS gana con la inferencia: 133 por distintivo contra
     # 17 por registro. Para contar operaciones por aerolinea alcanza, aunque no
     # diga que avion fisico es.
@@ -998,6 +1002,7 @@ def informe_desde_resumen(por_icao: dict, posiciones: int,
                              ("el último escuchado de esta dirección"
                               if respaldo else None)),
             registration=(ident.registration if ident else None),
+            serial_number=(ident.serial_number if ident else None),
             registration_source=(ident.registration_source if ident else None),
             aircraft_type=(ident.aircraft_type if ident else None),
             operator=(ident.operator if ident else None),
@@ -1121,6 +1126,7 @@ def como_json(inf: Informe | None) -> dict | None:
             {"icao24": o.icao24, "tipo": o.tipo, "timestamp": o.timestamp,
              "callsign": o.callsign, "callsign_source": o.callsign_source,
              "registration": o.registration,
+             "serial_number": o.serial_number,
              "aircraft_type": o.aircraft_type,
              "registration_source": o.registration_source,
              "operator": o.operator, "operator_source": o.operator_source,

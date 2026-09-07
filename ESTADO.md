@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-06, con el **registro de uptime del grabador**
+Última actualización: 2026-09-06, con el número de serie del fuselaje en el registro y en la tabla.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2526,3 +2526,103 @@ La función ahora va **después de la clase** y el docstring lo dice.
   necesitar pasarle esa franja.
 - **Una página que no tenga `#franja-receptor` no muestra nada**, en silencio. Hoy
   las cinco lo tienen; una sexta que se olvide no se va a enterar.
+
+---
+
+## Sesión 2026-09-06 (5): el número de serie del fuselaje
+
+Quedaba pendiente desde que se midió el CSV completo de OpenSky buscando la edad
+del avión. La edad no estaba (0 % para Argentina, descartado con números más
+arriba), pero `serialNumber` sí, y es lo único nuevo que ese archivo aporta.
+
+**Por qué vale.** El serial identifica el **fuselaje físico** y es más estable que
+la matrícula: la matrícula cambia de dueño y hasta de país, el serial no cambia
+nunca. Es lo que permite decir si el LV-XXX de hoy es el mismo avión de la semana
+pasada.
+
+### La cobertura real es 53 %, no 66 %
+
+**Corrección a lo que dijo la sesión anterior.** El 66 % salió de 21 sobre 32
+operaciones, cuando la grabación tenía menos. Medido ahora contra el registro
+reconstruido, sobre las aeronaves que efectivamente aterrizaron o despegaron:
+
+| población | con serial | |
+|---|---|---|
+| CSV completo (609 357 aeronaves) | 458 465 | 75,2 % |
+| **las 58 que operaron en Aeroparque** | **31** | **53 %** |
+| las 80 operaciones de la tabla | 42 | 53 % |
+
+Sigue valiendo la pena, pero el número que hay que repetir es **53 %**, no 66. La
+diferencia entre el 75 % global y el 53 % local es la de siempre: el registro
+cubre peor los aviones matriculados hace poco, y JetSMART y los LV- más nuevos son
+justo eso.
+
+### Una lista de columnas, no seis
+
+Agregar la columna destapó que el esquema estaba escrito a mano en **seis
+lugares**: dos listas de columnas (una por cada camino de construcción) y
+**cuatro** `INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?)` con los ocho
+signos de pregunta contados a ojo. Equivocarse en uno solo no da un error
+legible: da *"table aircraft has 9 columns but 8 values were supplied"* a mitad de
+una importación de 600 mil filas, o peor, corre los valores de lugar en silencio
+si el orden no coincide.
+
+Ahora existe `aircraft_db.COLUMNAS` y de ahí salen el `CREATE TABLE`, los
+placeholders del `INSERT` y la tupla de cada fila, en los dos caminos.
+
+De paso, `build()` —el que descarga de `data-samples`— leía `row.get("...")` con
+los nombres de **un solo** export escritos a mano, mientras que
+`build_desde_archivo()` usaba `_valor()` con `ALIAS`. O sea que el primero
+funcionaba con un archivo y devolvía `None` en todo lo demás, que es exactamente
+como se importa un archivo entero sin un solo error y con las columnas vacías —el
+bug de las comillas simples, otra vez por otra puerta—. Los dos caminos usan ahora
+`_valor()`.
+
+### Por dónde llega a la pantalla
+
+`aircraft_db.lookup()` hace `SELECT *`, así que la columna fluye sola. Se agregó
+`Identidad.serial_number`, `Operacion.serial_number`, la clave en `como_json()` y
+la columna **N.º de serie** en `/aeropuerto`, al lado de la matrícula: contestan
+la misma pregunta con distinta vida útil.
+
+**No lleva procedencia**, a diferencia de la matrícula. No se puede inferir de
+nada: o el registro lo tiene o no lo tiene, y nunca se deduce. Ordena como
+**texto** y no como número, a propósito: hay seriales tipo `60-076` de Learjet que
+como número no existen.
+
+### El registro reconstruido NO viaja al repo
+
+`tools/aircraft_db.sqlite` está en `.gitignore` —son 49 MB— así que **otra sesión
+va a tener la base vieja de 8 columnas** hasta que la reconstruya. Verificado que
+eso degrada bien y no rompe nada: `lookup()` devuelve el dict sin la clave,
+`entrada.get("serial_number")` da `None` y la columna sale con un guion. El
+síntoma de "está todo en guiones" es *falta reconstruir*, no *no hay datos*.
+
+Se reconstruye con el CSV completo bajado a mano y **el servidor parado**, porque
+tiene el archivo tomado:
+
+```
+python -c "import aircraft_db; print(aircraft_db.build_desde_archivo(r'<ruta>\aircraft-database-complete-2025-08.csv'))"
+```
+
+609 368 filas leídas, 609 357 aeronaves en la tabla: los 11 de diferencia son
+direcciones repetidas que `INSERT OR REPLACE` colapsa.
+
+### Verificado
+
+Los cuatro tests dan `TODO CORRECTO` en las **dos** configuraciones (por defecto y
+`ADSB_RECEIVER=aeroparque`). En la página, con el servidor levantado sobre la base
+real: la columna aparece en el índice 4, el grupo "La aeronave" pasó solo de 8 a 9
+columnas —los `colspan` se cuentan desde `COLUMNAS`— y 42 de 80 filas traen
+serial, sin un error de consola.
+
+### Lo que quedó sin hacer
+
+- **`RADAR-YPF-ENTREGABLE` no tiene nada de esto.** Es una copia del sistema con
+  su propio recorte del registro (`datos-demo/aircraft_db.sqlite`, 48 KB), así que
+  para que el desplegado muestre el serial hay que llevarle los cambios de código
+  **y** regenerar ese recorte con el esquema nuevo. Mientras tanto la copia
+  desplegada sigue andando, con la columna en guiones.
+- **Nadie cruzó el serial con nada todavía.** El uso que lo justifica —detectar
+  que dos matrículas distintas son el mismo fuselaje, o que la misma matrícula
+  cambió de avión— pide comparar entre fechas, y eso no existe.

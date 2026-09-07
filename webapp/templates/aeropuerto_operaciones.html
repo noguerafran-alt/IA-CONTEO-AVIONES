@@ -243,6 +243,13 @@ const COLUMNAS = [
            ? `<span class="inferido" title="probable: el distintivo parece ser la matrícula y el país del ICAO24 concuerda. No confirmada por el registro.">${o.registration} ?</span>`
            : o.registration)
         : nada}</td>`},
+  // Al lado de la matrícula porque contestan la misma pregunta con distinta
+  // vida útil: la matrícula es cómo se llama hoy, el serial es qué fuselaje es
+  // siempre. Ordena como texto y no como número a propósito: hay seriales tipo
+  // "60-076" que como número no existen.
+  {k: "serial_number", t: "N.º de serie", g: "aeronave", v: o => o.serial_number || "",
+   ayuda: "El número de serie del <b>fuselaje</b>, del registro de OpenSky. Es <b>más estable que la matrícula</b>: la matrícula cambia de dueño y hasta de país, el serial no cambia nunca, así que es lo que dice si el LV-XXX de hoy es el mismo avión de la semana pasada. Tampoco se transmite por radio, y <b>no se infiere</b>: o está en el registro o no está. Lo tienen 31 de las 58 aeronaves que operaron acá.",
+   td: o => `<td class="mono">${o.serial_number || nada}</td>`},
   {k: "aircraft_type", t: "Avión",  g: "aeronave", v: o => o.aircraft_type || "",
    ayuda: "Modelo según el Doc 8643 de la OACI, buscado por el ICAO24 en el registro. Tampoco se transmite.",
    td: o => `<td>${o.aircraft_type || nada}</td>`},

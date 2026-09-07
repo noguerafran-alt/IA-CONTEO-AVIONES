@@ -28,18 +28,33 @@ from pathlib import Path
 CSV_URL = "https://s3.opensky-network.org/data-samples/metadata/aircraftDatabase.csv"
 DB_PATH = Path(__file__).parent / "tools" / "aircraft_db.sqlite"
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS aircraft (
-    icao24 TEXT PRIMARY KEY,
-    registration TEXT,
-    manufacturer TEXT,
-    model TEXT,
-    typecode TEXT,
-    operator TEXT,
-    operator_icao TEXT,
-    operator_iata TEXT
-);
-"""
+# EL ORDEN MANDA: de esta tupla salen el CREATE TABLE, los placeholders del
+# INSERT y la tupla de cada fila, en los DOS caminos de construccion.
+#
+# Estaban escritos a mano: cuatro "INSERT OR REPLACE INTO aircraft VALUES
+# (?,?,?,?,?,?,?,?)" con ocho signos de pregunta contados a ojo, mas dos listas
+# de columnas separadas. Agregar una columna pedia acertar en seis lugares, y
+# equivocarse en uno solo no da un error legible: da "table aircraft has 9
+# columns but 8 values were supplied" a mitad de una importacion de 600 mil
+# filas, o peor, corre los valores de lugar en silencio si el orden no coincide.
+#
+# serial_number entra el 2026-09-06. Medido sobre el CSV completo de OpenSky y
+# las 32 operaciones de Aeroparque que estan en el: lo trae el 66%. Identifica el
+# FUSELAJE fisico, que es mas estable que la matricula -- la matricula cambia de
+# dueno y hasta de pais, el numero de serie no cambia nunca-, asi que sirve para
+# saber si el LV-XXX de hoy es el mismo avion de la semana pasada. Es lo unico
+# nuevo que el CSV aporta: built y firstFlightDate dan 0% para Argentina, medido
+# y descartado con numeros en ESTADO.md.
+COLUMNAS = ("icao24", "registration", "manufacturer", "model", "typecode",
+            "operator", "operator_icao", "operator_iata", "serial_number")
+
+SCHEMA = ("CREATE TABLE IF NOT EXISTS aircraft (\n    "
+          + ",\n    ".join(c + " TEXT" + (" PRIMARY KEY" if c == "icao24" else "")
+                           for c in COLUMNAS)
+          + "\n);")
+
+INSERT = ("INSERT OR REPLACE INTO aircraft VALUES ("
+          + ",".join("?" * len(COLUMNAS)) + ")")
 
 
 def _iter_csv_rows(source):
@@ -69,6 +84,9 @@ ALIAS = {
     "operator": ("operator", "owner", "operatorcallsign"),
     "operator_icao": ("operatoricao",),
     "operator_iata": ("operatoriata",),
+    # Solo el nombre camelCase del export completo: el de data-samples no
+    # trae la columna, y _valor devuelve None sin romper nada.
+    "serial_number": ("serialnumber",),
 }
 
 
@@ -133,21 +151,20 @@ def build_desde_archivo(csv_path: Path | str, db_path: Path = DB_PATH, log=print
             icao24 = (_valor(fila, "icao24") or "").lower()
             if not icao24:
                 continue
-            batch.append((
-                icao24, _valor(fila, "registration"), _valor(fila, "manufacturer"),
-                _valor(fila, "model"), _valor(fila, "typecode"),
-                _valor(fila, "operator"), _valor(fila, "operator_icao"),
-                _valor(fila, "operator_iata"),
-            ))
+            # Desde COLUMNAS y no a mano: es lo que garantiza que el orden de
+            # los valores sea el del CREATE TABLE. icao24 ya viene resuelto y en
+            # minusculas, asi que se usa el de arriba en vez de releerlo.
+            batch.append(tuple(icao24 if c == "icao24" else _valor(fila, c)
+                               for c in COLUMNAS))
             count += 1
             if len(batch) >= 5000:
                 conn.executemany(
-                    "INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?)", batch)
+                    INSERT, batch)
                 batch.clear()
                 if count % 100000 == 0:
                     log(f"  {count} aeronaves indexadas...")
         if batch:
-            conn.executemany("INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?)", batch)
+            conn.executemany(INSERT, batch)
 
     conn.commit()
     conn.close()
@@ -188,28 +205,27 @@ def build(csv_url: str = CSV_URL, db_path: Path = DB_PATH, log=print) -> int:
         text_stream = io.TextIOWrapper(response, encoding="utf-8", errors="replace", newline="")
         batch = []
         for row in _iter_csv_rows(text_stream):
-            icao24 = (row.get("icao24") or "").strip().lower()
+            # Las claves se normalizan y los valores salen de _valor(), igual que
+            # en build_desde_archivo. Antes este camino leia row.get("...") con
+            # los nombres de UN solo export escritos a mano: funcionaba para el
+            # de data-samples y devolvia None en todo lo demas, que es como se
+            # importa un archivo entero sin un solo error y con las columnas
+            # vacias. ALIAS ya contempla las dos formas.
+            fila = {_normalizar(k): v for k, v in row.items() if k}
+            icao24 = (_valor(fila, "icao24") or "").lower()
             if not icao24:
                 continue
-            batch.append((
-                icao24,
-                (row.get("registration") or "").strip() or None,
-                (row.get("manufacturername") or "").strip() or None,
-                (row.get("model") or "").strip() or None,
-                (row.get("typecode") or "").strip() or None,
-                (row.get("operator") or "").strip() or None,
-                (row.get("operatoricao") or "").strip() or None,
-                (row.get("operatoriata") or "").strip() or None,
-            ))
+            batch.append(tuple(icao24 if c == "icao24" else _valor(fila, c)
+                               for c in COLUMNAS))
             count += 1
             if len(batch) >= 5000:
                 conn.executemany(
-                    "INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?)", batch)
+                    INSERT, batch)
                 batch.clear()
                 if count % 50000 == 0:
                     log(f"  {count} aeronaves indexadas...")
         if batch:
-            conn.executemany("INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?)", batch)
+            conn.executemany(INSERT, batch)
 
     conn.commit()
     conn.close()
