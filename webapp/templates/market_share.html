@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Market share YPF — Runway Video Analytics</title>
+<script src="/static/franja_receptor.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 18px; }
+  a { color: #60a5fa; }
+  .panel { background: #1a1d24; border-radius: 12px; padding: 18px 20px; margin: 20px 0; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 10px 0 0; }
+  .nota b { color: #c9ced6; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.55; margin-bottom: 18px; }
+  .aviso b { color: #fde68a; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+
+  /* El share, grande y solo. Es el numero que la pagina existe para contestar. */
+  .share { background: #1a1d24; border-radius: 12px; padding: 22px 26px; margin-bottom: 16px; }
+  .share .n { font-size: 3.2rem; font-weight: 700; color: #34d399; line-height: 1.05;
+              font-variant-numeric: tabular-nums; }
+  .share .n.rango { font-size: 2.3rem; }
+  /* Ambar cuando no se puede afirmar: la version ruidosa es la que avisa, igual
+     que la franja del receptor y la banda de cobertura. */
+  .share.falta .n { color: #fbbf24; font-size: 1.5rem; }
+  .share .label { color: #9aa0a6; font-size: 0.85rem; text-transform: uppercase;
+                  letter-spacing: 0.05em; margin-top: 6px; }
+  .share .sub { color: #6b7280; font-size: 0.85rem; margin-top: 8px; line-height: 1.5; }
+  .share code { color: #93c5fd; }
+
+  .cards { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 13px 18px; min-width: 118px; }
+  .card .n { font-size: 1.7rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .label { color: #9aa0a6; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card.ypf .n { color: #34d399; }
+  .card.comp .n { color: #fca5a5; }
+  .card.gris { background: #171a20; }
+  .card.gris .n { color: #9aa0a6; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.87rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.71rem; }
+  tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cod { color: #fbbf24; font-weight: 600; font-family: ui-monospace, monospace; }
+  .muted { color: #4b5563; }
+  .chip { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 0.76rem; }
+  .chip.ypf { background: #14532d; color: #86efac; }
+  .chip.competencia { background: #3a1b1b; color: #fecaca; }
+  .chip.sin_clasificar { background: #2a2113; color: #e5c07b; }
+  /* La barra de participacion: proporcional a los vuelos, para que la
+     concentracion del mercado se vea sin leer la columna. */
+  .barra { height: 6px; background: #262a33; border-radius: 3px; overflow: hidden; min-width: 90px; }
+  .barra > i { display: block; height: 100%; background: #4b5563; }
+  .barra > i.ypf { background: #34d399; }
+  .barra > i.competencia { background: #f87171; }
+</style>
+</head>
+<body>
+  <h1>Market share de YPF en Aeroparque</h1>
+  <div class="subtitle">
+    Sobre las partidas que <b>efectivamente despegaron</b>, según Aeropuertos Argentina ·
+    <a href="/">dashboard</a> · <a href="/oficial">verdad externa (AA2000)</a> ·
+    <a href="/aeropuerto">operaciones del aeropuerto</a> · <a href="/adsb">ADS-B en vivo</a>
+  </div>
+
+  <div id="franja-receptor"></div>
+
+  <!-- Arriba porque cambia como se lee el numero: esto NO sale de la antena. -->
+  <div class="aviso">
+    <b>Este número no depende de la antena.</b> El numerador y el denominador salen los dos de la
+    misma lista de partidas oficiales, así que la cobertura del ADS-B no entra en la cuenta. Es lo
+    que lo hace publicable sin esperar el registro de uptime — a diferencia de la cobertura.
+  </div>
+
+  <div id="vacio" class="panel empty">Cargando…</div>
+
+  <div id="contenido" style="display:none">
+    <div class="share" id="share"></div>
+    <div class="cards" id="tarjetas"></div>
+    <p class="nota" id="ventana"></p>
+
+    <h2 style="margin-top:24px">Por aerolínea</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Cód.</th><th>Aerolínea</th><th class="num">Partidas</th>
+          <th>Participación</th><th class="num">Pasajeros</th><th>Clase</th>
+        </tr></thead>
+        <tbody id="tabla"></tbody>
+      </table>
+    </div>
+    <p class="nota" id="nota-tabla"></p>
+  </div>
+
+  <div class="panel">
+    <h2>Cómo se calcula</h2>
+    <p class="nota">
+      <b>Solo las partidas que ya ocurrieron.</b> Una programada que todavía no despegó no es una
+      carga de combustible, y meterla en el denominador movería el share según la hora del día en
+      que se mire esta pantalla.
+    </p>
+    <p class="nota">
+      <b>Las partidas y no los arribos</b>, porque el avión carga antes de irse. Numerador y
+      denominador salen de la misma lista, así que ninguno se puede mover sin el otro.
+    </p>
+    <p class="nota">
+      <b>Desconocido no es competencia.</b> Si la lista de clientes de YPF no se declara completa,
+      una aerolínea que no figura puede ser cliente y no estar anotada. Tratarla como competencia
+      bajaría el share sin evidencia, así que el resultado se publica como un <b>rango</b>: el piso
+      cuenta solo los clientes confirmados y el techo les suma los sin clasificar. Con la lista
+      declarada completa, piso y techo coinciden y hay un número solo.
+    </p>
+    <p class="nota">
+      <b>Los pasajeros son un proxy, no una medición.</b> La fuente los informa en algunos vuelos y
+      en otros no, y a veces informa cero. Los que no informan y los que informan cero se cuentan
+      <b>aparte</b>: sumar el faltante como cero subestimaría el volumen sin decirlo.
+    </p>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const nada = '<span class="muted">–</span>';
+const pct = v => (v === null || v === undefined) ? "–" : (v * 100).toFixed(1) + " %";
+const mil = v => (v || 0).toLocaleString("es-AR");
+const hora = e => !e ? "–" : new Date(e * 1000).toLocaleString("es-AR",
+  {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+function pintarShare(m) {
+  const li = m.lista;
+  const caja = $("share");
+  if (!li.existe) {
+    // Sin la lista NO se dibuja ningun porcentaje, ni siquiera el piso. El piso
+    // con lista vacia es 0%, y un 0% ahi afirmaria que YPF no abastece a nadie.
+    caja.className = "share falta";
+    caja.innerHTML = `<div class="n">Falta la lista de clientes de YPF</div>
+      <div class="label">Market share</div>
+      <div class="sub">Sin ella no se puede calcular. Copiá
+      <code>ypf_clientes.ejemplo.json</code> a <code>ypf_clientes.json</code> y llenalo con los
+      códigos IATA de las aerolíneas que abastece YPF.<br>
+      Mientras tanto la tabla de abajo <b>sí sirve</b>: dice exactamente qué códigos hay que poner.
+      ${li.error ? "<br><b>" + li.error + "</b>" : ""}</div>`;
+    return;
+  }
+  caja.className = "share";
+  if (m.share_piso === null) {
+    caja.innerHTML = `<div class="n rango">sin partidas</div>
+      <div class="label">Market share</div>
+      <div class="sub">No hay partidas ocurridas en la ventana.</div>`;
+  } else if (m.share_exacto) {
+    caja.innerHTML = `<div class="n">${pct(m.share_piso)}</div>
+      <div class="label">Market share de YPF</div>
+      <div class="sub">${m.n_ypf} de ${m.total_partidas} partidas.
+      La lista se declaró <b>completa</b>, así que es un número y no un rango.</div>`;
+  } else {
+    caja.innerHTML = `<div class="n rango">${pct(m.share_piso)} – ${pct(m.share_techo)}</div>
+      <div class="label">Market share de YPF (rango)</div>
+      <div class="sub">Piso: ${m.n_ypf} clientes confirmados de ${m.total_partidas}.
+      Techo: sumando las <b>${m.n_sin_clasificar} sin clasificar</b>, que pueden ser de YPF o no.<br>
+      Es un rango porque la lista no se declaró completa. Para tener un número solo, poné
+      <code>"exhaustiva": true</code> — pero solo si la lista cubre todas las aerolíneas.</div>`;
+  }
+}
+
+function pintar(m) {
+  pintarShare(m);
+  const px = m.pax_ypf, pt = m.pax_total;
+  $("tarjetas").innerHTML = `
+    <div class="card ypf"><div class="n">${m.n_ypf}</div><div class="label">Clientes YPF</div></div>
+    <div class="card comp"><div class="n">${m.n_competencia}</div><div class="label">Competencia</div></div>
+    <div class="card gris"><div class="n">${m.n_sin_clasificar}</div><div class="label">Sin clasificar</div></div>
+    <div class="card gris"><div class="n">${m.total_partidas}</div><div class="label">Partidas ocurridas</div></div>
+    <div class="card gris"><div class="n">${mil(pt.suma)}</div><div class="label">Pasajeros</div></div>`;
+
+  $("ventana").innerHTML =
+    `Ventana: <b>${hora(m.desde_epoch)}</b> a <b>${hora(m.hasta_epoch)}</b>. ` +
+    `Hay <b>${m.programadas_sin_ocurrir}</b> partidas programadas que todavía no despegaron y ` +
+    `<b>no</b> entran en la cuenta. ` +
+    `Pasajeros: <b>${pt.vuelos_con_dato} de ${pt.vuelos}</b> vuelos informan` +
+    (m.lista.existe ? `, y de los de YPF <b>${px.vuelos_con_dato} de ${px.vuelos}</b>` : "") + `. ` +
+    (m.lista.actualizado ? `Lista de ${m.lista.actualizado}` +
+      (m.lista.fuente ? ` — ${m.lista.fuente}` : "") + "." : "");
+
+  const max = Math.max(...m.por_aerolinea.map(d => d.vuelos), 1);
+  $("tabla").innerHTML = m.por_aerolinea.map(d => `<tr>
+      <td class="cod">${d.codigo}</td>
+      <td>${d.nombre || nada}</td>
+      <td class="num">${d.vuelos}</td>
+      <td><div class="barra" title="${(100 * d.vuelos / m.total_partidas).toFixed(1)} % de las partidas">
+        <i class="${d.clase}" style="width:${100 * d.vuelos / max}%"></i></div></td>
+      <td class="num">${d.pasajeros ? mil(d.pasajeros) : nada}</td>
+      <td><span class="chip ${d.clase}">${d.clase.replace("_", " ")}</span></td>
+    </tr>`).join("");
+
+  const top = m.por_aerolinea[0];
+  $("nota-tabla").innerHTML = top
+    ? `La barra es proporcional a la aerolínea con más partidas, para que la concentración se vea
+       sin leer la columna. <b>${top.nombre || top.codigo} tiene ${top.vuelos} de las
+       ${m.total_partidas}</b>, o sea el ${(100 * top.vuelos / m.total_partidas).toFixed(0)} %:
+       con un mercado así de concentrado, el share queda decidido casi por completo por la clase
+       de esa sola aerolínea.`
+    : "";
+}
+
+async function cargar() {
+  let r;
+  try { r = await (await fetch("/api/market-share")).json(); } catch (e) { r = null; }
+  if (r && r.receptor) { try { pintarFranjaReceptor(r.receptor, null); } catch (e) {} }
+  if (!r || !r.ms) {
+    $("vacio").style.display = "";
+    $("contenido").style.display = "none";
+    $("vacio").textContent = (r && r.empty_reason) || "No se pudo leer el market share.";
+    return;
+  }
+  $("vacio").style.display = "none";
+  $("contenido").style.display = "";
+  pintar(r.ms);
+}
+
+cargar();
+// En vivo: el poller sondea cada 5 min, asi que refrescar cada minuto alcanza
+// para que la pantalla no quede vieja sin castigar al servidor con pedidos que
+// van a devolver lo mismo.
+setInterval(cargar, 60000);
+</script>
+</body>
+</html>

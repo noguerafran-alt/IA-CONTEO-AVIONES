@@ -666,6 +666,11 @@ def api_oficial(movimiento: str = "", solo_reales: bool = False):
         conn.close()
 
 
+@app.get("/market-share")
+def market_share_page(request: Request):
+    return templates.TemplateResponse(request, "market_share.html", {})
+
+
 @app.get("/api/market-share")
 def api_market_share(horas: float = 0):
     """El share de YPF sobre las partidas oficiales. Ver market_share.py.

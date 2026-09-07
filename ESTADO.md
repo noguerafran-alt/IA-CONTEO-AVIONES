@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-07, con el motor de market share (falta la lista de clientes de YPF).
+Última actualización: 2026-09-07, con la página de market share (falta la lista de clientes de YPF).
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2929,3 +2929,39 @@ ceros y los faltantes se cuentan **aparte** — ver `aa2000._pasajeros()`.
 - **La página.** El endpoint está; la pantalla dedicada no. Se armó primero el
   motor porque una página que dice «falta la lista» no se puede probar de verdad.
 - **Nada de esto está en el entregable** todavía.
+
+### La página del market share (misma sesión)
+
+`/market-share` y `market_share.html`. Refresca cada 60 s: el poller sondea cada
+300 s, así que pedir más seguido devolvería lo mismo.
+
+**Sin la lista no dibuja ningún porcentaje, ni siquiera el piso.** El piso con
+lista vacía es 0 %, y un 0 % ahí afirmaría que YPF no abastece a nadie. La
+tarjeta grande queda en ámbar diciendo qué falta — la versión ruidosa es la que
+avisa, igual que la franja del receptor.
+
+Pero la tabla por aerolínea **sirve igual sin la lista**, y eso fue a propósito:
+dice exactamente qué códigos hay que poner en el JSON. Es la única pantalla del
+sistema que es útil precisamente porque falta un dato.
+
+La barra de participación es proporcional a la aerolínea con más partidas, para
+que la concentración se vea sin leer la columna.
+
+### Verificado con lista de prueba, y la diferencia importa
+
+Con `AR` y `WJ` como clientes y `LA`/`JJ` como competencia, sobre las 86 partidas
+reales de hoy:
+
+| lista | resultado |
+|---|---|
+| `"exhaustiva": false` | **entre 77,9 % y 94,2 %** (14 sin clasificar) |
+| `"exhaustiva": true` | **77,9 %** exacto (67 de 86) |
+
+**Son 16 puntos de diferencia**, y es exactamente lo que se esconde si el sistema
+publicara solo el piso como si fuera el share. Por eso el rango no es una
+formalidad.
+
+(La lista de prueba se borró: no está commiteada.)
+
+De paso quedó probado el camino de error: con un JSON malformado el módulo avisa
+`no se pudo leer ypf_clientes.json` y no revienta la página.

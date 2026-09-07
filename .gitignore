@@ -71,3 +71,7 @@ CAMPOS-ADSB.xlsx
 # Restos de SQLite en WAL cuando un -shm se borra con el archivo todavia
 # abierto. No es dato: es estado transitorio que OneDrive deja tirado.
 .fuse_hidden*
+
+# La lista de clientes de YPF es un dato de negocio del cliente: la aporta YPF
+# y no tiene por que estar en un repo. La plantilla comentada si viaja.
+ypf_clientes.json
