@@ -53,6 +53,11 @@
   .chip.ypf { background: #14532d; color: #86efac; }
   .chip.competencia { background: #3a1b1b; color: #fecaca; }
   .chip.sin_clasificar { background: #2a2113; color: #e5c07b; }
+  /* Parcial: cliente en algunas rutas y no en otras. Es un estado propio y no un
+     detalle -- la diferencia entre "este cliente es nuestro" y "de este cliente
+     tenemos algunas rutas" decide como se lee la fila. */
+  .chip.parcial { background: #2c2540; color: #c4b5fd; }
+  .barra > i.parcial { background: #a78bfa; }
   /* La barra de participacion: proporcional a los vuelos, para que la
      concentracion del mercado se vea sin leer la columna. */
   .barra { height: 6px; background: #262a33; border-radius: 3px; overflow: hidden; min-width: 90px; }
@@ -84,6 +89,18 @@
     <div class="share" id="share"></div>
     <div class="cards" id="tarjetas"></div>
     <p class="nota" id="ventana"></p>
+
+    <h2 style="margin-top:24px">Por ruta</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Destino</th><th></th><th class="num">Partidas</th>
+          <th class="num">De YPF</th><th>Cobertura</th><th>Cuerpo</th><th>Aerolíneas</th>
+        </tr></thead>
+        <tbody id="tabla-rutas"></tbody>
+      </table>
+    </div>
+    <p class="nota" id="nota-rutas"></p>
 
     <h2 style="margin-top:24px">Por aerolínea</h2>
     <div class="table-wrap">
@@ -186,6 +203,32 @@ function pintar(m) {
     (m.lista.actualizado ? `Lista de ${m.lista.actualizado}` +
       (m.lista.fuente ? ` — ${m.lista.fuente}` : "") + "." : "");
 
+  // POR RUTA. El destino sale de otro_aeropuerto, que es IATAdestorig: `arpt`
+  // es el ORIGEN, y leerlo mal daba rutas "AEP -> AEP" que no existen.
+  const maxR = Math.max(...(m.por_ruta || []).map(d => d.vuelos), 1);
+  $("tabla-rutas").innerHTML = (m.por_ruta || []).map(d => {
+    const cob = d.vuelos ? d.ypf / d.vuelos : 0;
+    const cl = cob === 1 ? "ypf" : (cob === 0 ? "competencia" : "parcial");
+    const cu = Object.entries(d.cuerpos || {}).sort()
+      .map(([k, v]) => k + ":" + v).join(" ");
+    return `<tr>
+      <td class="cod">${d.destino}</td>
+      <td>${d.nombre || nada}</td>
+      <td class="num">${d.vuelos}</td>
+      <td class="num">${d.ypf}</td>
+      <td><div class="barra" title="${(100 * cob).toFixed(0)} % de esta ruta es de YPF">
+        <i class="${cl}" style="width:${100 * cob}%"></i></div></td>
+      <td class="mono">${cu || nada}</td>
+      <td class="mono">${(d.aerolineas || []).join(", ") || nada}</td>
+    </tr>`;
+  }).join("");
+  $("nota-rutas").innerHTML =
+    `<b>${m.n_rutas}</b> destinos distintos. La barra es qué proporción de esa ruta abastece YPF: ` +
+    `verde toda, violeta parcial, roja ninguna. <b>Cuerpo</b> es NB (narrow body) o WB (wide ` +
+    `body), y viene en el 100 % de las partidas — es lo que le sirve al modelo de consumo junto ` +
+    `con la ruta. La ruta sale del <b>número de vuelo</b>: sobre 457 números medidos, solo 8 ` +
+    `tienen más de un destino, así que un número es en la práctica una ruta fija.`;
+
   const max = Math.max(...m.por_aerolinea.map(d => d.vuelos), 1);
   $("tabla").innerHTML = m.por_aerolinea.map(d => `<tr>
       <td class="cod">${d.codigo}</td>
@@ -194,7 +237,7 @@ function pintar(m) {
       <td><div class="barra" title="${(100 * d.vuelos / m.total_partidas).toFixed(1)} % de las partidas">
         <i class="${d.clase}" style="width:${100 * d.vuelos / max}%"></i></div></td>
       <td class="num">${d.pasajeros ? mil(d.pasajeros) : nada}</td>
-      <td><span class="chip ${d.clase}">${d.clase.replace("_", " ")}</span></td>
+      <td><span class="chip ${d.clase}" title="${d.ypf} de YPF, ${d.competencia} de la competencia, ${d.sin_clasificar} sin clasificar">${d.clase.replace("_", " ")}</span></td>
     </tr>`).join("");
 
   const top = m.por_aerolinea[0];

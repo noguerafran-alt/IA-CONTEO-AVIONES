@@ -45,14 +45,26 @@ LA LISTA LA APORTA YPF y vive en ypf_clientes.json, fuera del codigo. Formato:
       "actualizado": "2026-09-07",
       "fuente": "de donde salio, para poder auditarlo despues",
       "exhaustiva": false,
-      "aerolineas": ["AR", "WJ"],
+      "aerolineas": ["AR"],
+      "rutas": {"WJ": ["MDZ", "IGR"]},
       "vuelos": ["AR 1234"],
+      "no_ypf_vuelos": ["AR 1500"],
       "competidores": ["LA"]
     }
 
-`aerolineas` son codigos IATA de dos letras, que es lo que AA2000 publica en
-idaerolinea. `vuelos` es para excepciones sueltas -- un vuelo puntual que carga
-con otro proveedor -- y pisa lo que diga la aerolinea.
+HAY DOS CLASES DE CLIENTE, y por eso hacen falta dos campos:
+
+  `aerolineas`  cliente COMPLETO: todas sus partidas son de YPF.
+  `rutas`       cliente PARCIAL: solo esos destinos. El resto de esa aerolinea
+                NO es de YPF, y se cuenta como competencia y no como
+                desconocido -- que una aerolinea figure en `rutas` significa que
+                se conoce su alcance, no que se conoce una parte.
+
+Los codigos de aerolinea son IATA de dos letras (idaerolinea) y los destinos son
+IATA de tres (IATAdestorig), los mismos que publica AA2000.
+
+`vuelos` y `no_ypf_vuelos` son las excepciones sueltas y PISAN todo lo demas: un
+vuelo puntual que carga con YPF aunque su aerolinea no sea cliente, o al reves.
 
 Uso:
   python market_share.py                    sobre todo lo acumulado
@@ -81,6 +93,7 @@ def cargar_lista(ruta: Path | str = LISTA_PATH) -> dict:
     """
     ruta = Path(ruta)
     vacia = {"existe": False, "aerolineas": [], "vuelos": [], "competidores": [],
+             "rutas": {}, "no_ypf_vuelos": [],
              "exhaustiva": False, "actualizado": None, "fuente": None,
              "error": None}
     if not ruta.exists():
@@ -100,6 +113,12 @@ def cargar_lista(ruta: Path | str = LISTA_PATH) -> dict:
         # coincidencias y pareceria que ningun vuelo es de YPF.
         "aerolineas": mayus(d.get("aerolineas")),
         "competidores": mayus(d.get("competidores")),
+        # {aerolinea: [destinos]} -- cliente parcial. Se normaliza todo a
+        # mayusculas por el mismo motivo que arriba.
+        "rutas": {str(k).strip().upper(): mayus(v)
+                  for k, v in (d.get("rutas") or {}).items() if str(k).strip()},
+        "no_ypf_vuelos": [x.replace(" ", "")
+                          for x in mayus(d.get("no_ypf_vuelos"))],
         # Los numeros de vuelo se comparan sin espacios: "AR 1234" y "AR1234"
         # son el mismo vuelo y la planilla puede traer cualquiera de los dos.
         "vuelos": [x.replace(" ", "") for x in mayus(d.get("vuelos"))],
@@ -117,11 +136,21 @@ def clasificar(partida: dict, lista: dict) -> str:
     vuelo puntual que carga con otro proveedor aunque la aerolinea sea cliente.
     """
     nro = (partida.get("numero") or "").replace(" ", "").upper()
+    # Las excepciones por vuelo mandan sobre todo lo demas, en los dos sentidos.
     if nro and nro in lista["vuelos"]:
         return "ypf"
+    if nro and nro in lista.get("no_ypf_vuelos", ()):
+        return "competencia"
     cod = (partida.get("aerolinea_id") or "").strip().upper()
     if cod and cod in lista["aerolineas"]:
-        return "ypf"
+        return "ypf"                       # cliente completo
+    # Cliente PARCIAL: solo las rutas listadas. Fuera de esas es competencia y
+    # no "desconocido", porque figurar en `rutas` declara el alcance completo de
+    # esa aerolinea. Si de una aerolinea se conoce solo una parte, va en
+    # `aerolineas` o no va: `rutas` es una afirmacion sobre el resto.
+    if cod and cod in lista.get("rutas", {}):
+        dst = (partida.get("otro_aeropuerto") or "").strip().upper()
+        return "ypf" if dst and dst in lista["rutas"][cod] else "competencia"
     if cod and cod in lista["competidores"]:
         return "competencia"
     # Con la lista declarada COMPLETA, lo que no es cliente es competencia. Sin
@@ -158,11 +187,24 @@ def calcular(partidas: list[dict], lista: dict) -> dict:
         d = por_aerolinea.setdefault(k, {"codigo": k, "nombre": p.get("aerolinea"),
                                          "vuelos": 0, "pasajeros": 0,
                                          "vuelos_con_pax": 0,
-                                         "clase": clasificar(p, lista)})
+                                         "ypf": 0, "competencia": 0,
+                                         "sin_clasificar": 0})
+        # POR CLASE Y NO UNA SOLA: un cliente parcial -- de YPF en algunas rutas
+        # y no en otras -- tenia una unica etiqueta y quedaba dibujado como
+        # nuestro por completo. Con los tres contadores la cobertura parcial se
+        # ve en la fila.
+        d[clasificar(p, lista)] += 1
         d["vuelos"] += 1
         if p.get("pasajeros") and p["pasajeros"] > 0:
             d["pasajeros"] += p["pasajeros"]
             d["vuelos_con_pax"] += 1
+    for d in por_aerolinea.values():
+        # "parcial" es un estado propio y no un detalle: es la diferencia entre
+        # "este cliente es nuestro" y "de este cliente tenemos algunas rutas".
+        d["clase"] = ("ypf" if d["ypf"] == d["vuelos"] else
+                      "competencia" if d["competencia"] == d["vuelos"] else
+                      "sin_clasificar" if d["sin_clasificar"] == d["vuelos"] else
+                      "parcial")
     ranking = sorted(por_aerolinea.values(), key=lambda d: -d["vuelos"])
 
     # POR RUTA. El destino sale de otro_aeropuerto, que es IATAdestorig y no
@@ -291,20 +333,24 @@ def _informe(r: dict | None, detalle: bool = False) -> None:
                   f"{r['share_techo'] * 100:.1f}%")
             print("  Es un RANGO porque la lista no se declaro completa: las")
             print(f"  {r['n_sin_clasificar']} sin clasificar pueden ser de YPF o no.")
-        px, pt = r["pax_ypf"], r["pax_total"]
-        print(f"\n  pasajeros YPF      {px['suma']:,}"
-              f"   ({px['vuelos_con_dato']} de {px['vuelos']} vuelos informan)")
-        print(f"  pasajeros total    {pt['suma']:,}"
-              f"   ({pt['vuelos_con_dato']} de {pt['vuelos']} vuelos informan)")
+        # La ocupacion NO es parte del share: se informa como dato para el
+        # modelo de consumo, con cuantos vuelos la traen.
+        pt = r["pax_total"]
+        print("")
+        print(f"  rutas distintas    {r['n_rutas']}")
+        print(f"  ocupacion (dato para el modelo, NO parte del share):")
+        print(f"    la informan       {pt['vuelos_con_dato']} de {pt['vuelos']}"
+              f" partidas   ({pt['suma']:,} pasajeros)")
         print(f"\n  lista actualizada  {li['actualizado'] or 'sin fecha'}"
               f"   fuente: {li['fuente'] or 'sin declarar'}")
     if detalle:
         print("")
         print("  POR AEROLINEA")
-        print(f"  {'cod':4} {'aerolinea':26} {'vuelos':>6}  clase")
+        print(f"  {'cod':4} {'aerolinea':24} {'tot':>4} {'YPF':>4} {'comp':>5} {'?':>3}  clase")
         for d in r["por_aerolinea"]:
-            print(f"  {d['codigo']:4} {(d['nombre'] or '-')[:26]:26} "
-                  f"{d['vuelos']:6}  {d['clase']}")
+            print(f"  {d['codigo']:4} {(d['nombre'] or '-')[:24]:24} "
+                  f"{d['vuelos']:4} {d['ypf']:4} {d['competencia']:5} "
+                  f"{d['sin_clasificar']:3}  {d['clase']}")
         print("")
         print(f"  POR RUTA  (desde {r['aeropuerto']}, {r['n_rutas']} destinos)")
         print(f"  {'dest':5} {'nombre':20} {'vuelos':>6} {'YPF':>4}  {'cuerpo':11} aerolineas")

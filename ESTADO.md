@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-07, con id_arpt que no filtra y arpt que era el origen: dos bugs arreglados.
+Última actualización: 2026-09-07, con clientes parciales por ruta y la vista por ruta.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -3050,3 +3050,66 @@ prometerlo.
   necesita: número, ruta, cuerpo, matrícula y ocupación por vuelo.
 - **La página no muestra rutas todavía.** El módulo las calcula y la API las
   devuelve; la tabla de la pantalla sigue siendo por aerolínea.
+
+---
+
+## Sesión 2026-09-07 (3): clientes parciales por ruta, y la vista por ruta
+
+Fran avisó que **algunos clientes se cubren al 100 % y otros solo en ciertas
+rutas**. Eso no entraba en el modelo, que solo sabía de aerolíneas enteras.
+
+### Dos clases de cliente
+
+    "aerolineas": ["AR"]              cliente COMPLETO
+    "rutas": {"WJ": ["MDZ", "IGR"]}   cliente PARCIAL, solo esos destinos
+
+**Fuera de las rutas listadas, esa aerolínea cuenta como COMPETENCIA y no como
+desconocido.** Es una decisión con consecuencia: figurar en `rutas` **declara el
+alcance completo** de esa aerolínea. Si de una aerolínea se conoce solo una
+parte, va en `aerolineas` o no va — porque tratar el resto como desconocido
+subiría el techo del share sin evidencia, igual de mal que bajarlo.
+
+Y `vuelos` / `no_ypf_vuelos` son las excepciones sueltas, que **pisan todo**.
+
+### Un defecto que apareció al probarlo
+
+`por_aerolinea` guardaba **una sola clase** por aerolínea, así que un cliente
+parcial se dibujaba como nuestro por completo. Con la lista de prueba, WJ
+—cliente en 2 de 5 rutas— salía como `ypf` en la fila.
+
+Ahora cuenta las tres clases por aerolínea y la clase de la fila es **`parcial`**
+cuando están mezcladas. Verificado: `AR 28 de 29` (una excepción) y `WJ 4 de 9`
+(solo MDZ e IGR), los dos como parcial.
+
+### La vista por ruta
+
+Tabla nueva **antes** de la de aerolíneas, porque es lo que consume el modelo:
+
+| destino | partidas | de YPF | |
+|---|---|---|---|
+| IGR Iguazú | 5 | 5 | 100 % |
+| MDZ Mendoza | 4 | 4 | 100 % |
+| BRC Bariloche | 4 | 2 | parcial |
+| GRU San Pablo | 3 | 1 | parcial |
+
+La barra dice qué proporción de esa ruta abastece YPF: verde toda, violeta
+parcial, roja ninguna. Con **cuerpo NB/WB al 100 %** y la ruta al 100 %, es lo
+que el modelo de consumo necesita junto con la ocupación.
+
+22 destinos distintos sobre 41 partidas ocurridas.
+
+### Dónde está la página
+
+| dónde | URL |
+|---|---|
+| app local aparte (`MARKET-SHARE.bat`) | `127.0.0.1:8600` |
+| sistema completo | `127.0.0.1:8000/market-share` |
+| desplegado (instantánea) | `radar-aep.onrender.com/market-share` |
+
+### Lo que falta
+
+- **La lista real.** Sigue siendo lo único que separa esto de un número.
+- **La columna Pasajeros de la tabla de aerolíneas quedó**, aunque la ocupación
+  ya no entra en el share. Es dato para el modelo, pero conviene decidir si va
+  ahí o en la vista por vuelo.
+- **Nada de esto se portó al entregable** todavía.
