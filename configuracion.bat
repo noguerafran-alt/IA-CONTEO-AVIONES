@@ -69,3 +69,9 @@ REM Carpeta compartida donde se publica la copia para las otras PC. Va dentro de
 REM OneDrive a proposito: ahi el archivo es un volcado quieto que nadie tiene
 REM abierto, que es el unico uso de una carpeta sincronizada que es seguro.
 set ADSB_COMPARTIDO=%OneDrive%\ADSB-AEROPARQUE
+
+REM La base de la VERDAD EXTERNA: lo que publica Aeropuertos Argentina, que el
+REM poller GRABAR-OFICIAL.bat acumula. Va SEPARADA de ADSB_DB a proposito -- ver
+REM el docstring de aa2000.py -- porque es la referencia contra la que se mide el
+REM sistema, y mezclarla con las mediciones propias hace posible confundirlas.
+set ADSB_OFICIAL=C:\adsb-datos\aa2000_oficial.db
