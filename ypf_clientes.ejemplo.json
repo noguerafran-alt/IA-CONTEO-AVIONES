@@ -1,0 +1,24 @@
+{
+  "_comentario": [
+    "PLANTILLA. Copiar a ypf_clientes.json y llenar con los datos reales.",
+    "aerolineas: codigos IATA de DOS letras, como los publica AA2000 en",
+    "  idaerolinea. Los que se ven hoy en Aeroparque: AR (Aerolineas",
+    "  Argentinas), WJ (JetSMART), O4 (Andes), JJ (LATAM Brasil), LA (LATAM",
+    "  Chile), LP (LATAM Peru), H2 (Sky), H8 (Sky Peru), G3 (GOL), UX (Air",
+    "  Europa), IB (Iberia), AZ (ITA), BA (British), LL (Level).",
+    "vuelos: excepciones sueltas, un vuelo que carga con otro proveedor",
+    "  aunque su aerolinea sea cliente. PISA lo que diga la aerolinea.",
+    "exhaustiva: poner true SOLO si la lista cubre TODAS las aerolineas del",
+    "  aeropuerto. Con false, lo que no figura queda 'sin clasificar' y el",
+    "  share se publica como un RANGO en vez de un numero: desconocido no es",
+    "  competencia, y tratarlo como tal bajaria el share de YPF sin evidencia.",
+    "fuente y actualizado: para poder auditar el numero despues. Un share sin",
+    "  saber de que planilla salio no se puede defender."
+  ],
+  "actualizado": "AAAA-MM-DD",
+  "fuente": "de donde salio esta lista",
+  "exhaustiva": false,
+  "aerolineas": [],
+  "vuelos": [],
+  "competidores": []
+}

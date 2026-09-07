@@ -666,6 +666,27 @@ def api_oficial(movimiento: str = "", solo_reales: bool = False):
         conn.close()
 
 
+@app.get("/api/market-share")
+def api_market_share(horas: float = 0):
+    """El share de YPF sobre las partidas oficiales. Ver market_share.py.
+
+    NO depende de la antena: numerador y denominador salen los dos de la misma
+    lista de partidas de AA2000. Es lo que lo hace publicable sin el registro de
+    uptime, a diferencia de la cobertura.
+
+    Sin la lista de clientes de YPF no devuelve ningun porcentaje, y con una
+    lista no declarada completa devuelve un RANGO: desconocido no es competencia.
+    """
+    import aa2000
+    import market_share as _ms
+    r = _ms.desde_base(str(aa2000.DB_PATH), horas=(horas or None))
+    if r is None:
+        return JSONResponse({"ms": None, "receptor": _receptor_publicado(),
+                             "empty_reason": "falta la base del poller: corre "
+                                             "GRABAR-OFICIAL.bat primero."})
+    return JSONResponse({"ms": r, "receptor": _receptor_publicado()})
+
+
 @app.get("/api/cruce")
 def api_cruce(horas: float = 0):
     """El cruce POR HORA entre lo que detectamos y lo que AA2000 publica.

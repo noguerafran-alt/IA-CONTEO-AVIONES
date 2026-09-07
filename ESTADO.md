@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-06, con el cruce automático ADS-B vs AA2000 por hora.
+Última actualización: 2026-09-07, con el motor de market share (falta la lista de clientes de YPF).
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2855,3 +2855,77 @@ no probaría nada.
   solo en el repo de trabajo.
 - **Falta la primera medición con solape.** Es lo único que separa esto de una
   cobertura publicable.
+
+---
+
+## Sesión 2026-09-07: el market share, y por qué no depende de la antena
+
+`market_share.py` y `/api/market-share`. Mide el share de YPF sobre las
+**partidas ocurridas** que publica AA2000.
+
+### Lo que lo hace publicable HOY
+
+**El numerador y el denominador salen los dos de la misma lista de partidas
+oficiales.** La cobertura del ADS-B no entra en la cuenta, así que este número
+**no espera al registro de uptime** — a diferencia de la cobertura, que sí.
+
+Esa es exactamente la diferencia con los dos porcentajes que este proyecto ya
+publicó mal: esos tenían un denominador que dependía de cuándo la antena estaba
+prendida.
+
+La antena sirve para enriquecer y para auditar la fuente. No para calcular esto.
+
+### Desconocido NO es competencia
+
+Es la decisión central. Si la lista de clientes de YPF no se declara **completa**,
+una aerolínea que no figura puede ser cliente y no estar anotada. Tratarla como
+competencia bajaría el share de YPF sin evidencia.
+
+Así que con una lista no exhaustiva el resultado es un **rango**:
+
+```
+piso  = clientes YPF / total
+techo = (clientes YPF + sin clasificar) / total
+```
+
+Con `"exhaustiva": true` piso y techo coinciden y recién ahí hay un número solo.
+
+### Solo las partidas OCURRIDAS
+
+El denominador son las que tienen `real_epoch`, no las programadas. Una partida
+que todavía no despegó no es una carga de combustible, y meterla movería el share
+**según la hora del día en que se mire la pantalla**.
+
+### Estado: falta la lista
+
+Fran la va a aportar. Vive en `ypf_clientes.json`, fuera del código, y hay
+plantilla comentada en `ypf_clientes.ejemplo.json`. Se llama `.ejemplo` a
+propósito: si se llamara como la real, el módulo calcularía un share con datos de
+muestra.
+
+Sin la lista el módulo **no publica ningún porcentaje** y lo dice.
+
+### Lo que ya se ve, sobre 86 partidas ocurridas (07/09, 09:24–13:11 UTC)
+
+| código | aerolínea | vuelos | pax |
+|---|---|---|---|
+| **AR** | Aerolíneas Argentinas | **54** | 1.786 |
+| WJ | JetSMART | 13 | 416 |
+| O4, JJ | Andes, LATAM Brasil | 3 cada una | — |
+| LA, UX, H2 | LATAM Chile, Air Europa, Sky | 2 cada una | 166 |
+| IB, AZ, BA, LL, G3, H8, LP | resto | 1 cada una | — |
+
+**AR es 54 de 86 = 63 % de las partidas**, así que la concentración del mercado en
+una sola aerolínea es el hecho dominante: el share de YPF va a quedar decidido
+casi por completo por si Aerolíneas es cliente o no. Conviene saberlo antes de
+mirar el número.
+
+Ojo con `pax`: solo 70 de las partidas informan pasajeros y 98 informan cero. Los
+ceros y los faltantes se cuentan **aparte** — ver `aa2000._pasajeros()`.
+
+### Lo que falta
+
+- **La lista de YPF.** Es lo único que separa esto de un número.
+- **La página.** El endpoint está; la pantalla dedicada no. Se armó primero el
+  motor porque una página que dice «falta la lista» no se puede probar de verdad.
+- **Nada de esto está en el entregable** todavía.
