@@ -255,8 +255,15 @@ def calcular(partidas: list[dict], lista: dict) -> dict:
         "n_sin_clasificar": n_sin,
         # PISO y TECHO, no un numero, salvo que la lista se declare completa.
         # Ver el docstring: desconocido no es competencia.
-        "share_piso": (n_ypf / total) if total else None,
-        "share_techo": ((n_ypf + n_sin) / total) if total else None,
+        # None y NO 0.0 sin lista de clientes. Con la lista vacia el piso da
+        # 0.0, y un 0.0 leido del JSON afirma que YPF no abastece a NINGUN
+        # vuelo -- que es una afirmacion, no la ausencia de una. La pagina ya
+        # miraba lista.existe, pero el campo mentia solo y cualquiera que
+        # consumiera la API se llevaba un cero inventado. Es el mismo defecto
+        # que tuvo cruce.py con la cobertura sin uptime.
+        "share_piso": (n_ypf / total) if (total and lista["existe"]) else None,
+        "share_techo": (((n_ypf + n_sin) / total)
+                        if (total and lista["existe"]) else None),
         "share_exacto": bool(lista["exhaustiva"] and total),
         "pax_ypf": _pax(grupos["ypf"]),
         "pax_total": _pax(partidas),
