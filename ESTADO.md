@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-07, con clientes parciales por ruta y la vista por ruta.
+Última actualización: 2026-09-07, con la regla de negocio confirmada: se clasifica por ORIGEN del vuelo.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -3113,3 +3113,58 @@ que el modelo de consumo necesita junto con la ocupación.
   ya no entra en el share. Es dato para el modelo, pero conviene decidir si va
   ahí o en la vista por vuelo.
 - **Nada de esto se portó al entregable** todavía.
+
+---
+
+## Regla de negocio CONFIRMADA: se clasifica por ORIGEN del vuelo
+
+Confirmado por Fran el 2026-09-07: **el avión carga donde despega.**
+
+| origen de la partida | quién abastece |
+|---|---|
+| **AEP, COR, EZE** | hay competencia → **la ruta la define el Excel de YPF** |
+| cualquier otro (interior) | **YPF por definición**: no hay competencia |
+
+**Se clasifica por el ORIGEN, no por el aeropuerto del par.** Un `AEP → BRC`
+carga en Aeroparque y es competitivo; el `BRC → AEP` de vuelta carga en Bariloche
+y es de YPF. El mismo par de ciudades, dos clasificaciones opuestas. Cualquier
+implementación que agrupe "la ruta BRC-AEP" sin distinguir el sentido va a estar
+mal en la mitad de los casos.
+
+### Consecuencia: el universo es NACIONAL, no Aeroparque
+
+Esto invierte una decisión de más arriba. El 2026-09-07 se agregó a
+`aa2000.sondear()` un filtro por aeropuerto, porque `id_arpt` no filtra en la API
+y las partidas de todo el país entraban etiquetadas como de AEP. Ese filtro era
+correcto para medir Aeroparque — **y es lo contrario de lo que este share
+necesita**.
+
+Para el market share el feed nacional es el universo CORRECTO: hay que ver todas
+las partidas del país, porque las del interior son YPF sin necesidad de mirar el
+Excel. El filtro tiene que volverse **opcional** (`aeropuerto=None` = todo el
+país), no desaparecer: `/aeropuerto` y el cruce con el ADS-B siguen necesitando
+solo AEP.
+
+### Lo que falta, y va en un repo APARTE
+
+Fran quiere zipear un repo solo y correrlo en otra PC con un `.bat`. Sin ADS-B,
+sin dongle, sin YOLO, sin pyModeS: solo `fastapi`, `uvicorn` y `openpyxl`.
+
+    RADAR-MARKET-SHARE/
+      MARKET-SHARE.bat        un clic
+      aa2000.py               sondea la API (NACIONAL)
+      market_share.py         clasifica por origen y calcula
+      cargar_excel.py         lee la planilla de YPF -> JSON
+      ms_local.py             servidor y pagina
+      webapp/                 plantilla y estatico
+      requirements.txt
+      LEEME.md
+
+El Excel lo está armando Fran y va a decir **qué rutas de AEP, COR y EZE
+abastecen**. Cuando llegue: abrirlo, decir qué columnas y hojas tiene, y
+**mostrar cómo se interpretó ANTES de convertir nada**. Ya hubo dos bugs de
+lectura de campos hoy (`id_arpt` que no filtra y `arpt` que era el origen), los
+dos silenciosos, y una columna mal interpretada en la planilla haría lo mismo con
+el numerador.
+
+`openpyxl 3.1.5` ya está en el `.venv`; `pandas` NO está instalado.
