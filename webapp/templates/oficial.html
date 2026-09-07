@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Verdad externa (AA2000) — Runway Video Analytics</title>
+<script src="/static/franja_receptor.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; margin: 0; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { font-size: 1rem; color: #9aa0a6; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; }
+  .subtitle { color: #9aa0a6; margin-bottom: 18px; }
+  a { color: #60a5fa; }
+  .cards { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+  .card { background: #1a1d24; border-radius: 12px; padding: 14px 20px; min-width: 130px; }
+  .card .n { font-size: 2rem; font-weight: 700; }
+  .card .label { color: #9aa0a6; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .sub { color: #6b7280; font-size: 0.78rem; margin-top: 3px; }
+  /* Verde: lo que la fuente oficial CONFIRMA que ocurrio (tiene hora real).
+     Gris: lo programado, que todavia es una intencion. */
+  .card.real .n { color: #34d399; }
+  .card.gris .n { color: #9aa0a6; }
+  .card.gris { background: #171a20; }
+  .panel { background: #1a1d24; border-radius: 12px; padding: 18px 20px; margin: 20px 0; }
+  .nota { color: #9aa0a6; font-size: 0.85rem; line-height: 1.55; margin: 10px 0 0; }
+  .nota b { color: #c9ced6; }
+  .aviso { background: #2a2113; border-left: 3px solid #fbbf24; border-radius: 6px;
+           padding: 12px 16px; color: #e5c07b; font-size: 0.87rem; line-height: 1.55; margin-bottom: 18px; }
+  .aviso b { color: #fde68a; }
+  .empty { color: #9aa0a6; padding: 24px; text-align: center; }
+  .controles { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button { background: #262a33; color: #9aa0a6; border: 1px solid #363b46;
+                 border-radius: 6px; padding: 7px 13px; font-size: 0.85rem; cursor: pointer; }
+  .tabs button.activo { background: #1e3a5f; color: #dbeafe; border-color: #3b82f6; }
+  input[type=search] { background: #262a33; color: #e6e6e6; border: 1px solid #363b46;
+                       border-radius: 6px; padding: 8px 14px; font-size: 0.9rem; width: 260px; }
+  .cuenta { color: #6b7280; font-size: 0.85rem; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #1a1d24; border-radius: 12px; overflow: hidden; }
+  th, td { padding: 8px 11px; text-align: left; border-bottom: 1px solid #262a33; font-size: 0.86rem; white-space: nowrap; }
+  th { color: #9aa0a6; font-weight: 600; text-transform: uppercase; font-size: 0.71rem; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-variant-numeric: tabular-nums; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ident { color: #fbbf24; font-weight: 600; }
+  .matri { color: #34d399; font-weight: 600; }
+  .muted { color: #4b5563; }
+  .real { color: #86efac; font-weight: 600; }
+  /* El desvio se colorea porque es el dato operativo -adelantado, en horario,
+     demorado- pero el numero queda a la vista igual, no solo el color. */
+  .tarde { color: #fca5a5; }
+  .temprano { color: #93c5fd; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.77rem; }
+</style>
+</head>
+<body>
+  <h1>Verdad externa: lo que publica Aeropuertos Argentina</h1>
+  <div class="subtitle">
+    Las horas <b>reales</b> de despegue y aterrizaje según la fuente oficial, acumuladas por el poller ·
+    <a href="/">dashboard</a> · <a href="/adsb">ADS-B en vivo</a> ·
+    <a href="/adsb/analisis">análisis ADS-B</a> · <a href="/adsb/mapa">mapa ADS-B</a> ·
+    <a href="/aeropuerto">operaciones del aeropuerto</a> · <a href="/aeropuerto/mapa">mapa del aeropuerto</a>
+  </div>
+
+  <div id="franja-receptor"></div>
+
+  <!-- Va arriba porque cambia como se lee toda la tabla: esto NO es una
+       medicion del sistema. Es la referencia contra la cual el sistema se mide,
+       y confundir las dos cosas invalidaria cualquier comparacion. -->
+  <div class="aviso">
+    <b>Esto no lo midió la antena.</b> Son las horas que publica Aeropuertos Argentina en las
+    pantallas de los aeropuertos. Sirve como <b>referencia contra la cual medir</b> lo que el
+    sistema detecta — no como un resultado del sistema.
+  </div>
+
+  <div id="vacio" class="panel empty" style="display:none"></div>
+
+  <div id="contenido" style="display:none">
+    <div class="cards" id="tarjetas"></div>
+    <p class="nota" id="ventana"></p>
+
+    <div class="controles" style="margin-top:20px">
+      <h2 style="margin:0">Vuelos acumulados</h2>
+      <div class="tabs" id="tabs">
+        <button data-f="" class="activo">Todos</button>
+        <button data-f="D">Partidas</button>
+        <button data-f="A">Arribos</button>
+        <button data-f="real">Solo con hora real</button>
+      </div>
+      <input type="search" id="buscar" placeholder="filtrar por vuelo, aerolínea, matrícula…">
+      <span class="cuenta" id="cuenta"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Mov.</th><th>Vuelo</th><th>Aerolínea</th><th>Dest./Orig.</th>
+          <th>Programada</th><th>Real</th><th class="num">Desvío</th><th>Estado</th>
+          <th>Matrícula</th><th class="num">Pax</th><th>Rotación</th><th class="num">Visto</th>
+        </tr></thead>
+        <tbody id="tabla"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Qué es cada cosa</h2>
+    <p class="nota">
+      <b>La hora real dura poco en la fuente.</b> El feed de las pantallas arranca en «ahora» y va
+      hacia adelante unas 26 h; la hora real de un despegue aparece cuando ocurre y a las pocas
+      horas <b>desaparece para siempre</b>. Por eso hay un poller: lo que ves acá es lo que se
+      alcanzó a guardar, no un archivo que se pueda pedir de nuevo.
+    </p>
+    <p class="nota">
+      <b>Pax vacío y Pax 0 no son lo mismo</b>, y se muestran distinto a propósito. La fuente manda
+      las dos cosas: un cero es casi seguro «no informado todavía», no «voló vacío». Sumarlos como
+      si fueran cero pasajeros inventaría un dato.
+    </p>
+    <p class="nota">
+      <b>Rotación</b> es el vuelo anterior del mismo avión. Es justo el concepto que causó el bug
+      del número de vuelo del lado del ADS-B: un avión que aterriza y vuelve a despegar cambia de
+      número, y usar el último visto le pisa el número a la operación anterior.
+    </p>
+    <p class="nota">
+      <b>Visto</b> es cuántas veces el poller encontró ese vuelo en el feed. Un vuelo con muchas
+      apariciones pasó por varios estados; uno con una sola apareció justo antes de que se lo
+      llevara la ventana.
+    </p>
+  </div>
+
+<script>
+let VUELOS = [], RESUMEN = null, FILTRO = "", BUSCA = "";
+const $ = id => document.getElementById(id);
+const nada = '<span class="muted">–</span>';
+
+const hora = e => !e ? "–" : new Date(e * 1000).toLocaleString("es-AR",
+  {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"});
+
+// El desvio se calcula sobre los EPOCH y no sobre el texto "07/09 09:15": el
+// texto no trae ano, y restar dos textos que cruzan la medianoche daria un
+// numero absurdo. aa2000.py ya resolvio el ano contra la ventana del feed.
+function desvio(v) {
+  if (!v.real_epoch || !v.programada_epoch) return null;
+  return Math.round((v.real_epoch - v.programada_epoch) / 60);
+}
+
+function pintarTarjetas() {
+  const r = RESUMEN;
+  $("tarjetas").innerHTML = `
+    <div class="card real"><div class="n">${r.partidas_con_real}</div>
+      <div class="label">Partidas confirmadas</div>
+      <div class="sub">de ${r.partidas} programadas</div></div>
+    <div class="card real"><div class="n">${r.arribos_con_real}</div>
+      <div class="label">Arribos confirmados</div>
+      <div class="sub">de ${r.arribos} programados</div></div>
+    <div class="card gris"><div class="n">${r.total}</div>
+      <div class="label">Vuelos acumulados</div>
+      <div class="sub">programados y ocurridos</div></div>
+    <div class="card gris"><div class="n">${r.con_matricula}</div>
+      <div class="label">Con matrícula</div>
+      <div class="sub">la fuente la trae servida</div></div>
+    <div class="card gris"><div class="n">${r.con_pasajeros}</div>
+      <div class="label">Con pasajeros</div>
+      <div class="sub">+${r.pasajeros_en_cero} informados en cero</div></div>`;
+}
+
+function pintarVentana() {
+  const r = RESUMEN;
+  $("ventana").innerHTML =
+    `Ventana horaria de los vuelos: <b>${hora(r.desde_epoch)}</b> a <b>${hora(r.hasta_epoch)}</b>. ` +
+    `El poller sondeó entre <b>${hora(r.primer_sondeo)}</b> y <b>${hora(r.ultimo_sondeo)}</b>. ` +
+    `Todo lo que ocurrió fuera de esa segunda ventana <b>no está y no se puede recuperar</b>: ` +
+    `la fuente no guarda historia.`;
+}
+
+function pintar() {
+  const q = BUSCA.trim().toLowerCase();
+  // El filtro de movimiento y el de "solo con hora real" los aplica el SERVIDOR
+  // (ver cargar()), no este filter. La razon es un bug que estuvo a la vista:
+  // /api/oficial devuelve las 600 filas de hora programada mas reciente, que
+  // son las mas FUTURAS y por lo tanto no tienen hora real todavia. Filtrando
+  // en el navegador, "solo con hora real" daba "0 de 600" mientras la tarjeta
+  // de arriba decia 86 partidas confirmadas: la pagina se contradecia sola.
+  // Aca queda solo la busqueda por texto, que sobre 600 filas es instantanea.
+  const filas = VUELOS.filter(v => {
+    if (!q) return true;
+    return [v.numero, v.aerolinea, v.matricula, v.otro_aeropuerto, v.estado]
+      .some(x => (x || "").toLowerCase().includes(q));
+  });
+  $("cuenta").textContent = `${filas.length} de ${VUELOS.length}`;
+  if (!filas.length) {
+    $("tabla").innerHTML = `<tr><td colspan="12" class="empty">Nada coincide con ese filtro.</td></tr>`;
+    return;
+  }
+  $("tabla").innerHTML = filas.map(v => {
+    const d = desvio(v);
+    // Pax: hay que distinguir null (no informado) de 0 (informado en cero).
+    const pax = (v.pasajeros === null || v.pasajeros === undefined)
+      ? nada
+      : (v.pasajeros === 0
+         ? '<span class="muted" title="la fuente informó 0: casi seguro que todavía no lo cargó, no que voló vacío">0</span>'
+         : v.pasajeros.toLocaleString("es-AR"));
+    const esD = v.movimiento === "D";
+    return `<tr>
+      <td><span class="chip" style="background:${esD ? "#1e3a5f" : "#14532d"};color:${
+           esD ? "#93c5fd" : "#86efac"}">${esD ? "despegue" : "arribo"}</span></td>
+      <td class="ident">${v.numero || nada}</td>
+      <td>${v.aerolinea || nada}</td>
+      <td class="mono">${v.otro_aeropuerto || nada}</td>
+      <td class="mono">${v.programada || nada}</td>
+      <td class="mono ${v.real ? "real" : ""}">${v.real || nada}</td>
+      <td class="num mono ${d === null ? "" : (d > 0 ? "tarde" : (d < 0 ? "temprano" : ""))}">${
+        d === null ? nada : (d > 0 ? "+" + d : d) + " min"}</td>
+      <td>${v.estado || nada}</td>
+      <td class="matri">${v.matricula || nada}</td>
+      <td class="num">${pax}</td>
+      <td class="mono">${v.rotacion || nada}</td>
+      <td class="num mono muted">${v.veces_visto ?? "–"}</td>
+    </tr>`;
+  }).join("");
+}
+
+$("tabs").addEventListener("click", async e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  FILTRO = b.dataset.f;
+  $("tabs").querySelectorAll("button").forEach(x => x.classList.toggle("activo", x === b));
+  await cargar();
+});
+$("buscar").addEventListener("input", e => { BUSCA = e.target.value; pintar(); });
+
+// El filtro viaja al servidor: es lo unico que garantiza que el limite de filas
+// recorte DENTRO del conjunto pedido y no antes de filtrarlo.
+async function cargar() {
+  const p = new URLSearchParams();
+  if (FILTRO === "D" || FILTRO === "A") p.append("movimiento", FILTRO);
+  if (FILTRO === "real") p.append("solo_reales", "1");
+  let r;
+  try {
+    r = await (await fetch("/api/oficial" + (p.toString() ? "?" + p : ""))).json();
+  } catch (e) { r = null; }
+  if (r && r.receptor) { try { pintarFranjaReceptor(r.receptor, null); } catch (e) {} }
+  if (!r || !r.resumen) {
+    $("vacio").style.display = "";
+    $("vacio").textContent = (r && r.empty_reason) || "No se pudo leer la base del poller.";
+    return;
+  }
+  RESUMEN = r.resumen;
+  VUELOS = r.vuelos || [];
+  $("contenido").style.display = "";
+  pintarTarjetas();
+  pintarVentana();
+  pintar();
+}
+
+cargar();
+</script>
+</body>
+</html>

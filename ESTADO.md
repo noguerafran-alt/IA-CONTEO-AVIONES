@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-06, con el número de serie del fuselaje en el registro y en la tabla.
+Última actualización: 2026-09-06, con la API de AA2000, el poller de verdad externa y la página /oficial.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2626,3 +2626,134 @@ serial, sin un error de consola.
 - **Nadie cruzó el serial con nada todavía.** El uso que lo justifica —detectar
   que dos matrículas distintas son el mismo fuselaje, o que la misma matrícula
   cambió de avión— pide comparar entre fechas, y eso no existe.
+
+---
+
+## Sesión 2026-09-06 (7): la API de AA2000, el poller y la página de verdad externa
+
+`CLAUDE.md` decía que la verdad externa hay que **transcribirla a mano** de una
+página rasterizada con `pypdfium2`. Ya no: hay API, y trae más de lo que el sitio
+muestra.
+
+### La API
+
+Gateway de Azure delante de `api.aa2000.com.ar`:
+
+```
+https://WebAA-API-h4d5amdfcze7hthn.a02.azurefd.net/web-prod/v1/api-aa
+```
+
+**Hay que mandar la cabecera `Origin: https://www.aeropuertosargentina.com`.** Sin
+ella devuelve `401 {"error":"Unauthorized","message":"Invalid Key"}`. Con ella no
+pide nada más. Endpoints: `all-flights`, `flights-fth`, `all-airports`,
+`all-airports-by-id`, `climates`, `categories`, `products`, `servlet`.
+
+Cómo se encontró, por si hay que repetirlo: el host aparece como `dns-prefetch` en
+el HTML, y los paths están en los chunks de Next.js (`grep` sobre
+`/_next/static/chunks/*.js`). El 404 del gateway **filtra la URL de origen**, que
+es lo que reveló el nombre real del controlador (`/api/VuelosFTH/GetVuelosFTH`).
+
+### Dos endpoints y ninguno alcanza solo
+
+| | `flights-fth` | `all-flights` |
+|---|---|---|
+| ventana | cualquier fecha (`from`/`to` en `DD/MM/AAAA`) | de «ahora» hacia adelante ~26 h |
+| volumen | 188 partidas de AEP en un día | `c=500` → 500 registros |
+| hora programada | sí | sí |
+| **hora real** | **no** | **sí (`atda`)** |
+| estado | no | sí (`estes`: Despegado, En Horario, Demorado…) |
+| **matrícula** | no | **sí** |
+| **pasajeros** | no | **sí** |
+
+`movtp` es **`D`** o **`A`**, en mayúscula: `partidas`/`arribos` devuelve `[]` sin
+error. Y **`c` es el parámetro de cantidad** — `limit` y `pageSize` no hacen nada,
+se probaron los tres.
+
+**La hora real dura horas y después desaparece para siempre.** Por eso el poller.
+
+### El poller: `aa2000.py`
+
+`python aa2000.py --seguir` sondea los dos movimientos cada 300 s y acumula en
+`vuelo_oficial`, con el `id` de AA2000 como clave.
+
+**Base separada** (`ADSB_OFICIAL`, por defecto `aa2000_oficial.db` junto a la base
+ADS-B). No es comodidad: el poller tiene que poder correr con el grabador apagado
+y al revés, y sobre todo esto es la **referencia** contra la que se mide el
+sistema — mezclarla en el mismo archivo que las mediciones propias hace posible
+confundirlas en una consulta distraída, y eso arruinaría la comparación entera.
+
+Tres decisiones que sostienen que esto sirva:
+
+- **`NO_DEGRADAR`.** El feed es una pantalla: un vuelo puede volver con menos
+  datos que la vez anterior. Sobrescribir una hora real ya vista con `""` sería
+  perder el único dato que el módulo existe para capturar. Verificado con un
+  segundo `guardar()` deliberadamente pelado: `real`, `matricula` y `pasajeros`
+  sobrevivieron.
+- **`_pasajeros()` distingue 0 de vacío.** La fuente manda las dos cosas: `AR 1531`
+  con `"0"` y `AR 1857` con el campo vacío. Un cero ahí es casi seguro «no
+  informado todavía», no «voló vacío», y guardarlos igual haría imposible
+  separarlos después. El resumen los cuenta aparte.
+- **`_resolver_epoch()` resuelve el año contra la ventana.** El feed manda
+  `"07/09 09:15"` **sin año**. Se prueban el año actual y sus vecinos y se elige
+  el que caiga más cerca de ahora. Sin eso, un sondeo del 31 de diciembre a las
+  23:50 fecharía `"01/01 00:30"` un año antes, para siempre.
+
+Medido en el primer sondeo real: **998 vuelos** (500 partidas, 498 arribos), **193
+con hora real**, 401 con matrícula, 70 con pasajeros y 98 informados en cero. El
+segundo sondeo dio 0 nuevas y 0 actualizadas: es idempotente.
+
+### La página: `/oficial`
+
+Tarjetas con partidas y arribos **confirmados** (verde, tienen hora real) contra
+programados (gris), y una tabla con desvío en minutos, estado, matrícula,
+pasajeros y rotación. Enlazada desde las seis páginas.
+
+El aviso va arriba y dice lo que hay que decir: **esto no lo midió la antena.** Es
+la referencia, no un resultado del sistema, y confundirlas invalidaría cualquier
+comparación.
+
+`/api/oficial` abre la base en **solo lectura** (`aa2000.abrir_lectura()`), que es
+distinto de `abrir()` a propósito: `abrir()` ejecuta el SCHEMA, o sea escribe, y
+si la página lo llamara, una visita al tablero **crearía la base vacía** y el
+«todavía no hay datos» se volvería indistinguible de «el poller nunca corrió».
+
+### Un bug que la página se hizo a sí misma, y se vio de inmediato
+
+Con el filtro en el navegador, «Solo con hora real» daba **0 de 600** mientras la
+tarjeta de arriba decía **86 partidas confirmadas**. La página se contradecía sola
+en la misma pantalla.
+
+La causa: `operaciones()` devuelve las 600 filas de hora programada **más
+reciente**, que son las más **futuras** y por lo tanto no tienen hora real todavía.
+El filtro se aplicaba después, sobre esa lista ya recortada, así que nunca podía
+encontrar nada.
+
+Arreglado moviendo el filtro **al servidor** — el endpoint ya aceptaba
+`movimiento` y `solo_reales`, la página los ignoraba. Ahora da **193 de 193**, que
+cierra contra 86 + 107 de las tarjetas. La lección general: **un límite de filas
+aplicado antes del filtro convierte cualquier filtro en una mentira**, y acá se
+notó solo porque los dos números estaban a la vista al mismo tiempo.
+
+### Lo que esto desbloquea
+
+- **El cruce ADS-B ↔ oficial por hora**, que hoy se hace transcribiendo a mano.
+  Verificado de paso: la `LVHKV` que la fuente da para `AR 1243` es el mismo
+  LV-HKV que el ADS-B ve como `e082d6`.
+- **`pasajeros`**, que es el dato que el mapa de negocio necesita para derivar
+  combustible y no tenía fuente.
+- **La cobertura por ventana**, que es lo que `CLAUDE.md` pone como condición para
+  volver a publicar un porcentaje: con horas reales acumuladas y el registro de
+  uptime, el denominador por fin sale de dos fuentes independientes.
+
+### Lo que quedó sin hacer
+
+- **Nadie corre el poller en forma continua todavía.** Se hicieron dos sondeos a
+  mano. Falta un lanzador `.bat` y decidir si va como servicio.
+- **No hay cruce automático contra las operaciones del ADS-B.** Los datos ya están
+  en las dos bases; falta el emparejamiento por hora (±3 min, que es el criterio
+  ya documentado) y la pantalla que muestre los aciertos y las pérdidas.
+- **`flights-fth` no se usa.** Serviría para el denominador de un día completo,
+  incluidos los vuelos que el poller no alcanzó a ver.
+- **No es una API pública documentada.** Se entra con el `Origin` del sitio: puede
+  cambiar o cerrarse sin aviso. Si esto va a sostener algo que se le muestra a
+  YPF, conviene pedirle a Aeropuertos Argentina un acceso formal.

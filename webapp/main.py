@@ -635,6 +635,42 @@ def api_aeropuerto():
     return JSONResponse({"airport": datos, "receptor": _receptor_publicado()})
 
 
+@app.get("/api/oficial")
+def api_oficial(movimiento: str = "", solo_reales: bool = False):
+    """Lo que el poller acumulo del feed oficial de AA2000. Ver aa2000.py.
+
+    ES LA VERDAD EXTERNA, no una medicion del sistema: son las horas que
+    publica Aeropuertos Argentina. Se sirve desde su propia base y en SOLO
+    LECTURA a proposito -- ver aa2000.abrir_lectura()-, asi que abrir esta
+    pagina no puede crear la base ni tocar lo que el poller escribe.
+    """
+    import aa2000
+    conn = aa2000.abrir_lectura()
+    if conn is None:
+        # Un vacio explicado y no una tabla en blanco: el sintoma de "el poller
+        # nunca corrio" tiene que distinguirse de "corrio y no habia vuelos".
+        return JSONResponse({
+            "resumen": None, "vuelos": [], "receptor": _receptor_publicado(),
+            "empty_reason": f"todavia no existe {aa2000.DB_PATH}. Se llena con "
+                            f"'python aa2000.py --seguir', que sondea la API de "
+                            f"AA2000 cada {aa2000.INTERVALO_S:.0f} s."})
+    try:
+        return JSONResponse({
+            "resumen": aa2000.resumen(conn),
+            "vuelos": aa2000.operaciones(conn, movimiento=(movimiento or None),
+                                         solo_reales=bool(solo_reales), limite=600),
+            "intervalo_s": aa2000.INTERVALO_S,
+            "receptor": _receptor_publicado(),
+        })
+    finally:
+        conn.close()
+
+
+@app.get("/oficial")
+def oficial_page(request: Request):
+    return templates.TemplateResponse(request, "oficial.html", {})
+
+
 @app.get("/aeropuerto")
 def aeropuerto_operaciones_page(request: Request):
     return templates.TemplateResponse(request, "aeropuerto_operaciones.html", {})
