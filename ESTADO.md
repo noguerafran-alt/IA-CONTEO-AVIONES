@@ -10,7 +10,7 @@ sin resolver y qué decisiones ya se tomaron para no rediscutirlas. El
 > quedó acá es un cambio que la próxima sesión va a redescubrir, o va a deshacer
 > sin saberlo. Qué corresponde anotar está en `CLAUDE.md`.
 
-Última actualización: 2026-09-07, con la página de market share (falta la lista de clientes de YPF).
+Última actualización: 2026-09-07, con id_arpt que no filtra y arpt que era el origen: dos bugs arreglados.
 (`adsb_uptime.py`, tabla `grabador_sesion`): el sistema ya sabe cuándo estuvo
 arriba, así que puede distinguir «apagada» de «prendida y sorda» sin depender del
 silencio. Ese mismo día **se retiraron los porcentajes de cobertura (56–58% de
@@ -2965,3 +2965,88 @@ formalidad.
 
 De paso quedó probado el camino de error: con un JSON malformado el módulo avisa
 `no se pudo leer ypf_clientes.json` y no revienta la página.
+
+---
+
+## Sesión 2026-09-07 (2): dos errores míos en el market share, y la ruta
+
+Fran corrigió el enfoque y buscando cómo hacerlo aparecieron **dos bugs propios**,
+los dos del tipo que da números creíbles y equivocados.
+
+### Bug 1: `id_arpt` NO FILTRA NADA
+
+`all-flights?id_arpt=AEP`, `=EZE` y `=COR` devuelven **los mismos 60 ids, byte
+por byte**. Es un feed **NACIONAL**, no de un aeropuerto.
+
+O sea que las 998 filas que la base tenía etiquetadas como «de AEP» eran partidas
+de todo el país, y **cualquier share calculado sobre eso tenía el denominador
+inflado**. Medido después del arreglo: de 993 recibidas, **solo 399 son de AEP —
+el 60 % no era Aeroparque**.
+
+El filtro lo hace ahora `sondear()`, sobre el campo `arpt`, y **cuenta lo que
+descarta** (`de_otro_aeropuerto`): sin ese contador, el día que la API empiece a
+filtrar de verdad nadie notaría el cambio.
+
+### Bug 2: `arpt` es el ORIGEN, no el destino
+
+Yo lo guardaba como destino. El síntoma estaba a la vista y no lo miré:
+`AR 1816 AEP → AEP`, que no existe.
+
+Verificado con vuelos de origen conocido: `IB 0102` (Iberia) trae `arpt=EZE` y
+sale de **Ezeiza**; `UX 122` (Air Europa) trae `arpt=COR` y sale de **Córdoba**.
+El destino está en **`IATAdestorig`**: `IB 0102 → MAD`, `BA 248 → LHR`,
+`AZ 681 → FCO`.
+
+Ahora `aeropuerto` sale de `arpt` y `otro_aeropuerto` de `IATAdestorig`, más
+`destino_nombre` de `destorig`. Comprobado: **cero filas con origen igual a
+destino**, que era el síntoma.
+
+La base se reconstruyó de cero: la vieja tenía el país entero mal etiquetado y no
+se podía arreglar con un UPDATE, porque el destino nunca se había guardado.
+
+### La ruta sale del número de vuelo
+
+Es lo que se pidió, y la fuente lo da: **201 de 201 partidas de AEP tienen
+destino (100 %)**. Y un número de vuelo es en la práctica una ruta fija — sobre
+457 números, solo 8 tienen más de un destino.
+
+Se publica en dos agregaciones: **por ruta** (destino, vuelos, cuántos de YPF,
+cuerpos NB/WB, qué aerolíneas) y **por vuelo**, que es la unidad que consume el
+modelo de YPF:
+
+```
+vuelo     ruta       cuerpo matricula  ocup
+WJ 3636   AEP-MDZ    NB     CCAWY         0
+AR 1920   AEP-BRC    NB     LVFVO         0
+JJ 8033   AEP-GRU    NB     PRXBJ         0
+```
+
+### Los pasajeros salen del cálculo
+
+El share se mide en **vuelos**, no en pasajeros. La ocupación es un **dato para
+el modelo de consumo de YPF** —que calcula por avión, ruta y ocupación— y ese
+modelo se conecta aparte. Mezclarla en el share mediría otra cosa, y encima
+mediría mal: **51 de 201 partidas informan pasajeros**.
+
+Cobertura de lo que el modelo necesita, sobre las 201 partidas de AEP:
+
+| dato | cobertura |
+|---|---|
+| **ruta (destino)** | **100 %** |
+| cuerpo NB/WB | **100 %** |
+| matrícula | 37 % |
+| ocupación | 25 % |
+
+La matrícula al 37 % es el eslabón flojo si el modelo necesita el avión exacto.
+Se puede completar cruzando con el ADS-B, que sí resuelve matrícula por ICAO24 —
+pero eso vuelve a depender de la antena, así que conviene saberlo antes de
+prometerlo.
+
+### Lo que falta
+
+- **La lista de clientes de YPF.** Sigue siendo lo único que separa esto de un
+  número.
+- **Conectar el modelo de consumo.** La salida `por_vuelo` ya tiene la forma que
+  necesita: número, ruta, cuerpo, matrícula y ocupación por vuelo.
+- **La página no muestra rutas todavía.** El módulo las calcula y la API las
+  devuelve; la tabla de la pantalla sigue siendo por aerolínea.

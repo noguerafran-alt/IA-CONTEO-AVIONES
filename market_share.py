@@ -1,5 +1,16 @@
 """Market share de YPF en Aeroparque, sobre las partidas que publica AA2000.
 
+SE MIDE EN VUELOS, NO EN PASAJEROS. El share es cuantas partidas abastece YPF
+sobre el total. Los pasajeros NO entran en la cuenta: son un dato de OCUPACION
+que alimenta el modelo de consumo de YPF -- que calcula por avion, ruta y
+ocupacion -- y ese modelo se conecta aparte. Mezclar ocupacion en el share
+mediria otra cosa y ademas mediria mal: solo 51 de 201 partidas informan
+pasajeros.
+
+LA RUTA SALE DEL NUMERO DE VUELO, y es lo que el modelo necesita. Medido sobre
+457 numeros de vuelo, solo 8 tienen mas de un destino: un numero es en la
+practica una ruta fija. La ruta se publica por vuelo y agregada por destino.
+
 QUE MIDE, Y POR QUE LAS PARTIDAS. El avion carga combustible ANTES de irse, asi
 que la operacion que importa para el negocio es el despegue. Y es ademas la mitad
 medible: el que despega sube sobre la antena y se ve entero, el que llega viene
@@ -154,6 +165,47 @@ def calcular(partidas: list[dict], lista: dict) -> dict:
             d["vuelos_con_pax"] += 1
     ranking = sorted(por_aerolinea.values(), key=lambda d: -d["vuelos"])
 
+    # POR RUTA. El destino sale de otro_aeropuerto, que es IATAdestorig y no
+    # `arpt`: `arpt` es el ORIGEN. Ver aa2000._a_fila(), donde ese campo estuvo
+    # mal leido y la ruta salia "AEP -> AEP".
+    por_ruta: dict[str, dict] = {}
+    for p in partidas:
+        dst = (p.get("otro_aeropuerto") or "??").upper()
+        d = por_ruta.setdefault(dst, {
+            "destino": dst, "nombre": p.get("destino_nombre"),
+            "vuelos": 0, "ypf": 0, "cuerpos": {}, "aerolineas": set()})
+        d["vuelos"] += 1
+        if clasificar(p, lista) == "ypf":
+            d["ypf"] += 1
+        cu = p.get("cuerpo") or "?"
+        d["cuerpos"][cu] = d["cuerpos"].get(cu, 0) + 1
+        if p.get("aerolinea_id"):
+            d["aerolineas"].add(p["aerolinea_id"].upper())
+    rutas = sorted(por_ruta.values(), key=lambda d: -d["vuelos"])
+    for d in rutas:
+        d["aerolineas"] = sorted(d["aerolineas"])
+
+    # POR VUELO, que es la unidad que consume el modelo de YPF: cada numero con
+    # su ruta, su cuerpo y su ocupacion cuando la hay.
+    por_vuelo = []
+    for p in partidas:
+        por_vuelo.append({
+            "numero": p.get("numero"),
+            "aerolinea_id": p.get("aerolinea_id"),
+            "ruta": f"{p.get('aeropuerto') or '?'}-{p.get('otro_aeropuerto') or '?'}",
+            "destino": p.get("otro_aeropuerto"),
+            "destino_nombre": p.get("destino_nombre"),
+            "cuerpo": p.get("cuerpo"),
+            "matricula": p.get("matricula"),
+            # La ocupacion va como dato para el modelo, NO al share. None cuando
+            # la fuente no la informa, que es distinto de cero.
+            "ocupacion": p.get("pasajeros"),
+            "real": p.get("real"),
+            "real_epoch": p.get("real_epoch"),
+            "clase": clasificar(p, lista),
+        })
+    por_vuelo.sort(key=lambda x: x["real_epoch"] or 0, reverse=True)
+
     return {
         "total_partidas": total,
         "n_ypf": n_ypf,
@@ -167,6 +219,9 @@ def calcular(partidas: list[dict], lista: dict) -> dict:
         "pax_ypf": _pax(grupos["ypf"]),
         "pax_total": _pax(partidas),
         "por_aerolinea": ranking,
+        "por_ruta": rutas,
+        "por_vuelo": por_vuelo[:400],
+        "n_rutas": len(rutas),
         "lista": {k: v for k, v in lista.items() if k != "vuelos"},
         "n_vuelos_en_lista": len(lista["vuelos"]),
     }
@@ -244,11 +299,26 @@ def _informe(r: dict | None, detalle: bool = False) -> None:
         print(f"\n  lista actualizada  {li['actualizado'] or 'sin fecha'}"
               f"   fuente: {li['fuente'] or 'sin declarar'}")
     if detalle:
-        print(f"\n  {'cod':4} {'aerolinea':26} {'vuelos':>6} {'pax':>9}  clase")
+        print("")
+        print("  POR AEROLINEA")
+        print(f"  {'cod':4} {'aerolinea':26} {'vuelos':>6}  clase")
         for d in r["por_aerolinea"]:
             print(f"  {d['codigo']:4} {(d['nombre'] or '-')[:26]:26} "
-                  f"{d['vuelos']:6} {d['pasajeros']:9,}  {d['clase']}")
-
+                  f"{d['vuelos']:6}  {d['clase']}")
+        print("")
+        print(f"  POR RUTA  (desde {r['aeropuerto']}, {r['n_rutas']} destinos)")
+        print(f"  {'dest':5} {'nombre':20} {'vuelos':>6} {'YPF':>4}  {'cuerpo':11} aerolineas")
+        for d in r["por_ruta"][:25]:
+            cu = " ".join(f"{k}:{v}" for k, v in sorted(d["cuerpos"].items()))
+            print(f"  {d['destino']:5} {(d['nombre'] or '-')[:20]:20} {d['vuelos']:6} "
+                  f"{d['ypf']:4}  {cu:11} {','.join(d['aerolineas'])}")
+        print("")
+        print("  POR VUELO  (la unidad que consume el modelo de YPF)")
+        print(f"  {'vuelo':9} {'ruta':10} {'cuerpo':6} {'matricula':9} {'ocup':>5}  clase")
+        for v in r["por_vuelo"][:15]:
+            oc = "-" if v["ocupacion"] is None else str(v["ocupacion"])
+            print(f"  {(v['numero'] or '-'):9} {v['ruta']:10} {(v['cuerpo'] or '-'):6} "
+                  f"{(v['matricula'] or '-'):9} {oc:>5}  {v['clase']}")
 
 def main() -> int:
     import aa2000

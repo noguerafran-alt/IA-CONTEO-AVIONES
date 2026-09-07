@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS vuelo_oficial (
     aerolinea_id TEXT,
     aerolinea TEXT,
     otro_aeropuerto TEXT,
+    destino_nombre TEXT,
     programada TEXT,
     programada_epoch REAL,
     estimada TEXT,
@@ -207,15 +208,32 @@ def _a_fila(cruda: dict, aeropuerto: str, movimiento: str, ahora: float) -> dict
     real = _texto(cruda, "atda")
     return {
         "id": ident,
-        "aeropuerto": aeropuerto,
-        # El movimiento del CONSULTADO y no el campo "mov" del registro: se vio
-        # al menos una fila de partidas con arpt=AEP, o sea que el feed mezcla
-        # la perspectiva. Lo que sabemos con certeza es que pedimos D o A.
+        # EL AEROPUERTO SALE DE LA FILA, NO DE LO QUE PEDIMOS. Medido el
+        # 2026-09-07: id_arpt NO FILTRA NADA -- pedir AEP, EZE o COR devuelve los
+        # mismos 60 ids byte por byte-. all-flights es un feed NACIONAL, asi que
+        # guardar el aeropuerto consultado etiquetaba como "de Aeroparque"
+        # partidas de todo el pais y el denominador de cualquier share quedaba
+        # inflado. El filtro por aeropuerto lo hace sondear(), sobre `arpt`.
+        "aeropuerto": _texto(cruda, "arpt") or aeropuerto,
+        # El movimiento del CONSULTADO y no el campo "mov" del registro: movtp SI
+        # funciona -- D y A devuelven conjuntos distintos-- y es lo que pedimos.
         "movimiento": movimiento,
         "numero": _texto(cruda, "nro"),
         "aerolinea_id": _texto(cruda, "idaerolinea"),
         "aerolinea": _texto(cruda, "aerolinea"),
-        "otro_aeropuerto": _texto(cruda, "arpt"),
+        # EL OTRO EXTREMO DE LA RUTA, y antes esto estaba al reves. `arpt` es el
+        # ORIGEN de la partida, no el destino: verificado con vuelos de origen
+        # conocido -- IB 0102 (Iberia) trae arpt=EZE y sale de Ezeiza, UX 122
+        # (Air Europa) trae arpt=COR y sale de Cordoba-. El destino esta en
+        # IATAdestorig: IB 0102 -> MAD, BA 248 -> LHR, AZ 681 -> FCO.
+        #
+        # Guardando `arpt` aca la ruta salia "AEP -> AEP", que no existe y era la
+        # senal de que el campo estaba mal leido.
+        #
+        # Para una partida la ruta es aeropuerto -> otro_aeropuerto; para un
+        # arribo es al reves.
+        "otro_aeropuerto": _texto(cruda, "IATAdestorig"),
+        "destino_nombre": _texto(cruda, "destorig"),
         "programada": prog,
         "programada_epoch": _resolver_epoch(prog, ahora),
         "estimada": _texto(cruda, "etda"),
@@ -307,7 +325,8 @@ def sondear(conn: sqlite3.Connection, aeropuerto: str = AEROPUERTO,
     """Una pasada por los dos movimientos. Nada se descarta en silencio."""
     ahora = time.time()
     total = {"nuevas": 0, "actualizadas": 0, "sin_cambio": 0,
-             "recibidas": 0, "sin_id": 0, "con_real": 0, "errores": []}
+             "recibidas": 0, "sin_id": 0, "con_real": 0,
+             "de_otro_aeropuerto": 0, "errores": []}
     for mov in movimientos:
         try:
             crudas = _pedir("all-flights", id_arpt=aeropuerto, movtp=mov, c=CANTIDAD)
@@ -327,14 +346,22 @@ def sondear(conn: sqlite3.Connection, aeropuerto: str = AEROPUERTO,
             if f is None:
                 total["sin_id"] += 1
                 continue
+            # EL FILTRO POR AEROPUERTO LO HACEMOS NOSOTROS. id_arpt no filtra
+            # (ver _a_fila), asi que sin esto entrarian las partidas de todo el
+            # pais. Se descartan y SE CUENTAN: un numero de partidas que incluye
+            # Ezeiza y Cordoba no es el de Aeroparque, y no decir cuantas se
+            # dejaron afuera haria imposible notar que el filtro cambio.
+            if aeropuerto and f["aeropuerto"] != aeropuerto:
+                total["de_otro_aeropuerto"] += 1
+                continue
             if f["real"]:
                 total["con_real"] += 1
             filas.append(f)
         r = guardar(conn, filas, ahora)
         for k in ("nuevas", "actualizadas", "sin_cambio"):
             total[k] += r[k]
-        log(f"  {mov}: {len(crudas)} recibidas, {r['nuevas']} nuevas, "
-            f"{r['actualizadas']} actualizadas")
+        log(f"  {mov}: {len(crudas)} recibidas, {len(filas)} de {aeropuerto}, "
+            f"{r['nuevas']} nuevas, {r['actualizadas']} actualizadas")
     return total
 
 
