@@ -75,3 +75,15 @@ CAMPOS-ADSB.xlsx
 # La lista de clientes de YPF es un dato de negocio del cliente: la aporta YPF
 # y no tiene por que estar en un repo. La plantilla comentada si viaja.
 ypf_clientes.json
+
+# --- Partidas de AA2000: NO subir, este repo es PUBLICO ---
+# El acumulado de partidas es la materia prima del market share, y cruzado con
+# la planilla dice que rutas abastece cada petrolera. Ese analisis vive en
+# RADAR-MARKET-SHARE, que es privado justamente por eso. Aca la base aparece
+# porque se corrio el sondeo desde esta carpeta; sin esta linea, un `git add -A`
+# la publica sin que nadie lo note.
+aa2000_oficial.db
+aa2000_oficial.db-shm
+aa2000_oficial.db-wal
+ypf_clientes.json
+proveedores.json
