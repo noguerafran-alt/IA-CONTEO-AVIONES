@@ -87,3 +87,9 @@ aa2000_oficial.db-shm
 aa2000_oficial.db-wal
 ypf_clientes.json
 proveedores.json
+
+# --- Material propio, no codigo ---
+# Presentacion de Fran sobre el sistema. Es suya y este repo es publico: no hay
+# razon para que viaje con el codigo, y versionar un PDF que se reexporta entero
+# en cada cambio infla el repo sin que el diff diga nada.
+Sistema ADS-B - Del aire al dato.pdf
